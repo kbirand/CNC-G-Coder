@@ -34,12 +34,33 @@ CNC G-Coder drives [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) under the
 
 ## Requirements
 
-- macOS 13+ (Apple Silicon or Intel)
-- [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) and optionally [gerbv](https://gerbv.github.io) (for laser-SVG mask export):
+- macOS 26+ (Apple Silicon or Intel)
+- [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) — the isolation-routing engine the app drives
+- [gerbv](https://gerbv.github.io) *(optional)* — only needed for the laser-SVG solder-mask export
 
-```bash
-brew install pcb2gcode gerbv
-```
+### Installing the dependencies
+
+1. **Install Homebrew** (skip if `brew --version` already works). Paste this into Terminal:
+
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+
+   Follow the prompts — on Apple Silicon it ends by telling you to add `brew` to your PATH; run the two `eval` lines it prints.
+
+2. **Install the tools:**
+
+   ```bash
+   brew install pcb2gcode gerbv
+   ```
+
+3. **Verify:**
+
+   ```bash
+   pcb2gcode --version
+   ```
+
+The app looks for the binaries in `/opt/homebrew/bin` (Apple Silicon) and `/usr/local/bin` (Intel) — the standard Homebrew locations, so no configuration is needed. If pcb2gcode is missing, the app shows a warning in the sidebar and the Log tab tells you what to install; gerbv is only required when you select *Laser SVGs* as the solder-mask output.
 
 ## Building
 
