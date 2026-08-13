@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Local development files (not part of the published repo)
+CLAUDE.md
+Reference Code/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
