@@ -35,8 +35,8 @@ struct PlaybackControls: View {
                     .disabled(playback.totalTime <= 0)
                     .help("Play/pause a feed-rate-accurate simulation — at 1× it runs exactly as long as the real machining")
 
-                    Text(formatDuration(playback.currentTime))
-                        .font(.caption.monospacedDigit())
+                    Text(paddedCurrentTime)
+                        .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
 
                     Slider(value: timeBinding, in: 0...max(playback.totalTime, 0.001))
@@ -45,7 +45,7 @@ struct PlaybackControls: View {
                         .help("Scrub through machine time. Completed moves draw solid, the rest ghosted; the G-code tab follows the current line.")
 
                     Text(formatDuration(playback.totalTime))
-                        .font(.caption.monospacedDigit())
+                        .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
 
                     Picker("", selection: $playback.speedMultiplier) {
@@ -62,7 +62,7 @@ struct PlaybackControls: View {
                 }
 
                 Text(readout)
-                    .font(.caption2.monospacedDigit())
+                    .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -83,21 +83,42 @@ struct PlaybackControls: View {
         )
     }
 
+    /// Current time padded to the total's width so the slider never shifts
+    /// when the minute count gains a digit.
+    private var paddedCurrentTime: String {
+        let total = formatDuration(playback.totalTime)
+        var current = formatDuration(playback.currentTime)
+        while current.count < total.count { current = " " + current }
+        return current
+    }
+
+    /// Every field has a fixed width (numbers padded to their maximum, kind and
+    /// feed padded to their longest variant), so values never push each other
+    /// around while the program plays.
     private var readout: String {
         guard let layer = playback.layer else { return "" }
         guard let move = playback.currentMove, let position = playback.toolPosition, let z = playback.toolZ else {
             return "\(layer.displayName) · \(layer.moves.count) moves · est. \(formatDuration(layer.totalTime)) total"
         }
         let kind = switch move.kind {
-        case .rapid: "rapid"
-        case .cut: "cut"
+        case .rapid: "rapid "
+        case .cut: "cut   "
         case .plunge: "plunge"
         }
-        let feed = (move.kind == .rapid) ? " · rapid @\(Int(GCodeParser.assumedRapidFeed))" : move.feed.map { " · F\(Int($0))" } ?? ""
-        return String(
-            format: "move %d/%d · line %d · %@ · X%.2f Y%.2f Z%.3f%@",
-            min(playback.completedMoves + 1, playback.moveCount), playback.moveCount,
-            move.sourceLine, kind, position.x, position.y, z, feed
-        )
+        let feed = Int(move.kind == .rapid ? GCodeParser.assumedRapidFeed : (move.feed ?? 0))
+        let moveIndex = pad(min(playback.completedMoves + 1, playback.moveCount), like: playback.moveCount)
+        return "move \(moveIndex)/\(playback.moveCount)"
+            + " · line \(pad(move.sourceLine, like: layer.lineCount))"
+            + " · \(kind)"
+            + String(format: " · X%7.2f Y%7.2f Z%7.3f", position.x, position.y, z)
+            + " · F\(pad(feed, like: 9999))"
+    }
+
+    /// Left-pads `value` with spaces to the digit count of `reference`.
+    private func pad(_ value: Int, like reference: Int) -> String {
+        let width = String(reference).count
+        var s = String(value)
+        while s.count < width { s = " " + s }
+        return s
     }
 }
