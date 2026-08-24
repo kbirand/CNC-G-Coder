@@ -23,6 +23,9 @@ struct ContentView: View {
         .sheet(isPresented: $model.showTestBoardDialog) {
             TestBoardDialog(model: model)
         }
+        .sheet(isPresented: $model.showGenerateDialog) {
+            GenerateDialog(model: model)
+        }
     }
 
     @ToolbarContentBuilder
@@ -69,10 +72,11 @@ struct ContentView: View {
 
         ToolbarSpacer(.fixed)
 
-        // The one prominent action stands alone.
+        // The one prominent action stands alone. It opens the Generate sheet,
+        // which owns the target, the destination and the progress.
         ToolbarItem(placement: .primaryAction) {
             Button {
-                model.generate()
+                model.showGenerateDialog = true
             } label: {
                 if model.isGenerating {
                     ProgressView()
@@ -85,11 +89,8 @@ struct ContentView: View {
                 }
             }
             .buttonStyle(.glassProminent)
-            .disabled(model.isGenerating
-                      || model.pcb2gcodeURL == nil
-                      || !model.detectedFiles.hasAnything
-                      || model.parameters.validationError != nil)
-            .help("Asks where to save, then runs pcb2gcode with the current parameters and writes the final .ngc programs there. The preview shows exactly these files.")
+            .disabled(model.pcb2gcodeURL == nil || !model.detectedFiles.hasAnything)
+            .help("Choose what to produce — CNC G-code or laser artwork — where to put it, and watch it run.")
         }
     }
 }

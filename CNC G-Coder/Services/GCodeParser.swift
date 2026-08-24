@@ -5,6 +5,18 @@ import CoreGraphics
 /// toolpath moves with source line numbers, for rendering and playback.
 nonisolated enum GCodeParser {
 
+    /// Parses a whole batch off the main actor, dropping files that fail.
+    /// Shared by the live preview and the laser batch export.
+    static func parseLayers(_ outputs: [GeneratedOutput]) async -> [ParsedLayer] {
+        await Task.detached(priority: .userInitiated) {
+            outputs.compactMap { output -> ParsedLayer? in
+                guard var layer = try? parse(fileURL: output.url, layer: output.layer) else { return nil }
+                layer.toolDiameter = output.toolDiameter
+                return layer
+            }
+        }.value
+    }
+
     /// Assumed rapid rate for time estimates of G0 moves (mm/min).
     static let assumedRapidFeed = 2000.0
 

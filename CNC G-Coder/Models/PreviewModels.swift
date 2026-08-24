@@ -9,6 +9,8 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
     case drill(index: Int, name: String)
     case maskTop
     case maskBottom
+    case silkTop
+    case silkBottom
     case test
 
     var displayName: String {
@@ -19,6 +21,8 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         case .drill(_, let name): name
         case .maskTop: "Top mask etch"
         case .maskBottom: "Bottom mask etch"
+        case .silkTop: "Top silkscreen"
+        case .silkBottom: "Bottom silkscreen"
         case .test: "Test board"
         }
     }
@@ -32,14 +36,31 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         self == .maskTop || self == .maskBottom
     }
 
+    var isSilk: Bool {
+        self == .silkTop || self == .silkBottom
+    }
+
+    /// Filename stem for everything this layer produces — the generated
+    /// program and its laser artwork — so both folders read the same way:
+    /// "front-copper.ngc" next to "front-copper_white-on-black.svg".
+    var fileSlug: String {
+        displayName.lowercased()
+            .map { $0.isLetter || $0.isNumber ? String($0) : "-" }
+            .joined()
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+    }
+
     private var rank: Int {
         switch self {
         case .front: 0
         case .back: 1
         case .outline: 2
         case .drill(let index, _): 3 + index
-        case .maskTop: 1000       // mask etching happens last in the workflow
+        case .maskTop: 1000       // mask etching happens late in the workflow
         case .maskBottom: 1001
+        case .silkTop: 1100       // legend last of all, on top of the cured mask
+        case .silkBottom: 1101
         case .test: 2000
         }
     }
@@ -103,4 +124,11 @@ nonisolated struct PreviewDocument: Sendable {
     /// image of the front frame across this rectangle. nil = raw pcb2gcode
     /// frames (zeroing off, or externally loaded G-code).
     var projectSize: CGSize? = nil
+    /// The mirror settings these programs were generated with. Views must use
+    /// THESE, not the live parameters: editing the mirror axis re-renders the
+    /// canvas long before pcb2gcode has produced matching geometry, and
+    /// pairing a new axis with old coordinates throws the back side across
+    /// the canvas until the run finishes.
+    var mirrorAxis: Double = 0
+    var mirrorYAxis: Bool = false
 }

@@ -105,12 +105,15 @@ struct PlaybackControls: View {
         case .cut: "cut   "
         case .plunge: "plunge"
         }
-        let feed = Int(move.kind == .rapid ? GCodeParser.assumedRapidFeed : (move.feed ?? 0))
+        let units = UnitSystem.current
+        let feedMM = move.kind == .rapid ? GCodeParser.assumedRapidFeed : (move.feed ?? 0)
+        let feed = Int(units.fromMM(feedMM).rounded())
         let moveIndex = pad(min(playback.completedMoves + 1, playback.moveCount), like: playback.moveCount)
         return "move \(moveIndex)/\(playback.moveCount)"
             + " · line \(pad(move.sourceLine, like: layer.lineCount))"
             + " · \(kind)"
-            + String(format: " · X%7.2f Y%7.2f Z%7.3f", position.x, position.y, z)
+            + String(format: units.positionFormat,
+                     units.fromMM(position.x), units.fromMM(position.y), units.fromMM(z))
             + " · F\(pad(feed, like: 9999))"
     }
 

@@ -76,6 +76,8 @@ struct SideViewCanvas: View {
             add("zdrill", p.zDrill)
         case .maskTop, .maskBottom:
             add("etch", p.maskDepth)
+        case .silkTop, .silkBottom:
+            add("silk", p.silkDepth)
         case .test:
             break   // patches sweep multiple depths; Z0/zsafe suffice
         case nil:
@@ -151,14 +153,14 @@ struct SideViewCanvas: View {
         if let size = preview.document?.projectSize {
             return (Double(size.width) / 2, Double(size.height) / 2)
         }
-        let axis = Double(model.parameters.mirrorAxis.trimmingCharacters(in: .whitespaces)) ?? 0
+        let axis = preview.document?.mirrorAxis ?? 0
         return (axis, axis)
     }
 
     private func reflected(_ point: CGPoint) -> CGPoint {
         guard isFlipped else { return point }
         let axes = flipAxes
-        if model.parameters.mirrorYAxis {
+        if preview.document?.mirrorYAxis == true {
             return CGPoint(x: point.x, y: 2 * axes.y - point.y)
         } else {
             return CGPoint(x: 2 * axes.x - point.x, y: point.y)
@@ -185,7 +187,7 @@ struct SideViewCanvas: View {
         guard let b = layer.allBounds else { return nil }
         guard isFlipped else { return b }
         let axes = flipAxes
-        if model.parameters.mirrorYAxis {
+        if preview.document?.mirrorYAxis == true {
             return CGRect(x: b.minX, y: 2 * axes.y - b.maxY, width: b.width, height: b.height)
         } else {
             return CGRect(x: 2 * axes.x - b.maxX, y: b.minY, width: b.width, height: b.height)
@@ -206,7 +208,7 @@ struct SideViewCanvas: View {
     /// Cached view-space paths for the current (doc, layer, mode, size); the
     /// view transform is baked in so playback frames stroke pre-scaled paths.
     private func cachedPaths(layer: ParsedLayer, domains: (x: ClosedRange<Double>, z: ClosedRange<Double>), size: CGSize) -> MappedPaths? {
-        let key = "\(preview.document?.token.uuidString ?? "-")|\(layer.displayName)|\(mode)|\(Int(size.width))x\(Int(size.height))|\(isFlipped)|\(model.parameters.mirrorAxis)|\(model.parameters.mirrorYAxis)"
+        let key = "\(preview.document?.token.uuidString ?? "-")|\(layer.displayName)|\(mode)|\(Int(size.width))x\(Int(size.height))|\(isFlipped)"
         if cacheBox.key != key {
             cacheBox.key = key
             guard size.width > padX * 2, size.height > padTop + padBottom else {
@@ -266,7 +268,7 @@ struct SideViewCanvas: View {
             if y - lastLabelY >= 11 {
                 lastLabelY = y
                 context.draw(
-                    Text("\(ref.label) \(ref.z, specifier: "%.2f")")
+                    Text("\(ref.label) \(UnitSystem.current.length(ref.z))")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary),
                     at: CGPoint(x: padX - 4, y: y),

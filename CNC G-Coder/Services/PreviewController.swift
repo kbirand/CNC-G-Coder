@@ -9,6 +9,7 @@ nonisolated enum PreviewRefreshMode: String {
 nonisolated enum SettingsKeys {
     static let refreshMode = "previewRefreshMode"
     static let debounceSeconds = "previewDebounceSeconds"
+    static let unitSystem = "unitSystem"
 }
 
 /// Temp-directory layout for preview runs.
@@ -42,6 +43,9 @@ final class PreviewController: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var document: PreviewDocument?
     @Published private(set) var lastRenderedSignature: String?
+    /// Signature of the most recently *scheduled* run (debounced or running).
+    /// Guards against re-running for changes that don't affect the G-code.
+    private var lastRequestedSignature: String?
 
     weak var app: AppModel?
 
@@ -75,6 +79,15 @@ final class PreviewController: ObservableObject {
     func parametersDidChange() {
         objectWillChange.send()   // staleness badge is a computed property
         guard canPreview, refreshMode == .auto else { return }
+        // Every parameter lives in UserDefaults, and so does UI state (layer
+        // picker, view toggles) — a single defaults write republishes the whole
+        // store, so this fires for changes that cannot alter the G-code.
+        // Regenerate only when the values pcb2gcode actually consumes moved;
+        // the first project selection is covered because the file signature
+        // changes with it.
+        let signature = currentSignature
+        guard signature != lastRequestedSignature else { return }
+        lastRequestedSignature = signature
         phase = .debouncing
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
@@ -99,6 +112,7 @@ final class PreviewController: ObservableObject {
         let snapshot = app.parameters.snapshot()
         let files = app.detectedFiles
         let signature = currentSignature
+        lastRequestedSignature = signature   // manual Refresh always regenerates
 
         let previous = runTask
         previous?.cancel()
@@ -144,14 +158,7 @@ final class PreviewController: ObservableObject {
         }
 
         // Parse the generated .ngc files off the main actor.
-        let outputs = batch.outputs
-        let layers = await Task.detached(priority: .userInitiated) {
-            outputs.compactMap { output -> ParsedLayer? in
-                guard var layer = try? GCodeParser.parse(fileURL: output.url, layer: output.layer) else { return nil }
-                layer.toolDiameter = output.toolDiameter
-                return layer
-            }
-        }.value
+        let layers = await GCodeParser.parseLayers(batch.outputs)
 
         if Task.isCancelled {
             try? FileManager.default.removeItem(at: runDir)
@@ -174,7 +181,9 @@ final class PreviewController: ObservableObject {
             bounds: bounds.isNull ? .zero : bounds,
             tempDir: runDir,
             token: UUID(),
-            projectSize: batch.projectSize
+            projectSize: batch.projectSize,
+            mirrorAxis: Double(snapshot.mirrorAxis) ?? 0,
+            mirrorYAxis: snapshot.mirrorYAxis
         )
         lastRenderedSignature = signature
         phase = .ready

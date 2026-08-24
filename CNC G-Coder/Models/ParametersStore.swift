@@ -9,6 +9,8 @@ nonisolated struct ParameterSnapshot: Sendable {
     var bridgeWidth, bridgeCount, zBridge: String
     var maskMode: String                        // "off" | "gcode" | "svg"
     var maskTool, maskDepth, maskClearWidth, maskFeed, maskVertFeed, maskSpeed: String
+    var silkMode: String                        // "off" | "gcode"
+    var silkTool, silkDepth, silkClearWidth, silkFeed, silkVertFeed, silkSpeed: String
     var zSafe, zChange, mirrorAxis, plungeClearance: String
     var mirrorYAxis, zeroStart: Bool
 }
@@ -51,6 +53,16 @@ final class ParametersStore: ObservableObject {
     @AppStorage("param.maskVertFeed") var maskVertFeed = "60"
     @AppStorage("param.maskSpeed") var maskSpeed = "12000"
 
+    // Silkscreen legend (engraved after the mask, or laser-marked)
+    @AppStorage("param.silkMode") var silkMode = "off"     // off | gcode
+    @AppStorage("param.silkTool") var silkTool = "0.10"
+    @AppStorage("param.silkDepth") var silkDepth = "-0.05"
+    // Legend strokes are thin (0.15–0.25 mm), so a little clearing covers them.
+    @AppStorage("param.silkClearWidth") var silkClearWidth = "0.30"
+    @AppStorage("param.silkFeed") var silkFeed = "180"
+    @AppStorage("param.silkVertFeed") var silkVertFeed = "60"
+    @AppStorage("param.silkSpeed") var silkSpeed = "12000"
+
     // Alignment / safety
     @AppStorage("param.zSafe") var zSafe = "3.0"
     @AppStorage("param.zChange") var zChange = "10.0"
@@ -73,6 +85,9 @@ final class ParametersStore: ObservableObject {
             maskMode: maskMode,
             maskTool: t(maskTool), maskDepth: t(maskDepth), maskClearWidth: t(maskClearWidth),
             maskFeed: t(maskFeed), maskVertFeed: t(maskVertFeed), maskSpeed: t(maskSpeed),
+            silkMode: silkMode,
+            silkTool: t(silkTool), silkDepth: t(silkDepth), silkClearWidth: t(silkClearWidth),
+            silkFeed: t(silkFeed), silkVertFeed: t(silkVertFeed), silkSpeed: t(silkSpeed),
             zSafe: t(zSafe), zChange: t(zChange), mirrorAxis: t(mirrorAxis),
             plungeClearance: t(plungeClearance),
             mirrorYAxis: mirrorYAxis, zeroStart: zeroStart
@@ -105,6 +120,17 @@ final class ParametersStore: ObservableObject {
                 return name
             }
         }
+        if silkMode == "gcode" {
+            let silkFields: [(String, String)] = [
+                ("Silkscreen tool diameter", silkTool), ("Silkscreen depth", silkDepth),
+                ("Silkscreen clear width", silkClearWidth),
+                ("Silkscreen XY feed", silkFeed), ("Silkscreen Z feed", silkVertFeed),
+                ("Silkscreen spindle", silkSpeed)
+            ]
+            for (name, value) in silkFields where Double(value.trimmingCharacters(in: .whitespaces)) == nil {
+                return name
+            }
+        }
         return nil
     }
 
@@ -120,6 +146,9 @@ final class ParametersStore: ObservableObject {
             "maskMode": maskMode, "maskTool": maskTool, "maskDepth": maskDepth,
             "maskClearWidth": maskClearWidth, "maskFeed": maskFeed,
             "maskVertFeed": maskVertFeed, "maskSpeed": maskSpeed,
+            "silkMode": silkMode, "silkTool": silkTool, "silkDepth": silkDepth,
+            "silkClearWidth": silkClearWidth, "silkFeed": silkFeed,
+            "silkVertFeed": silkVertFeed, "silkSpeed": silkSpeed,
             "zSafe": zSafe, "zChange": zChange, "mirrorAxis": mirrorAxis,
             "plungeClearance": plungeClearance,
             "mirrorYAxis": String(mirrorYAxis), "zeroStart": String(zeroStart)
@@ -157,6 +186,13 @@ final class ParametersStore: ObservableObject {
         set("maskFeed") { maskFeed = $0 }
         set("maskVertFeed") { maskVertFeed = $0 }
         set("maskSpeed") { maskSpeed = $0 }
+        set("silkMode") { silkMode = $0 }
+        set("silkTool") { silkTool = $0 }
+        set("silkDepth") { silkDepth = $0 }
+        set("silkClearWidth") { silkClearWidth = $0 }
+        set("silkFeed") { silkFeed = $0 }
+        set("silkVertFeed") { silkVertFeed = $0 }
+        set("silkSpeed") { silkSpeed = $0 }
         set("zSafe") { zSafe = $0 }
         set("zChange") { zChange = $0 }
         set("mirrorAxis") { mirrorAxis = $0 }
@@ -172,6 +208,7 @@ final class ParametersStore: ObservableObject {
          cutterDiameter, zCut, cutFeed, cutVertFeed, cutSpeed, cutInfeed,
          bridgeWidth, bridgeCount, zBridge,
          maskMode, maskTool, maskDepth, maskClearWidth, maskFeed, maskVertFeed, maskSpeed,
+         silkMode, silkTool, silkDepth, silkClearWidth, silkFeed, silkVertFeed, silkSpeed,
          zSafe, zChange, mirrorAxis, plungeClearance,
          String(mirrorYAxis), String(zeroStart)]
             .joined(separator: "|")

@@ -17,6 +17,12 @@ nonisolated enum Pcb2GcodeService {
 
     // MARK: - Argument building (ported from the reference app)
 
+    /// Where a layer's program is written. One naming rule for every layer,
+    /// matching the laser artwork's filenames.
+    static func outputURL(for layer: LayerKind, in directory: URL) -> URL {
+        directory.appendingPathComponent(layer.fileSlug + ".ngc")
+    }
+
     static func isolationArgs(_ p: ParameterSnapshot, files: DetectedFiles, outputDir: URL) -> [String] {
         var a: [String] = [
             "--metric",
@@ -42,15 +48,18 @@ nonisolated enum Pcb2GcodeService {
         // millimeters (mutual misregistration on the machine). All invocations
         // run in the shared Gerber frame; zeroing is done afterwards by
         // normalizeOrigins() with one common shift per board side.
-        if p.mirrorYAxis { a.append("--mirror-yaxis") }
+        // Must carry its value: unlike --metric/--nog81, pcb2gcode declares
+        // --mirror-yaxis with no implicit value, so a bare flag eats the next
+        // argument ("the argument ('--front-output') ... is invalid").
+        if p.mirrorYAxis { a.append("--mirror-yaxis=1") }
 
         if let front = files.front {
             a += ["--front", front.path,
-                  "--front-output", outputDir.appendingPathComponent("front.ngc").path]
+                  "--front-output", outputURL(for: .front, in: outputDir).path]
         }
         if let back = files.back {
             a += ["--back", back.path,
-                  "--back-output", outputDir.appendingPathComponent("back.ngc").path]
+                  "--back-output", outputURL(for: .back, in: outputDir).path]
         }
         if let outline = files.outline {
             a += [
@@ -64,7 +73,7 @@ nonisolated enum Pcb2GcodeService {
                 "--bridges", "\(p.bridgeWidth)mm",
                 "--bridgesnum", p.bridgeCount,
                 "--zbridges", "\(p.zBridge)mm",
-                "--outline-output", outputDir.appendingPathComponent("outline.ngc").path
+                "--outline-output", outputURL(for: .outline, in: outputDir).path
             ]
         }
 
@@ -86,13 +95,13 @@ nonisolated enum Pcb2GcodeService {
             "--zchange", "\(p.zChange)mm",
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
-        if p.mirrorYAxis { a.append("--mirror-yaxis") }   // zeroing: see normalizeOrigins()
+        if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
     }
 
     static func drillOutputURL(for drill: URL, index: Int, outputDir: URL) -> URL {
         let stem = drill.deletingPathExtension().lastPathComponent
-        return outputDir.appendingPathComponent("drill_\(index + 1)_\(stem).ngc")
+        return outputURL(for: .drill(index: index, name: stem), in: outputDir)
     }
 
     /// Solder-mask etch: the mask Gerbers describe the OPENINGS (pads/vias to
@@ -103,11 +112,11 @@ nonisolated enum Pcb2GcodeService {
 
         if let topMask = files.topMask {
             a += ["--front", topMask.path,
-                  "--front-output", outputDir.appendingPathComponent("mask_top.ngc").path]
+                  "--front-output", outputURL(for: .maskTop, in: outputDir).path]
         }
         if let bottomMask = files.bottomMask {
             a += ["--back", bottomMask.path,
-                  "--back-output", outputDir.appendingPathComponent("mask_bottom.ngc").path]
+                  "--back-output", outputURL(for: .maskBottom, in: outputDir).path]
         }
 
         a += [
@@ -128,7 +137,44 @@ nonisolated enum Pcb2GcodeService {
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
 
-        if p.mirrorYAxis { a.append("--mirror-yaxis") }   // zeroing: see normalizeOrigins()
+        if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
+        return a
+    }
+
+    /// Silkscreen legend engraving: the silk Gerbers describe the printed
+    /// legend itself. With --invert-gerbers the tool clears the INSIDE of each
+    /// shape, so the strokes are engraved rather than outlined — the same trick
+    /// the mask etch uses, at a much shallower depth.
+    static func silkArgs(_ p: ParameterSnapshot, files: DetectedFiles, outputDir: URL) -> [String] {
+        var a: [String] = ["--metric", "--metricoutput"]
+
+        if let topSilk = files.topSilk {
+            a += ["--front", topSilk.path,
+                  "--front-output", outputURL(for: .silkTop, in: outputDir).path]
+        }
+        if let bottomSilk = files.bottomSilk {
+            a += ["--back", bottomSilk.path,
+                  "--back-output", outputURL(for: .silkBottom, in: outputDir).path]
+        }
+
+        a += [
+            "--invert-gerbers",
+            "--path-finding-limit", "0",   // never drag the tool between glyphs
+            "--mill-diameters", "\(p.silkTool)mm",
+            "--milling-overlap", "40%",
+            // Legend strokes are thin, so this stays small — generation time
+            // climbs steeply with it, exactly as for the mask.
+            "--isolation-width", "\(p.silkClearWidth)mm",
+            "--zwork", "\(p.silkDepth)mm",
+            "--mill-feed", "\(p.silkFeed)mm/minute",
+            "--mill-vertfeed", "\(p.silkVertFeed)mm/minute",
+            "--mill-speed", p.silkSpeed,
+            "--zsafe", "\(p.zSafe)mm",
+            "--zchange", "\(p.zChange)mm",
+            "--mirror-axis", "\(p.mirrorAxis)mm"
+        ]
+
+        if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
     }
 
@@ -140,6 +186,22 @@ nonisolated enum Pcb2GcodeService {
     }
 
     // MARK: - Batch execution
+
+    /// Reports which step a batch is starting, so the Generate sheet can show
+    /// real progress instead of an indeterminate spinner.
+    typealias StepReporter = @Sendable (_ index: Int, _ total: Int, _ label: String) -> Void
+
+    /// How many reported steps `runBatch` will take with these inputs.
+    static func stepCount(_ p: ParameterSnapshot, files: DetectedFiles) -> Int {
+        var steps = 0
+        if files.front != nil || files.back != nil || files.outline != nil { steps += 1 }
+        steps += files.drills.count
+        if p.maskMode == "gcode", files.topMask != nil || files.bottomMask != nil { steps += 1 }
+        if p.silkMode == "gcode", files.topSilk != nil || files.bottomSilk != nil { steps += 1 }
+        if let clearance = Double(p.plungeClearance), clearance > 0 { steps += 1 }
+        if p.zeroStart { steps += 1 }
+        return steps
+    }
 
     /// Runs one pcb2gcode invocation, timing it and appending output to the log.
     private static func runStep(_ label: String, pcb2gcode: URL, args: [String],
@@ -166,15 +228,33 @@ nonisolated enum Pcb2GcodeService {
     /// then one invocation per drill file (pcb2gcode accepts a single --drill each),
     /// then the solder-mask etch (separate invocation: inversion must not apply
     /// to the copper layers).
-    static func runBatch(pcb2gcode: URL, params p: ParameterSnapshot, files: DetectedFiles, outputDir: URL) async -> BatchResult {
+    static func runBatch(pcb2gcode: URL, params p: ParameterSnapshot, files: DetectedFiles, outputDir: URL,
+                         onStep: StepReporter? = nil) async -> BatchResult {
         var result = BatchResult()
         let fm = FileManager.default
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
+        // pcb2gcode dumps its debug renders (traced_*.svg, processed_*.svg,
+        // outp*_*.svg) into the CURRENT DIRECTORY, and offers no option to
+        // suppress them. Programs go to their absolute --*-output paths, so
+        // running in a scratch folder keeps the user's output folder to just
+        // the .ngc files.
+        let scratch = outputDir.appendingPathComponent(".pcb2gcode-scratch-\(UUID().uuidString)", isDirectory: true)
+        try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: scratch) }
+
+        let total = stepCount(p, files: files)
+        var step = 0
+        func report(_ label: String) {
+            step += 1
+            onStep?(step, total, label)
+        }
+
         if files.front != nil || files.back != nil || files.outline != nil {
+            report("Copper isolation and board outline")
             await runStep("Isolation/outline generation", pcb2gcode: pcb2gcode,
                           args: isolationArgs(p, files: files, outputDir: outputDir),
-                          outputDir: outputDir, result: &result)
+                          outputDir: scratch, result: &result)
         }
 
         for (index, drill) in files.drills.enumerated() {
@@ -183,15 +263,24 @@ nonisolated enum Pcb2GcodeService {
                 return result
             }
             let out = drillOutputURL(for: drill, index: index, outputDir: outputDir)
+            report("Drilling — \(drill.deletingPathExtension().lastPathComponent)")
             await runStep("Drill generation (\(drill.lastPathComponent))", pcb2gcode: pcb2gcode,
                           args: drillArgs(p, drill: drill, output: out),
-                          outputDir: outputDir, result: &result)
+                          outputDir: scratch, result: &result)
         }
 
         if p.maskMode == "gcode", files.topMask != nil || files.bottomMask != nil, !Task.isCancelled {
+            report("Solder-mask etch")
             await runStep("Solder-mask etch generation", pcb2gcode: pcb2gcode,
                           args: maskArgs(p, files: files, outputDir: outputDir),
-                          outputDir: outputDir, result: &result)
+                          outputDir: scratch, result: &result)
+        }
+
+        if p.silkMode == "gcode", files.topSilk != nil || files.bottomSilk != nil, !Task.isCancelled {
+            report("Silkscreen engraving")
+            await runStep("Silkscreen engraving generation", pcb2gcode: pcb2gcode,
+                          args: silkArgs(p, files: files, outputDir: outputDir),
+                          outputDir: scratch, result: &result)
         }
 
         // Collect the outputs that actually exist.
@@ -201,9 +290,9 @@ nonisolated enum Pcb2GcodeService {
                                                       toolDiameter: tool.flatMap(Double.init)))
             }
         }
-        if files.front != nil { addIfExists(.front, outputDir.appendingPathComponent("front.ngc"), tool: p.millDiameter) }
-        if files.back != nil { addIfExists(.back, outputDir.appendingPathComponent("back.ngc"), tool: p.millDiameter) }
-        if files.outline != nil { addIfExists(.outline, outputDir.appendingPathComponent("outline.ngc"), tool: p.cutterDiameter) }
+        if files.front != nil { addIfExists(.front, outputURL(for: .front, in: outputDir), tool: p.millDiameter) }
+        if files.back != nil { addIfExists(.back, outputURL(for: .back, in: outputDir), tool: p.millDiameter) }
+        if files.outline != nil { addIfExists(.outline, outputURL(for: .outline, in: outputDir), tool: p.cutterDiameter) }
         for (index, drill) in files.drills.enumerated() {
             let stem = drill.deletingPathExtension().lastPathComponent
             addIfExists(.drill(index: index, name: stem),
@@ -211,16 +300,22 @@ nonisolated enum Pcb2GcodeService {
                         tool: nil)   // bit sizes vary per hole; not modeled
         }
         if p.maskMode == "gcode" {
-            if files.topMask != nil { addIfExists(.maskTop, outputDir.appendingPathComponent("mask_top.ngc"), tool: p.maskTool) }
-            if files.bottomMask != nil { addIfExists(.maskBottom, outputDir.appendingPathComponent("mask_bottom.ngc"), tool: p.maskTool) }
+            if files.topMask != nil { addIfExists(.maskTop, outputURL(for: .maskTop, in: outputDir), tool: p.maskTool) }
+            if files.bottomMask != nil { addIfExists(.maskBottom, outputURL(for: .maskBottom, in: outputDir), tool: p.maskTool) }
+        }
+        if p.silkMode == "gcode" {
+            if files.topSilk != nil { addIfExists(.silkTop, outputURL(for: .silkTop, in: outputDir), tool: p.silkTool) }
+            if files.bottomSilk != nil { addIfExists(.silkBottom, outputURL(for: .silkBottom, in: outputDir), tool: p.silkTool) }
         }
 
         if let clearance = Double(p.plungeClearance), clearance > 0,
            result.succeeded, !result.outputs.isEmpty {
+            report("Optimizing plunges")
             optimizePlunges(clearance: clearance, outputs: result.outputs, log: &result.log)
         }
 
         if p.zeroStart, result.succeeded, !result.outputs.isEmpty {
+            report("Normalizing origins")
             result.projectSize = normalizeOrigins(p, outputs: result.outputs, log: &result.log)
         }
 
@@ -389,9 +484,9 @@ nonisolated enum Pcb2GcodeService {
     /// back-side program. Result: zero the machine once per side and every
     /// program lines up; the back frame is the exact mirror image of the front
     /// frame across the project rectangle (which is what the preview's
-    /// "Flip Back View" uses to overlay them).
+    /// "Un-mirror Back Side" uses to overlay them).
     private static func isBackSide(_ kind: LayerKind) -> Bool {
-        kind == .back || kind == .maskBottom
+        kind == .back || kind == .maskBottom || kind == .silkBottom
     }
 
     private static func normalizeOrigins(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) -> CGSize? {

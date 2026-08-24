@@ -82,6 +82,8 @@ extension LayerKind {
             [Color.purple, .pink, .teal, .indigo][index % 4]
         case .maskTop: .cyan
         case .maskBottom: .brown
+        case .silkTop: Color(white: 0.92)      // the legend is printed white
+        case .silkBottom: Color(white: 0.62)
         case .test: .mint
         }
     }

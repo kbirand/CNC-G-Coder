@@ -7,6 +7,8 @@ nonisolated struct DetectedFiles: Equatable, Sendable {
     var outline: URL?
     var topMask: URL?
     var bottomMask: URL?
+    var topSilk: URL?
+    var bottomSilk: URL?
     var drills: [URL] = []
 
     var hasAnyToolpathInput: Bool {
@@ -14,12 +16,12 @@ nonisolated struct DetectedFiles: Equatable, Sendable {
     }
 
     var hasAnything: Bool {
-        hasAnyToolpathInput || topMask != nil || bottomMask != nil
+        hasAnyToolpathInput || topMask != nil || bottomMask != nil || topSilk != nil || bottomSilk != nil
     }
 
     /// Stable identity of the input set; part of the preview staleness signature.
     var signature: String {
-        ([front, back, outline, topMask, bottomMask].map { $0?.path ?? "-" } + drills.map(\.path))
+        ([front, back, outline, topMask, bottomMask, topSilk, bottomSilk].map { $0?.path ?? "-" } + drills.map(\.path))
             .joined(separator: ",")
     }
 }

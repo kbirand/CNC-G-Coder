@@ -2,7 +2,7 @@ import Foundation
 
 /// Auto-detects EasyEDA gerber/drill files in a project folder
 /// (Gerber_TopLayer.GTL, Gerber_BottomLayer.GBL, Gerber_BoardOutlineLayer.GKO,
-/// solder masks .GTS/.GBS, and every .DRL file).
+/// solder masks .GTS/.GBS, silkscreens .GTO/.GBO, and every .DRL file).
 nonisolated enum GerberDetector {
 
     static func detect(in folder: URL) -> DetectedFiles {
@@ -59,11 +59,27 @@ nonisolated enum GerberDetector {
             return ext == "gbs" || (name.contains("bottom") && name.contains("soldermask"))
         }
 
+        // EasyEDA writes .GTO/.GBO; other tools spell it "silkscreen", "silk"
+        // or "legend" in the filename.
+        func silkCandidates(_ ext: String, _ side: String) -> [URL] {
+            gerbers.filter {
+                let e = $0.pathExtension.lowercased()
+                let name = $0.lastPathComponent.lowercased()
+                let isSilk = name.contains("silk") || name.contains("legend") || name.contains("overlay")
+                return e == ext || (isSilk && name.contains(side))
+            }
+        }
+        let topSilkCandidates = silkCandidates("gto", "top")
+        let bottomSilkCandidates = silkCandidates("gbo", "bottom")
+
         detected.front = best(frontCandidates, preferred: ["gerber_toplayer", "toplayer", "top", "front"])
         detected.back = best(backCandidates, preferred: ["gerber_bottomlayer", "bottomlayer", "bottom", "back"])
         detected.outline = best(outlineCandidates, preferred: ["boardoutlinelayer", "outline", "edge"])
         detected.topMask = best(topMaskCandidates, preferred: ["gerber_topsoldermasklayer", "topsoldermask", "gts"])
         detected.bottomMask = best(bottomMaskCandidates, preferred: ["gerber_bottomsoldermasklayer", "bottomsoldermask", "gbs"])
+
+        detected.topSilk = best(topSilkCandidates, preferred: ["gerber_topsilkscreenlayer", "topsilkscreen", "topsilk", "gto"])
+        detected.bottomSilk = best(bottomSilkCandidates, preferred: ["gerber_bottomsilkscreenlayer", "bottomsilkscreen", "bottomsilk", "gbo"])
 
         detected.drills = gerbers
             .filter { $0.pathExtension.lowercased() == "drl" }

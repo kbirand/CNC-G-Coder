@@ -10,7 +10,7 @@
 4. Inspect the preview: select each program, play it back, check depths in the side view and the total time estimate.
 5. **Generate** — pick (or create with New Folder) the destination folder; all `.ngc` programs are written there.
 6. Machine in order: front copper isolation → drills (one program per drill file; change bits at the M0 pauses) → flip the board → back copper → outline cutout (bridges hold the board) → snap/file the bridge tabs.
-7. Solder mask: paint the milled board with UV solder mask, cure it, then run `mask_top.ngc` / `mask_bottom.ngc` to mill the pad openings clear.
+7. Solder mask: paint the milled board with UV solder mask, cure it, then run `top-mask-etch.ngc` / `bottom-mask-etch.ngc` to mill the pad openings clear.
 
 ## Project folder & detection
 
@@ -47,16 +47,16 @@ Every diameter you enter must be the **effective cutting diameter at depth**, wi
 - **Plunge clearance** — vertical moves are rapid through the air and feed only below this height: descents rapid down to it then plunge at the Z feed; retracts feed up to it then rapid. This often halves program time (pcb2gcode alone feeds the whole descent — and drill retracts too). 0.2–0.5 mm typical; must clear board warp; 0 disables. The bit always enters and leaves the material at the programmed feed.
 
 ### Solder mask etch
-The `.GTS`/`.GBS` layers describe the *openings* (pads/vias that stay exposed). CNC etch mode inverts the layer and pockets each opening with 40% overlapping passes → `mask_top.ngc` / `mask_bottom.ngc`.
+The `.GTS`/`.GBS` layers describe the *openings* (pads/vias that stay exposed). CNC etch mode inverts the layer and pockets each opening with 40% overlapping passes → `top-mask-etch.ngc` / `bottom-mask-etch.ngc`.
 - Mask tool must be no larger than the smallest opening (smaller ones are skipped — watch the Log).
 - **Clear width** ≥ half the widest opening; larger values slow generation dramatically.
 - Etch depth only needs to remove cured paint, not copper.
 
 ## Preview
 
-- One program is shown at a time (layer menu at the top of the sidebar). All programs share one origin per side, so the "All Layers Overlay" registers copper, drills and masks exactly; enable "Flip Back View" to overlay the mirrored back side aligned with the front.
+- One program is shown at a time (layer menu at the top of the sidebar). All programs share one origin per side, so the "All Layers Overlay" registers copper, drills and masks exactly; enable "Un-mirror Back Side" to overlay the mirrored back side aligned with the front.
 - **Colors**: per-layer colors for cuts; **yellow dashed = head travel** (no cutting); **white = holding bridges**; the translucent band under cuts is the real cutter width ("Tool Width" in the View Options menu).
-- **Flip Back View** (View Options menu) un-mirrors back-side programs for visual alignment checks — display only; the G-code stays mirrored and CNC-ready.
+- **Un-mirror Back Side** (View Options menu) un-mirrors back-side programs for visual alignment checks — display only; the G-code stays mirrored and CNC-ready. Off, the back correctly sits mirrored against the front.
 
 ## Playback & estimates
 

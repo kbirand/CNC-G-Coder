@@ -100,7 +100,7 @@ The built-in test board is the cross-check: measure the 0.2 mm test trace after 
 ## Notes on machine setup
 
 - All programs share one origin per side (the app normalizes pcb2gcode's per-invocation origins): zero X/Y once at the project corner for the front-side programs, once more after flipping for the back side, and Z on the board surface — copper, drills and masks stay registered.
-- Choose the flip direction (*Mirror around Y axis*) to match how you physically turn the board and verify with *Flip Back View* — the flipped back must sit exactly over the front.
+- Choose the flip direction (*Board flips*) to match how you physically turn the board and verify with *Un-mirror Back Side* — the flipped back must sit exactly over the front.
 - The app intentionally generates **no probing/height-map G-code** — use your sender's autolevel (e.g. UGS AutoLeveler) for the isolation programs on anything less than perfectly flat stock.
 - Playback rapids are simulated at 2000 mm/min (G-code carries no rapid feed); cutting times are exact per the programmed feeds.
 

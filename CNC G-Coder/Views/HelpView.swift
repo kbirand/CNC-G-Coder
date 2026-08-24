@@ -15,7 +15,7 @@ struct HelpView: View {
                 4. Inspect the preview: select each program, play it back, check depths in the side view and the total time estimate.
                 5. Generate — pick (or create with New Folder) the destination folder; all .ngc programs are written there.
                 6. Machine in order: front copper isolation → drills (one program per drill file, change bits at the M0 pauses) → flip the board → back copper → outline cutout (bridges hold the board) → snap/file the bridge tabs.
-                7. Solder mask: paint the milled board with UV solder mask, cure it, then run mask_top.ngc / mask_bottom.ngc to mill the pad openings clear.
+                7. Solder mask: paint the milled board with UV solder mask, cure it, then run top-mask-etch.ngc / bottom-mask-etch.ngc to mill the pad openings clear.
                 """)
 
                 section("Project folder & detection", """
@@ -51,17 +51,17 @@ struct HelpView: View {
                 """)
 
                 section("Parameters — solder mask etch", """
-                The .GTS/.GBS layers describe the OPENINGS — pads and vias that must stay exposed. In CNC etch mode the app inverts the layer and pockets each opening with 40% overlapping passes: mask_top.ngc and mask_bottom.ngc.
+                The .GTS/.GBS layers describe the OPENINGS — pads and vias that must stay exposed. In CNC etch mode the app inverts the layer and pockets each opening with 40% overlapping passes: top-mask-etch.ngc and bottom-mask-etch.ngc.
 
                 The mask tool must be no larger than your smallest opening (smaller openings are skipped — watch the Log). Clear width must be at least half the widest opening; larger values slow G-code generation dramatically. Etch depth only needs to remove cured paint, not copper.
                 """)
 
                 section("Preview — layers & colors", """
-                One program is shown at a time — select it with the layer menu at the top of the sidebar. All programs share one origin per side, so the optional \"All Layers Overlay\" registers copper, drills and masks exactly; back-side programs are mirrored, so enable \"Flip Back View\" to overlay them aligned with the front.
+                One program is shown at a time — select it with the layer menu at the top of the sidebar. All programs share one origin per side, so the optional \"All Layers Overlay\" registers copper, drills and masks exactly; back-side programs are mirrored, so enable \"Un-mirror Back Side\" to overlay them aligned with the front.
 
                 Colors: each layer has its own color; YELLOW dashed lines are head travel (rapids, no cutting); WHITE segments on the outline are the holding bridges; the translucent band under cut lines is the real cutter width (\"Tool Width\" in the View Options menu). Drill hits are dots.
 
-                \"Flip Back View\" (View Options menu, eye icon) un-mirrors back-side programs on screen so you can check they align with the front — display only, the G-code stays mirrored and CNC-ready.
+                \"Un-mirror Back Side\" (View Options menu, eye icon) un-mirrors back-side programs on screen so you can check they align with the front — display only, the G-code stays mirrored and CNC-ready.
                 """)
 
                 section("Playback & time estimates", """
@@ -89,7 +89,7 @@ struct HelpView: View {
                 section("Machine zeroing & double-sided work", """
                 With \"Zero project at X0/Y0\" on, every program shares one origin per side: zero X/Y once at the project corner for all front-side programs (copper, drills, outline, top mask), then once more after flipping the board for the back-side programs — copper, drills and masks stay registered. Zero Z on the board surface.
 
-                Choose the flip direction with \"Mirror around Y axis\" to match how you physically turn the board, and verify with \"Flip Back View\": flipped back copper must sit exactly over the front. The app intentionally generates no probing/height-map G-code — use your sender's autolevel (e.g. UGS AutoLeveler) on the isolation programs.
+                Choose the flip direction with \"Board flips\" to match how you physically turn the board, and verify with \"Un-mirror Back Side\": flipped back copper must sit exactly over the front. The app intentionally generates no probing/height-map G-code — use your sender's autolevel (e.g. UGS AutoLeveler) on the isolation programs.
                 """)
 
                 section("Troubleshooting", """

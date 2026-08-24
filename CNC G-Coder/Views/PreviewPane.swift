@@ -12,6 +12,10 @@ struct PreviewPane: View {
     @AppStorage("previewShowAllLayers") private var showAllLayers = false
     @AppStorage("previewShowToolWidth") private var showToolWidth = true
     @AppStorage("previewFlipBackView") private var flipBackView = false
+    @AppStorage("previewShowRulers") private var showRulers = true
+    @AppStorage("previewShowGuides") private var showGuides = true
+    @AppStorage("previewGuidesX") private var guidesXRaw = ""
+    @AppStorage("previewGuidesY") private var guidesYRaw = ""
 
     private enum Tab: String, CaseIterable {
         case toolpath = "Toolpath"
@@ -119,15 +123,30 @@ struct PreviewPane: View {
                 Label("Tool Width", systemImage: "circle.circle")
             }
             .help("Show cutting moves at the real cutter diameter (material removed), not just the tool centerline")
+            Toggle(isOn: $showRulers) {
+                Label("Rulers", systemImage: "ruler")
+            }
+            .help("Rulers along the top (X) and left (Y) edges, with a crosshair readout of the cursor position. Coordinates are the ones in the G-code — with 'Un-mirror Back Side' on, back-side programs read in their un-mirrored screen position instead.")
+            Toggle(isOn: $showGuides) {
+                Label("Guides", systemImage: "ruler.fill")
+            }
+            .help("Drag out of a ruler to place a guide, drag a guide to move it, and drop it back outside the drawing area to remove it. Guides snap to ruler ticks and hold machine positions, so they stay put through zoom, pan and layer changes.")
+            Button {
+                guidesXRaw = ""
+                guidesYRaw = ""
+            } label: {
+                Label("Clear Guides", systemImage: "trash")
+            }
+            .disabled(guidesXRaw.isEmpty && guidesYRaw.isEmpty)
             Toggle(isOn: $showAllLayers) {
                 Label("All Layers Overlay", systemImage: "square.3.layers.3d")
             }
-            .help("Overlay every program behind the selected one. Programs share one origin per side, so copper, drills and masks align — enable Flip Back View to overlay the mirrored back side aligned too.")
+            .help("Overlay every program behind the selected one. Programs share one origin per side, so copper, drills and masks align — enable Un-mirror Back Side to overlay the mirrored back side aligned too.")
             if preview.document?.layers.contains(where: { $0.id == .back || $0.id == .maskBottom }) == true {
                 Toggle(isOn: $flipBackView) {
-                    Label("Flip Back View", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                    Label("Un-mirror Back Side", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
                 }
-                .help("Un-mirror back-side programs on screen to check alignment against the front. Display only — the generated G-code stays mirrored, ready for the CNC.")
+                .help("DISPLAY ONLY. Back-side programs are genuinely mirrored — they have to be, to machine correctly once you turn the board over — so on screen they sit mirrored against the front. This un-mirrors them for viewing so the two sides overlay and you can check registration. It changes nothing in the generated G-code, and it is unrelated to \"Board flips\" in Machine setup, which chooses the axis the machining actually uses.")
             }
         } label: {
             Label("View Options", systemImage: "eye")
@@ -174,7 +193,11 @@ struct PreviewPane: View {
         VStack(spacing: 0) {
             ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topLeading) { canvasNotes }
+                .overlay(alignment: .topLeading) {
+                    canvasNotes
+                        .padding(.leading, showRulers ? ToolpathCanvasView.leftGutter : 0)
+                        .padding(.top, showRulers ? ToolpathCanvasView.topGutter : 0)
+                }
                 .overlay(alignment: .bottom) {
                     PlaybackControls(preview: preview, playback: playback)
                         .padding(.horizontal, 16)
@@ -194,10 +217,10 @@ struct PreviewPane: View {
     private var canvasNotes: some View {
         VStack(alignment: .leading, spacing: 3) {
             if flipBackView {
-                Text("Back flipped for viewing — G-code stays mirrored for the CNC")
+                Text("Back side un-mirrored for viewing only — the G-code stays mirrored for the CNC")
             } else if showAllLayers,
                       preview.document?.layers.contains(where: { $0.id == .back || $0.id == .maskBottom }) == true {
-                Text("Back-side programs are mirrored — enable Flip Back View to overlay them aligned")
+                Text("Back-side programs are mirrored, so they sit mirrored against the front — enable \"Un-mirror Back Side\" in View Options to overlay them aligned")
             }
         }
         .font(.caption2)
