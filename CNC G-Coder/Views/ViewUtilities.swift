@@ -90,7 +90,12 @@ struct SplitDragHandle: View {
 /// Ends editing in whichever text field currently has focus.
 @MainActor
 func resignTextFieldFocus() {
-    NSApp.keyWindow?.makeFirstResponder(nil)
+    // Only when a field is really being edited (its field editor is the first
+    // responder). Asking AppKit to drop focus when there is none to drop makes
+    // it wait on an internal lock — Xcode reports that as a hang risk — and
+    // this is called on every click in the sidebar and the canvas.
+    guard let window = NSApp.keyWindow, window.firstResponder is NSText else { return }
+    window.makeFirstResponder(nil)
 }
 
 /// "m:ss" under an hour, "h:mm:ss" above.
@@ -158,6 +163,30 @@ struct MousePanCatcher: NSViewRepresentable {
 
         deinit {
             if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+}
+
+/// An invisible view that takes keyboard focus when the window opens, so no
+/// text field does. AppKit hands initial focus to the first view in the
+/// window that accepts it — normally the first parameter field, which then
+/// had to have its focus taken away again (ending a text-editing session
+/// that should never have started, and tripping Xcode's hang-risk check).
+struct FocusSink: NSViewRepresentable {
+    func makeNSView(context: Context) -> SinkView { SinkView() }
+    func updateNSView(_ view: SinkView, context: Context) {}
+
+    final class SinkView: NSView {
+        override var acceptsFirstResponder: Bool { true }
+        override var canBecomeKeyView: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }   // never takes clicks
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Before the window picks its own candidate.
+            if let window, window.initialFirstResponder == nil || window.initialFirstResponder is NSTextField {
+                window.initialFirstResponder = self
+            }
         }
     }
 }

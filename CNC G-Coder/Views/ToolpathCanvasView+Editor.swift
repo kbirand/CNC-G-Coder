@@ -53,9 +53,19 @@ extension ToolpathCanvasView {
     /// drawn layer: the side's program frame, un-mirrored on request.
     func editorTransform() -> CGAffineTransform {
         guard let layer = editor.activeLayer else { return .identity }
-        let frame = CustomLayerGenerator.ProgramFrame(document: preview.document,
+        let frame: CustomLayerGenerator.ProgramFrame
+        if preview.document == nil, !model.detectedFiles.hasAnyToolpathInput {
+            // Drawing-only and nothing generated yet (the first shape is still
+            // being drawn): use the very frame the generator will use, so a
+            // point clicked at X0 Y0 is still at X0 Y0 once its program exists.
+            frame = CustomLayerGenerator.ProgramFrame(
+                frame: CustomLayerGenerator.frame(layers: model.customLayers, params: params.snapshot()),
+                mirrorAxis: Double(params.mirrorAxis) ?? 0, mirrorYAxis: params.mirrorYAxis)
+        } else {
+            frame = CustomLayerGenerator.ProgramFrame(document: preview.document,
                                                       mirrorAxis: Double(params.mirrorAxis) ?? 0,
                                                       mirrorYAxis: params.mirrorYAxis)
+        }
         var t = frame.designToProgram(back: layer.back)
         if layer.back, let kind = editorLayerKind, let flip = displayTransform(for: kind) {
             t = t.concatenating(flip)
@@ -149,31 +159,39 @@ extension ToolpathCanvasView {
 
     // MARK: - Keys
 
+    /// Runs a key's action after the key event has been dispatched. SwiftUI
+    /// delivers key presses inside a view update, and changing published
+    /// model state there is "publishing changes from within view updates".
+    func afterKeyEvent(_ action: @escaping @MainActor () -> Void) -> KeyPress.Result {
+        DispatchQueue.main.async { action() }
+        return .handled
+    }
+
     func editorKey(_ press: KeyPress) -> KeyPress.Result {
         guard editorActive else { return .ignored }
+        let editor = self.editor
         if press.modifiers.contains(.command) {
             switch press.characters.lowercased() {
-            case "a": editor.selectAll(); return .handled
-            case "d": editor.duplicateSelection(); return .handled
+            case "a": return afterKeyEvent { editor.selectAll() }
+            case "d": return afterKeyEvent { editor.duplicateSelection() }
             default: return .ignored
             }
         }
         let step = press.modifiers.contains(.shift) ? 1.0 : 0.1
         switch press.key {
-        case .escape: editor.cancel(); return .handled
-        case .return: editor.finishDraft(); return .handled
-        case .delete, .deleteForward: editor.deleteSelection(); return .handled
-        case .leftArrow: editor.nudge(dx: -step, dy: 0); return .handled
-        case .rightArrow: editor.nudge(dx: step, dy: 0); return .handled
-        case .upArrow: editor.nudge(dx: 0, dy: step); return .handled
-        case .downArrow: editor.nudge(dx: 0, dy: -step); return .handled
+        case .escape: return afterKeyEvent { editor.cancel() }
+        case .return: return afterKeyEvent { editor.finishDraft() }
+        case .delete, .deleteForward: return afterKeyEvent { editor.deleteSelection() }
+        case .leftArrow: return afterKeyEvent { editor.nudge(dx: -step, dy: 0) }
+        case .rightArrow: return afterKeyEvent { editor.nudge(dx: step, dy: 0) }
+        case .upArrow: return afterKeyEvent { editor.nudge(dx: 0, dy: step) }
+        case .downArrow: return afterKeyEvent { editor.nudge(dx: 0, dy: -step) }
         default: break
         }
         if press.modifiers.isEmpty || press.modifiers == .shift,
            let ch = press.characters.lowercased().first,
            let tool = ShapeEditor.Tool.allCases.first(where: { $0.key == ch }) {
-            editor.tool = tool
-            return .handled
+            return afterKeyEvent { editor.tool = tool }
         }
         return .ignored
     }

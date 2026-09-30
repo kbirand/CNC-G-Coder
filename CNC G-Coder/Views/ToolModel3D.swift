@@ -71,7 +71,7 @@ nonisolated struct ToolGeometry: Equatable, Sendable {
         let f = ParametersStore.format
         switch kind {
         case .vBit:
-            return "V-bit \(f(angle))° · tip \(f(tipDiameter)) mm · cone \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm"
+            return "V-bit \(f(angle))° · tip \(f(tipDiameter)) mm · blade \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm"
         case .drill:
             return "Drill Ø \(f(diameter)) mm · flutes \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm"
         case .ball:
@@ -127,7 +127,12 @@ nonisolated enum ToolModel {
         switch g.kind {
         case .vBit:
             let h = g.cuttingLength
-            add(SCNCone(topRadius: s, bottomRadius: max(g.tipDiameter / 2, 0.01), height: h), from: 0, height: h, material: carbide)
+            // A PCB engraving bit is a half-round "spade": the shank is ground
+            // away to its centre line, leaving one flat face shaped like a V
+            // with a rounded back — not a full cone.
+            let blade = plainMaterial(white: 0.6, shininess: 0.7)
+            blade.isDoubleSided = true
+            add(spade(topRadius: s, bottomRadius: max(g.tipDiameter / 2, 0.01), height: h), from: 0, height: h, material: blade)
             y = h
         case .drill:
             let ph = g.pointHeight
@@ -166,6 +171,52 @@ nonisolated enum ToolModel {
         ringNode.position = SCNVector3(0, ringY + 1.5, 0)
         root.addChildNode(ringNode)
         return root
+    }
+
+    /// Half of a cone, split along its axis: the flat face lies in the z = 0
+    /// plane (a V from tip width up to the shank), the rounded back faces +z.
+    /// Centred on its height, like SceneKit's own primitives.
+    private static func spade(topRadius: Double, bottomRadius: Double, height: Double) -> SCNGeometry {
+        let segments = 24
+        var vertices: [SCNVector3] = []
+        var normals: [SCNVector3] = []
+        var indices: [Int32] = []
+        let y0 = -height / 2, y1 = height / 2
+        // The back leans outward by the taper; its normals tilt down to match.
+        let tilt = (topRadius - bottomRadius) / max(height, 1e-6)
+        let length = (1 + tilt * tilt).squareRoot()
+
+        // Rounded back: a strip of quads round half the circumference.
+        for i in 0...segments {
+            let a = Double.pi * Double(i) / Double(segments)
+            let c = cos(a), sn = sin(a)
+            let normal = SCNVector3(c / length, -tilt / length, sn / length)
+            vertices.append(SCNVector3(bottomRadius * c, y0, bottomRadius * sn))
+            vertices.append(SCNVector3(topRadius * c, y1, topRadius * sn))
+            normals += [normal, normal]
+            if i > 0 {
+                let k = Int32(2 * i)
+                indices += [k - 2, k - 1, k, k, k - 1, k + 1]
+            }
+        }
+        // Flat face: the V itself.
+        let base = Int32(vertices.count)
+        vertices += [SCNVector3(-bottomRadius, y0, 0), SCNVector3(bottomRadius, y0, 0),
+                     SCNVector3(topRadius, y1, 0), SCNVector3(-topRadius, y1, 0)]
+        normals += Array(repeating: SCNVector3(0, 0, -1), count: 4)
+        indices += [base, base + 1, base + 2, base, base + 2, base + 3]
+        // The little flat at the very tip.
+        let tip = Int32(vertices.count)
+        vertices.append(SCNVector3(0, y0, 0))
+        normals.append(SCNVector3(0, -1, 0))
+        for i in 0...segments {
+            let a = Double.pi * Double(i) / Double(segments)
+            vertices.append(SCNVector3(bottomRadius * cos(a), y0, bottomRadius * sin(a)))
+            normals.append(SCNVector3(0, -1, 0))
+            if i > 0 { indices += [tip, tip + Int32(i), tip + Int32(i) + 1] }
+        }
+        return SCNGeometry(sources: [SCNGeometrySource(vertices: vertices), SCNGeometrySource(normals: normals)],
+                           elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
     }
 
     private static func plainMaterial(white: CGFloat, shininess: CGFloat) -> SCNMaterial {

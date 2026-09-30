@@ -104,12 +104,12 @@ struct ToolpathCanvasView: View {
         .onKeyPress(phases: .down) { press in
             if measuring, press.key == .escape {
                 // Esc drops the measurement first, then leaves the tool.
-                if measurement != nil { measurement = nil } else { toggleMeasuring() }
-                return .handled
+                return afterKeyEvent {
+                    if measurement != nil { measurement = nil } else { toggleMeasuring() }
+                }
             }
             if press.modifiers.isEmpty, press.characters.lowercased() == "m" {
-                toggleMeasuring()
-                return .handled
+                return afterKeyEvent { toggleMeasuring() }
             }
             return editorKey(press)
         }
@@ -151,6 +151,19 @@ struct ToolpathCanvasView: View {
         }
         .onChange(of: editor.focusRequest) { canvasFocused = true }
         .onAppear {
+            // Dev hook: `-debugDrawCircleAt x,y` adds an empty drawn layer and
+            // then a 5 mm circle at those RULER coordinates, as a click would.
+            if let raw = UserDefaults.standard.string(forKey: "debugDrawCircleAt") {
+                let v = raw.split(separator: ",").compactMap { Double($0) }
+                if v.count == 2 {
+                    model.addCustomLayer()
+                    Task {
+                        try? await Task.sleep(for: .seconds(2))
+                        let center = CGPoint(x: v[0], y: v[1]).applying(editorTransform().inverted())
+                        editor.addShape(DrawnShape(geometry: .circle(center: center, diameter: 5)), actionName: "Add Circle")
+                    }
+                }
+            }
             // Dev hook: `-debugMeasure x1,y1,x2,y2` shows a measurement (ruler coordinates, mm).
             if let raw = UserDefaults.standard.string(forKey: "debugMeasure") {
                 let v = raw.split(separator: ",").compactMap { Double($0) }
@@ -1031,6 +1044,14 @@ struct ToolpathCanvasView: View {
             if let hit = anchors.min(by: { hypot($0.1.x - displayed.x, $0.1.y - displayed.y)
                                            < hypot($1.1.x - displayed.x, $1.1.y - displayed.y) }),
                hypot(hit.1.x - displayed.x, hit.1.y - displayed.y) <= slop {
+                // A drawing-only project has no board: its corners are just
+                // points, so the origin is pinned there rather than following
+                // the drawing's extent as it grows.
+                if doc.layers.allSatisfy({ $0.id.isCustom }) {
+                    let front = hit.1.applying(backFrame ? doc.backToFront : .identity)
+                    return OriginTarget(display: hit.1, mode: "custom",
+                                        design: doc.designPoint(fromFront: front), label: hit.2)
+                }
                 return OriginTarget(display: hit.1, mode: hit.0, design: nil, label: hit.2)
             }
         }

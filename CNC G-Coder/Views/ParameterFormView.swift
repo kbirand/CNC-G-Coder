@@ -96,7 +96,19 @@ struct ParameterFormView: View {
         .onTapGesture { resignTextFieldFocus() }
         .safeAreaInset(edge: .bottom) { warningsFooter }
         // A text field must never steal focus at launch — typing would edit it.
-        .onAppear { DispatchQueue.main.async { resignTextFieldFocus() } }
+        // The sink takes the window's initial focus instead; the deferred call
+        // only acts if a field got it anyway.
+        .background(alignment: .topLeading) { FocusSink().frame(width: 1, height: 1) }
+        .onAppear {
+            DispatchQueue.main.async {
+                // Dev hook: `-debugFocusLog 1` records who has focus at launch.
+                if UserDefaults.standard.bool(forKey: "debugFocusLog") {
+                    let who = NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
+                    try? who.write(toFile: NSTemporaryDirectory() + "cnc-focus.txt", atomically: true, encoding: .utf8)
+                }
+                resignTextFieldFocus()
+            }
+        }
     }
 
     // MARK: - Selection model

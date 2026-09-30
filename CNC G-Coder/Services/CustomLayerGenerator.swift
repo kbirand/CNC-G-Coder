@@ -188,16 +188,28 @@ nonisolated enum CustomLayerGenerator {
 
     /// The origin frame of a project that has ONLY drawn layers. With Gerbers,
     /// Pcb2GcodeService.normalizeOrigins measures the project from their
-    /// programs; without any, the drawing itself is the project: its extent
-    /// takes the place of the board, and X0 Y0 goes where the origin setting
-    /// says (a corner, the centre, or a custom design point), per side.
+    /// programs; without any there is no board to zero on, and the drawing
+    /// must stay where it was drawn — a circle drawn at X1 Y−1 is cut at
+    /// X1 Y−1. So X0 Y0 is the drawing sheet's own origin, unless the origin
+    /// was moved to a custom point (dragging the marker, Set Origin). The
+    /// corner / centre modes are NOT applied here: tied to the drawing's
+    /// extent, they would shift everything each time a shape is added.
     /// Nil with zeroing off — the programs then keep the drawing's coordinates.
     static func frame(layers: [CustomLayer], params p: ParameterSnapshot) -> ProjectFrame? {
         guard p.zeroStart else { return nil }
         var rect = CGRect.null
         for layer in layers { if let b = layer.bounds { rect = rect.union(b) } }
-        guard !rect.isNull else { return nil }
-        let origin = Pcb2GcodeService.origins(p, rect: rect)
+        // Nothing drawn yet: the frame still exists (the editor places the
+        // first shape through it). The mapping does not depend on the extent
+        // — the origin is a fixed design point — so an empty one will do.
+        if rect.isNull { rect = .zero }
+        var fixed = p
+        if fixed.originMode != "custom" {
+            fixed.originMode = "custom"
+            fixed.originX = "0"
+            fixed.originY = "0"
+        }
+        let origin = Pcb2GcodeService.origins(fixed, rect: rect)
         return ProjectFrame(rect: rect, frontOrigin: origin.front, backOrigin: origin.back, mirrorYAxis: p.mirrorYAxis)
     }
 

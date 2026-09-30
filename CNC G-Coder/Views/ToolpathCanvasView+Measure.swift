@@ -24,7 +24,7 @@ extension ToolpathCanvasView {
         measuring.toggle()
         measurement = nil
         if measuring {
-            playback.placingOrigin = false
+            if playback.placingOrigin { playback.placingOrigin = false }
             canvasFocused = true
         }
     }
