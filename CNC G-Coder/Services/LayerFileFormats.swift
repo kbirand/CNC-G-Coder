@@ -521,3 +521,55 @@ nonisolated enum ExcellonFile {
         return out.joined(separator: "\n") + "\n"
     }
 }
+
+// MARK: - SVG
+
+/// Renders a Gerber image as an SVG at 1:1 scale in millimetres (for laser
+/// ablation of solder-mask openings): dark objects black, clear-polarity
+/// objects white on top of them, in file order. Tracks are stroked with
+/// their aperture's width, pads and regions filled.
+nonisolated enum GerberSVG {
+
+    static func write(_ image: GerberImage) -> String {
+        var bounds = CGRect.null
+        for object in image.objects { if let b = image.bounds(of: object) { bounds = bounds.union(b) } }
+        if bounds.isNull { bounds = CGRect(x: 0, y: 0, width: 1, height: 1) }
+        bounds = bounds.insetBy(dx: -0.5, dy: -0.5)
+        // SVG runs Y down; Gerber Y up — flip about the drawing's extent.
+        func x(_ v: CGFloat) -> String { String(format: "%.4f", v - bounds.minX) }
+        func y(_ v: CGFloat) -> String { String(format: "%.4f", bounds.maxY - v) }
+        func path(_ points: [CGPoint], closed: Bool) -> String {
+            guard let first = points.first else { return "" }
+            var d = "M\(x(first.x)) \(y(first.y))"
+            for p in points.dropFirst() { d += " L\(x(p.x)) \(y(p.y))" }
+            return closed ? d + " Z" : d
+        }
+
+        var body: [String] = []
+        for object in image.objects {
+            let color = object.dark ? "#000" : "#fff"
+            switch object.kind {
+            case .track(let a, let p):
+                let width = max(image.trackWidth(aperture: a), 0.01)
+                let cap = image.apertures[a]?.shape == .rectangle ? "square" : "round"
+                body.append("<path d=\"\(path(p.flattened(), closed: false))\" fill=\"none\" stroke=\"\(color)\" "
+                            + "stroke-width=\"\(String(format: "%.4f", width))\" stroke-linecap=\"\(cap)\" stroke-linejoin=\"round\"/>")
+            case .flash(let a, let at):
+                let d = image.flashOutlines(aperture: a, at: at).map { path($0.points, closed: true) }.joined(separator: " ")
+                body.append("<path d=\"\(d)\" fill=\"\(color)\" fill-rule=\"evenodd\"/>")
+            case .region(let contours):
+                let d = contours.map { path($0.flattened(), closed: true) }.joined(separator: " ")
+                body.append("<path d=\"\(d)\" fill=\"\(color)\" fill-rule=\"evenodd\"/>")
+            }
+        }
+        let w = String(format: "%.4f", bounds.width), h = String(format: "%.4f", bounds.height)
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(w)mm" height="\(h)mm" viewBox="0 0 \(w) \(h)">
+        <!-- 1:1 scale, millimetres. Drawing origin (design X/Y): \(String(format: "%.4f", bounds.minX)), \(String(format: "%.4f", bounds.minY)) -->
+        \(body.joined(separator: "\n"))
+        </svg>
+
+        """
+    }
+}

@@ -123,7 +123,7 @@ struct HelpView: View {
                 """)
 
                 section("Troubleshooting", """
-                • \"pcb2gcode not found\": install Homebrew, then `brew install pcb2gcode` (and `gerbv` for laser SVG export).
+                • pcb2gcode is built into the app — nothing to install. The native engine (Machine setup → Toolpath engine) does not need it at all.
                 • Preview failed: the Log tab holds the full pcb2gcode output with per-step timings — the error is at the bottom.
                 • Uncut gaps between close traces: the tool is too wide to fit between them; pcb2gcode warns in the Log. Use a smaller effective tool diameter or increase design clearance.
                 • Mask openings not cleared: opening smaller than the mask tool, or Clear width less than half the opening.

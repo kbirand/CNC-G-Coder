@@ -35,6 +35,8 @@ nonisolated struct ParameterSnapshot: Sendable {
     var spindleDir: [String: String] = [:]
     /// G0 speed for time estimates, mm/min.
     var rapidFeed = "2000"
+    /// "pcb2gcode" or "native".
+    var engine = "pcb2gcode"
 
     /// The group's travel height, or Machine setup's Safe Z.
     func zSafe(_ group: ParametersStore.MotionGroup) -> String {
@@ -201,6 +203,9 @@ final class ParametersStore: ObservableObject {
     @AppStorage("param.silkSpindleDir") var silkSpindleDir = "cw"
     /// G0 speed of the machine, for time estimates only (mm/min).
     @AppStorage("param.rapidFeed") var rapidFeed = "2000"
+    /// What turns the Gerbers into programs: "pcb2gcode" (built into the
+    /// app) or "native" (NativeToolpathEngine).
+    @AppStorage("param.engine") var engine = "pcb2gcode"
 
     /// The settings groups that have their own heights, extra cut and
     /// directions; the raw value prefixes their parameter keys.
@@ -300,7 +305,7 @@ final class ParametersStore: ObservableObject {
         ("maskDirection", \.maskDirection), ("maskSpindleDir", \.maskSpindleDir),
         ("silkTravelZ", \.silkTravelZ), ("silkChangeZ", \.silkChangeZ), ("silkExtraCut", \.silkExtraCut),
         ("silkDirection", \.silkDirection), ("silkSpindleDir", \.silkSpindleDir),
-        ("rapidFeed", \.rapidFeed)
+        ("rapidFeed", \.rapidFeed), ("engine", \.engine)
     ]
 
     private static let boolFields: [(String, ReferenceWritableKeyPath<ParametersStore, Bool>)] = [
@@ -333,7 +338,7 @@ final class ParametersStore: ObservableObject {
 
     /// pcb2gcode cuts n passes when the isolation width is exactly
     /// d·(1 + (n−1)·(1 − overlap)); one micron more adds a pass.
-    static func passes(width: Double, diameter: Double, overlapPercent: Double) -> Int {
+    nonisolated static func passes(width: Double, diameter: Double, overlapPercent: Double) -> Int {
         let step = diameter * (1 - overlapPercent / 100)
         guard width > diameter + 1e-6, step > 0 else { return 1 }
         return Int(((width - diameter) / step - 1e-6).rounded(.up)) + 1
@@ -395,6 +400,7 @@ final class ParametersStore: ObservableObject {
             if let v = values[g + "SpindleDir"] { snapshot.spindleDir[g] = v }
         }
         snapshot.rapidFeed = t(rapidFeed)
+        snapshot.engine = engine
         return snapshot
     }
 

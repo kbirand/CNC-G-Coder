@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The append-only process log (pcb2gcode/gerbv command echoes and output).
+/// The append-only process log (pcb2gcode command echoes and output).
 struct LogView: View {
     @ObservedObject var model: AppModel
 

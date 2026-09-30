@@ -87,7 +87,6 @@ final class AppModel: ObservableObject {
     static weak var current: AppModel?
 
     let pcb2gcodeURL = ToolLocator.pcb2gcode
-    let gerbvURL = ToolLocator.gerbv
 
     private var cancellables = Set<AnyCancellable>()
     /// Parameter values as of the last recorded undo step (see AppModel+Undo.swift).
@@ -138,16 +137,13 @@ final class AppModel: ObservableObject {
     private func startup() async {
         PreviewPaths.cleanRoot()
         try? FileManager.default.removeItem(at: ProjectDocument.workingRoot)
-        guard let pcb2gcodeURL else {
-            appendLog("WARNING: pcb2gcode not found. Install with: brew install pcb2gcode\n")
-            return
-        }
-        if let r = try? await ProcessRunner.run(executable: pcb2gcodeURL, arguments: ["--version"]) {
-            let version = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            appendLog("Found \(version) at \(pcb2gcodeURL.path)\n")
-        }
-        if gerbvURL == nil {
-            appendLog("Note: gerbv not found (only needed for solder-mask SVGs). Install with: brew install gerbv\n")
+        if let pcb2gcodeURL {
+            if let r = try? await ProcessRunner.run(executable: pcb2gcodeURL, arguments: ["--version"]) {
+                let version = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                appendLog("pcb2gcode \(version) — \(ToolLocator.pcb2gcodeIsBundled ? "built into the app" : pcb2gcodeURL.path)\n")
+            }
+        } else {
+            appendLog("Note: pcb2gcode is not available; the native toolpath engine is used.\n")
         }
         // Dev hooks: `-debugProjectFolder /path/to/gerbers` skips the open panel;
         // adding `-debugGenerate 1` (or `-debugGenerateLaser 1`) also runs that
@@ -275,6 +271,18 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+        // Dev hook: `-debugCompareEngines /path/report` runs pcb2gcode and the
+        // native engine on the -debugProjectFolder files with the current
+        // settings, writes a report and overlay images there, and quits.
+        if let dir = UserDefaults.standard.string(forKey: "debugCompareEngines") {
+            // `-debugCompareNativeOnly 1`: both sides native — for the safety
+            // figures on boards pcb2gcode takes too long on.
+            let binary = UserDefaults.standard.bool(forKey: "debugCompareNativeOnly") ? nil : pcb2gcodeURL
+            let report = await EngineComparison.run(pcb2gcode: binary, params: parameters.snapshot(),
+                                                   files: detectedFiles, reportDir: URL(fileURLWithPath: dir))
+            print(report)
+            exit(0)
+        }
         // Dev hook: `-debugOpenProject /path/x.cncproj` opens a saved project.
         if let path = UserDefaults.standard.string(forKey: "debugOpenProject") {
             openProject(at: URL(fileURLWithPath: path), confirmed: true)
@@ -361,7 +369,6 @@ final class AppModel: ObservableObject {
             return "Nothing to generate — open a project, or draw on a custom layer."
         }
         if detectedFiles.hasAnything {
-            if pcb2gcodeURL == nil { return "pcb2gcode not found — install it with: brew install pcb2gcode" }
             if projectFolder == nil { return "Choose a project folder first." }
         }
         if let bad = parameters.validationError { return "Invalid value in \"\(bad)\" — fix it before generating." }
@@ -387,7 +394,7 @@ final class AppModel: ObservableObject {
         generationSteps = []
         generationSummary = nil
         generationFailed = false
-        generationTotal = (detectedFiles.hasAnything ? Pcb2GcodeService.stepCount(parameters.snapshot(), files: detectedFiles) : 0)
+        generationTotal = (detectedFiles.hasAnything ? Pcb2GcodeService.stepCount(parameters.snapshot(), files: detectedFiles, pcb2gcode: pcb2gcodeURL) : 0)
             + (customLayers.hasShapes ? 1 : 0)
             + (target == .laser ? 1 : 0)   // plus the rendering pass
         appendLog("\n--- \(target == .cnc ? "Generating" : "Exporting laser artwork") into \(destination.path) ---\n")
@@ -395,7 +402,6 @@ final class AppModel: ObservableObject {
         let snapshot = parameters.snapshot()
         let files = detectedFiles
         let custom = customLayers
-        let gerbv = gerbvURL
         let options = ArtworkExport.Options.current
 
         generateTask = Task { [weak self] in
@@ -416,7 +422,7 @@ final class AppModel: ObservableObject {
             defer { if target == .laser { try? FileManager.default.removeItem(at: workDir) } }
 
             var batch = Pcb2GcodeService.BatchResult()
-            if files.hasAnything, let pcb2gcodeURL {
+            if files.hasAnything {
                 batch = await Pcb2GcodeService.runBatch(
                     pcb2gcode: pcb2gcodeURL, params: snapshot, files: files, outputDir: workDir,
                     onStep: { [weak self] event, total in
@@ -455,12 +461,8 @@ final class AppModel: ObservableObject {
             switch target {
             case .cnc:
                 if snapshot.maskMode == "svg", files.topMask != nil || files.bottomMask != nil {
-                    if let gerbv {
-                        let maskResult = await Pcb2GcodeService.exportMaskSVGs(gerbv: gerbv, files: files, outputDir: destination)
-                        self.appendLog(maskResult.log)
-                    } else {
-                        self.appendLog("WARNING: gerbv not found; solder-mask SVGs were not generated.\nInstall it with: brew install gerbv\n")
-                    }
+                    let maskResult = Pcb2GcodeService.exportMaskSVGs(files: files, outputDir: destination)
+                    self.appendLog(maskResult.log)
                 }
                 let count = batch.outputs.count
                 self.finishGeneration(summary: "\(count) program\(count == 1 ? "" : "s") written.", failed: false)

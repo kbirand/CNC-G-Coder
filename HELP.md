@@ -89,6 +89,15 @@ Every edit writes an edited copy of the file; the original file is never modifie
 - Each settings group has a **Tool** menu at its top. Picking a tool **copies** its values into the group — as FlatCAM copies database data into an object — so you can still tune the layer. **Edited** appears when the fields no longer match the tool; click it to restore the tool's values. **Custom** means values entered by hand.
 - Feeds or spindle of 0 (FlatCAM's "not set") leave the layer's own value unchanged.
 
+## Toolpath engines
+
+Machine setup → **Toolpath engine** picks what turns the Gerber and drill files into programs:
+
+- **pcb2gcode** — the established open-source generator. It is built into the app (Contents/Helpers), so nothing has to be installed.
+- **Native** — the app's own engine: it reads the files itself and computes isolation, board outline with tabs, drilling (with bits on hand), hole milling, solder-mask etch and silkscreen with the Clipper2 polygon library. It runs in the app, which makes it faster, and follows the same rules as pcb2gcode — passes spread evenly across the isolation width, the outline's centre line as the board edge, tabs on the longest edges.
+
+Both write their programs the same way, so every setting (dwells, pecks, plunge clearance, extra cut, heights, origins) applies to either. Differences you may notice: the native engine splits depths exactly (1.8 mm in 0.6 mm passes is 3 passes; pcb2gcode makes it 4 of 0.45 mm) and orders paths by nearest neighbour.
+
 ## Parameters
 
 ### Copper isolation
@@ -170,7 +179,7 @@ Zero X/Y at the origin for the front-side programs (copper, drills, outline, top
 
 ## Troubleshooting
 
-- **pcb2gcode not found** → `brew install pcb2gcode` (and `gerbv` for laser SVGs).
+- **pcb2gcode missing** → only in builds made without it; the native engine takes over (Machine setup → Toolpath engine). Normal builds carry pcb2gcode inside the app — nothing to install.
 - **Preview failed** → the Log tab has the full output with per-step timings; the error is at the bottom.
 - **Uncut gaps between close traces** → tool too wide to fit; pcb2gcode warns in the Log. Reduce effective tool diameter or increase design clearance.
 - **Mask opening not cleared** → opening smaller than the mask tool, or Clear width < half the opening.

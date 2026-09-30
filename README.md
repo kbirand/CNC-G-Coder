@@ -34,43 +34,29 @@ CNC G-Coder drives [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) under the
 
 ## Requirements
 
-- macOS 26+ (Apple Silicon or Intel)
-- [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) — the isolation-routing engine the app drives
-- [gerbv](https://gerbv.github.io) *(optional)* — only needed for the laser-SVG solder-mask export
-
-### Installing the dependencies
-
-1. **Install Homebrew** (skip if `brew --version` already works). Paste this into Terminal:
-
-   ```bash
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   ```
-
-   Follow the prompts — on Apple Silicon it ends by telling you to add `brew` to your PATH; run the two `eval` lines it prints.
-
-2. **Install the tools:**
-
-   ```bash
-   brew install pcb2gcode gerbv
-   ```
-
-3. **Verify:**
-
-   ```bash
-   pcb2gcode --version
-   ```
-
-The app looks for the binaries in `/opt/homebrew/bin` (Apple Silicon) and `/usr/local/bin` (Intel) — the standard Homebrew locations, so no configuration is needed. If pcb2gcode is missing, the app shows a warning in the sidebar and the Log tab tells you what to install; gerbv is only required when you select *Laser SVGs* as the solder-mask output.
+- macOS 26+ (Apple Silicon)
+- Nothing else to install: the app carries its own copy of
+  [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode), and has a native
+  toolpath engine of its own (Machine setup → Toolpath engine).
 
 ## Building
 
-Open `CNC G-Coder.xcodeproj` in Xcode 15+ and press Run, or:
+Open `CNC G-Coder.xcodeproj` in Xcode and press Run, or:
 
 ```bash
 xcodebuild -project "CNC G-Coder.xcodeproj" -scheme "CNC G-Coder" -configuration Release build
 ```
 
-> Note: the app launches Homebrew binaries via `Process`, so App Sandbox is intentionally disabled in the project settings.
+The **Bundle pcb2gcode** build phase ([Scripts/bundle-pcb2gcode.sh](Scripts/bundle-pcb2gcode.sh))
+copies pcb2gcode and the ~35 libraries it loads into `Contents/Helpers`,
+rewrites their load paths to stay inside the app and signs them — so the
+*build* machine needs `brew install pcb2gcode`, the people using the app do
+not. Built without it, the app still works on the native engine.
+
+The native engine uses [Clipper2](https://github.com/AngusJohnson/Clipper2)
+(vendored in `CNC G-Coder/ThirdParty`, Boost licence) for polygon offsetting.
+
+> Note: the app runs pcb2gcode as a subprocess via `Process`, so App Sandbox is intentionally disabled in the project settings.
 
 ## Quick start
 
@@ -118,5 +104,5 @@ The full user guide lives in the app (**⌘?** or the *?* button) and in [HELP.m
 
 ## Acknowledgments
 
-- [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) — the isolation-routing engine this app drives
-- [gerbv](https://gerbv.github.io) — Gerber → SVG export for laser solder-mask workflows
+- [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) — the isolation-routing engine the app bundles and drives (GPL-3.0, shipped as a separate program)
+- [Clipper2](https://github.com/AngusJohnson/Clipper2) — polygon clipping and offsetting for the native engine (Boost Software License)

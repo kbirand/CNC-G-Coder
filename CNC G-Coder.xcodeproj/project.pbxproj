@@ -55,6 +55,7 @@
 				2BB98F8B302D137300D8699F /* Sources */,
 				2BB98F8C302D137300D8699F /* Frameworks */,
 				2BB98F8D302D137300D8699F /* Resources */,
+				2BB98FA0302D137400D8699F /* Bundle pcb2gcode */,
 			);
 			buildRules = (
 			);
@@ -114,6 +115,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		2BB98FA0302D137400D8699F /* Bundle pcb2gcode */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle pcb2gcode";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Copies pcb2gcode and its libraries into Contents/Helpers (see the script).\n\"$SRCROOT/Scripts/bundle-pcb2gcode.sh\" \"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\" \"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		2BB98F8B302D137300D8699F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -164,7 +187,7 @@
 				DEVELOPMENT_TEAM = Z2LDZ42K4L;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -230,7 +253,7 @@
 				DEVELOPMENT_TEAM = Z2LDZ42K4L;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -264,6 +287,10 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"\"$(SRCROOT)/CNC G-Coder/ThirdParty/Clipper2/include\"",
+					"\"$(SRCROOT)/CNC G-Coder/ThirdParty/ClipperShim\"",
+				);
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "CNC G-Coder";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -280,6 +307,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "CNC G-Coder/CNC G-Coder-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -300,6 +328,10 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"\"$(SRCROOT)/CNC G-Coder/ThirdParty/Clipper2/include\"",
+					"\"$(SRCROOT)/CNC G-Coder/ThirdParty/ClipperShim\"",
+				);
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "CNC G-Coder";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -316,6 +348,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "CNC G-Coder/CNC G-Coder-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};

@@ -86,7 +86,7 @@ final class PreviewController: ObservableObject {
 
     var canPreview: Bool {
         guard let app else { return false }
-        let gerbers = app.projectFolder != nil && app.detectedFiles.hasAnyToolpathInput && app.pcb2gcodeURL != nil
+        let gerbers = app.projectFolder != nil && app.detectedFiles.hasAnyToolpathInput
         return gerbers || app.customLayers.hasShapes
     }
 
@@ -170,18 +170,21 @@ final class PreviewController: ObservableObject {
             return
         }
 
-        // Gerber layers need pcb2gcode; drawn layers are generated in-app.
-        let useBatch = files.hasAnyToolpathInput && pcb2gcode != nil
+        // Gerber layers go through pcb2gcode or the native engine; drawn
+        // layers are generated in-app.
+        let useBatch = files.hasAnyToolpathInput
+        let native = Pcb2GcodeService.usesNativeEngine(snapshot, pcb2gcode: pcb2gcode)
         // One more step than the batch reports: reading the programs back.
-        let total = (useBatch ? Pcb2GcodeService.stepCount(snapshot, files: files) : 0)
+        let total = (useBatch ? Pcb2GcodeService.stepCount(snapshot, files: files, pcb2gcode: pcb2gcode) : 0)
             + (custom.hasShapes ? 1 : 0) + 1
-        progress = RunProgress(step: 0, total: total, label: useBatch ? "Starting pcb2gcode" : "Custom layers")
+        progress = RunProgress(step: 0, total: total,
+                               label: useBatch ? (native ? "Native toolpaths" : "Starting pcb2gcode") : "Custom layers")
         defer { progress = nil }
         // Unchanged layers come straight from the cache; the rest run in parallel.
         running = [:]
         finishedSteps = 0
         var batch = Pcb2GcodeService.BatchResult()
-        if useBatch, let pcb2gcode {
+        if useBatch {
             batch = await Pcb2GcodeService.runBatch(
                 pcb2gcode: pcb2gcode, params: snapshot, files: files, outputDir: runDir,
                 cache: Pcb2GcodeService.previewCache,

@@ -364,8 +364,8 @@ nonisolated enum Pcb2GcodeService {
     }
 
     /// How many progress steps `runBatch` reports with these inputs.
-    static func stepCount(_ p: ParameterSnapshot, files: DetectedFiles) -> Int {
-        var steps = jobs(p, files: files, outputDir: URL(fileURLWithPath: "/")).count
+    static func stepCount(_ p: ParameterSnapshot, files: DetectedFiles, pcb2gcode: URL?) -> Int {
+        var steps = usesNativeEngine(p, pcb2gcode: pcb2gcode) ? 1 : jobs(p, files: files, outputDir: URL(fileURLWithPath: "/")).count
         if let clearance = Double(p.plungeClearance), clearance > 0 { steps += 1 }
         if p.zeroStart { steps += 1 }
         return steps
@@ -466,58 +466,34 @@ nonisolated enum Pcb2GcodeService {
     /// Runs every job — in parallel, re-using cached results when `cache` is
     /// given (the live preview; Generate always runs fresh) — then the local
     /// post-processing passes over all programs together.
-    static func runBatch(pcb2gcode: URL, params p: ParameterSnapshot, files: DetectedFiles, outputDir: URL,
+    static func runBatch(pcb2gcode: URL?, params p: ParameterSnapshot, files: DetectedFiles, outputDir: URL,
                          cache: URL? = nil, onStep: StepReporter? = nil) async -> BatchResult {
         var result = BatchResult()
         let fm = FileManager.default
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
-        if let cache { try? fm.createDirectory(at: cache, withIntermediateDirectories: true) }
+        let total = stepCount(p, files: files, pcb2gcode: pcb2gcode)
+        var step = 0
 
-        let scratchRoot = outputDir.appendingPathComponent(".pcb2gcode-scratch-\(UUID().uuidString)", isDirectory: true)
-        try? fm.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: scratchRoot) }
-
-        let jobs = jobs(p, files: files, outputDir: outputDir)
-        let total = stepCount(p, files: files)
-        // pcb2gcode is partly multi-threaded itself; half the cores each is plenty.
-        let width = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
-
-        var logs = [String](repeating: "", count: jobs.count)
-        await withTaskGroup(of: (Int, String, Bool).self) { group in
-            var next = 0
-            func launch() {
-                guard next < jobs.count else { return }
-                let index = next
-                next += 1
-                let job = jobs[index]
-                onStep?(.started(id: index, label: job.label), total)
-                group.addTask {
-                    let r = await runJob(job, pcb2gcode: pcb2gcode, outputDir: outputDir,
-                                         scratchRoot: scratchRoot, cache: cache)
-                    return (index, r.log, r.succeeded)
-                }
+        if let pcb2gcode, !usesNativeEngine(p, pcb2gcode: pcb2gcode) {
+            step = await runJobs(pcb2gcode: pcb2gcode, params: p, files: files, outputDir: outputDir,
+                                 cache: cache, total: total, onStep: onStep, result: &result)
+        } else {
+            // The native engine: in-process, no pcb2gcode.
+            onStep?(.started(id: 0, label: "Native toolpaths"), total)
+            let native = await Task.detached(priority: .userInitiated) {
+                NativeToolpathEngine.run(p, files: files, outputDir: outputDir)
+            }.value
+            result.outputs = native.outputs
+            result.log += native.log
+            if !native.succeeded { result.succeeded = false }
+            for output in native.outputs where output.layer.isDrill {
+                warnAboutMissingBits(in: output.url, bits: p.drillBits, log: &result.log)
             }
-            for _ in 0..<min(width, jobs.count) { launch() }
-            for await (index, log, succeeded) in group {
-                logs[index] = log
-                if !succeeded { result.succeeded = false }
-                onStep?(.finished(id: index), total)
-                if !Task.isCancelled { launch() }
-            }
-        }
-        result.log += logs.joined()
-        if Task.isCancelled { result.succeeded = false }
-        if let cache { pruneCache(cache) }
-
-        for job in jobs {
-            if let check = job.bitCheck { warnAboutMissingBits(in: check, bits: p.drillBits, log: &result.log) }
-            for product in job.products where fm.fileExists(atPath: product.url.path) {
-                result.outputs.append(GeneratedOutput(layer: product.layer, url: product.url,
-                                                      toolDiameter: product.tool.flatMap(Double.init)))
-            }
+            onStep?(.finished(id: 0), total)
+            step = 1
+            if Task.isCancelled { result.succeeded = false }
         }
 
-        var step = jobs.count
         func post(_ label: String, _ work: () -> Void) {
             let id = step
             step += 1
@@ -549,6 +525,64 @@ nonisolated enum Pcb2GcodeService {
         }
 
         return result
+    }
+
+    /// Native when chosen, or when there is no pcb2gcode to run.
+    static func usesNativeEngine(_ p: ParameterSnapshot, pcb2gcode: URL?) -> Bool {
+        p.engine == "native" || pcb2gcode == nil
+    }
+
+    /// pcb2gcode's part of a batch: every job in parallel, cached results
+    /// re-used. Returns how many progress steps it reported.
+    private static func runJobs(pcb2gcode: URL, params p: ParameterSnapshot, files: DetectedFiles, outputDir: URL,
+                                cache: URL?, total: Int, onStep: StepReporter?,
+                                result: inout BatchResult) async -> Int {
+        let fm = FileManager.default
+        if let cache { try? fm.createDirectory(at: cache, withIntermediateDirectories: true) }
+        let scratchRoot = outputDir.appendingPathComponent(".pcb2gcode-scratch-\(UUID().uuidString)", isDirectory: true)
+        try? fm.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: scratchRoot) }
+
+        let jobs = jobs(p, files: files, outputDir: outputDir)
+        // pcb2gcode is partly multi-threaded itself; half the cores each is plenty.
+        let width = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+
+        var logs = [String](repeating: "", count: jobs.count)
+        var succeeded = true
+        await withTaskGroup(of: (Int, String, Bool).self) { group in
+            var next = 0
+            func launch() {
+                guard next < jobs.count else { return }
+                let index = next
+                next += 1
+                let job = jobs[index]
+                onStep?(.started(id: index, label: job.label), total)
+                group.addTask {
+                    let r = await runJob(job, pcb2gcode: pcb2gcode, outputDir: outputDir,
+                                         scratchRoot: scratchRoot, cache: cache)
+                    return (index, r.log, r.succeeded)
+                }
+            }
+            for _ in 0..<min(width, jobs.count) { launch() }
+            for await (index, log, ok) in group {
+                logs[index] = log
+                if !ok { succeeded = false }
+                onStep?(.finished(id: index), total)
+                if !Task.isCancelled { launch() }
+            }
+        }
+        result.log += logs.joined()
+        if !succeeded || Task.isCancelled { result.succeeded = false }
+        if let cache { pruneCache(cache) }
+
+        for job in jobs {
+            if let check = job.bitCheck { warnAboutMissingBits(in: check, bits: p.drillBits, log: &result.log) }
+            for product in job.products where fm.fileExists(atPath: product.url.path) {
+                result.outputs.append(GeneratedOutput(layer: product.layer, url: product.url,
+                                                      toolDiameter: product.tool.flatMap(Double.init)))
+            }
+        }
+        return jobs.count
     }
 
     // MARK: - Drill bit check
@@ -1161,9 +1195,10 @@ nonisolated enum Pcb2GcodeService {
         return out
     }
 
-    /// Exports solder-mask openings (and the board outline for reference) as SVGs
-    /// via gerbv, into <outputDir>/Laser_SolderMask. Final Generate only.
-    static func exportMaskSVGs(gerbv: URL, files: DetectedFiles, outputDir: URL) async -> BatchResult {
+    /// Exports solder-mask openings (and the board outline for reference) as
+    /// 1:1 SVGs into <outputDir>/Laser_SolderMask, drawn from the Gerbers by
+    /// the app itself (GerberSVG). Final Generate only.
+    static func exportMaskSVGs(files: DetectedFiles, outputDir: URL) -> BatchResult {
         var result = BatchResult()
         let laserDir = outputDir.appendingPathComponent("Laser_SolderMask", isDirectory: true)
         do {
@@ -1174,30 +1209,26 @@ nonisolated enum Pcb2GcodeService {
             return result
         }
 
-        func export(_ input: URL, to name: String, label: String) async {
+        func export(_ input: URL, to name: String, label: String) {
             let out = laserDir.appendingPathComponent(name)
             do {
-                let r = try await ProcessRunner.run(executable: gerbv, arguments: ["-x", "svg", "-o", out.path, input.path], currentDirectory: laserDir)
-                result.log += "$ \(r.commandLine)\n\(r.output)\n"
-                if r.exitCode != 0 {
-                    result.log += "\(label) SVG export failed with exit code \(r.exitCode)\n"
-                    result.succeeded = false
-                }
+                try GerberSVG.write(GerberFile.read(input)).write(to: out, atomically: true, encoding: .utf8)
+                result.log += "\(label) → \(out.lastPathComponent)\n"
             } catch {
-                result.log += "ERROR launching gerbv: \(error.localizedDescription)\n"
+                result.log += "ERROR: \(label) SVG export failed: \(error.localizedDescription)\n"
                 result.succeeded = false
             }
         }
 
         if let topMask = files.topMask {
-            await export(topMask, to: "soldermask_top_openings.svg", label: "Top solder-mask")
+            export(topMask, to: "soldermask_top_openings.svg", label: "Top solder-mask")
         }
         if let bottomMask = files.bottomMask {
-            await export(bottomMask, to: "soldermask_bottom_openings.svg", label: "Bottom solder-mask")
+            export(bottomMask, to: "soldermask_bottom_openings.svg", label: "Bottom solder-mask")
         }
         // Reference geometry only; never laser/cut the outline SVG.
         if let outline = files.outline {
-            await export(outline, to: "REFERENCE_board_outline.svg", label: "Board outline reference")
+            export(outline, to: "REFERENCE_board_outline.svg", label: "Board outline reference")
         }
 
         result.log += "Solder-mask laser SVGs written to: \(laserDir.path)\n"

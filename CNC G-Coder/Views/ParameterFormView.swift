@@ -710,7 +710,7 @@ struct ParameterFormView: View {
             case "gcode":
                 Text("After painting and curing the mask, top-mask-etch.ngc / bottom-mask-etch.ngc mill the pad and via openings clear with overlapping pocketing passes.")
             case "svg":
-                Text("Mask openings are exported as SVGs (via gerbv) for laser ablation instead of milling.")
+                Text("Mask openings are exported as 1:1 SVGs for laser ablation instead of milling.")
             default:
                 Text("Solder-mask layers are ignored.")
             }
@@ -847,6 +847,21 @@ struct ParameterFormView: View {
             sectionHeader(.setup)
         } footer: {
             Text("Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. With an origin set, every program shares one origin per side — zero the machine once for the front programs and once after flipping, and Mirror axis has no effect (the shared origin absorbs it). Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front.")
+        }
+        Section {
+            Picker("Engine", selection: params.$engine) {
+                Text("pcb2gcode").tag("pcb2gcode")
+                Text("Native").tag("native")
+            }
+            .pickerStyle(.segmented)
+            .help("pcb2gcode: the proven open-source generator, built into the app. Native: the app's own toolpath engine (Clipper2 geometry) — faster, no external program. Both write programs the same way, so every setting applies to either.")
+        } header: {
+            Text("Toolpath engine")
+        } footer: {
+            Text(params.engine == "native"
+                 ? "Native: isolation, outline, drilling, hole milling, mask and silkscreen are computed in the app."
+                 : (model.pcb2gcodeURL == nil ? "pcb2gcode is not available in this build — the native engine is used."
+                    : "pcb2gcode \(ToolLocator.pcb2gcodeIsBundled ? "(built into the app)" : "(Homebrew)") turns the Gerbers into programs."))
         }
         Section {
             ParamRow("Safe Z", value: params.$zSafe, kind: .length,
@@ -1058,12 +1073,12 @@ struct ParameterFormView: View {
 
     @ViewBuilder
     private var warningsFooter: some View {
-        if model.pcb2gcodeURL == nil || params.validationError != nil {
+        if (model.pcb2gcodeURL == nil && params.engine != "native") || params.validationError != nil {
             VStack(alignment: .leading, spacing: 6) {
-                if model.pcb2gcodeURL == nil {
-                    WarningPill(text: "pcb2gcode not found — brew install pcb2gcode", color: .red,
+                if model.pcb2gcodeURL == nil && params.engine != "native" {
+                    WarningPill(text: "pcb2gcode missing — using the native engine", color: .orange,
                                 icon: "exclamationmark.triangle.fill",
-                                help: "The G-code generator binary is missing. Install Homebrew, then run: brew install pcb2gcode")
+                                help: "This copy of the app has no pcb2gcode inside (it was built on a Mac without it), so the native toolpath engine is used. Machine setup → Toolpath engine.")
                 }
                 if let bad = params.validationError {
                     WarningPill(text: "Invalid value: \(bad)", color: .orange,
