@@ -75,6 +75,10 @@ extension AppModel {
         if tool.spindle > 0 { layer.spindle = tool.spindle }
         if tool.overlap > 0 { layer.overlap = tool.overlap }
         if tool.dwell > 0 { layer.dwell = tool.dwell }
+        layer.travelZ = max(0, tool.travelZ)
+        layer.endZ = max(0, tool.toolChangeZ)
+        layer.extraCut = max(0, tool.extraCut)
+        layer.spindleCCW = tool.spindleCCW
         editor.setLayer(layer, actionName: "Change Tool")
     }
 }

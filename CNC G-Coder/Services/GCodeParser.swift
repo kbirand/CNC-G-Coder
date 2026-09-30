@@ -17,12 +17,17 @@ nonisolated enum GCodeParser {
         }.value
     }
 
-    /// Assumed rapid rate for time estimates of G0 moves (mm/min).
-    static let assumedRapidFeed = 2000.0
+    /// Rapid rate for time estimates of G0 moves (mm/min): Machine setup's
+    /// Rapid feed (FlatCAM's "FR Rapids").
+    static var assumedRapidFeed: Double {
+        let value = Double(UserDefaults.standard.string(forKey: "param.rapidFeed") ?? "") ?? 2000
+        return value > 0 ? value : 2000
+    }
 
     static func parse(fileURL: URL, layer: LayerKind) throws -> ParsedLayer {
         let content = try String(contentsOf: fileURL, encoding: .utf8)
         var result = ParsedLayer(id: layer, fileURL: fileURL)
+        let rapidFeed = assumedRapidFeed
 
         var motion: Int?
         var absolute = true
@@ -171,7 +176,7 @@ nonisolated enum GCodeParser {
 
                 let length = (dx * dx + dy * dy + dz * dz).squareRoot()
                 if length > 1e-12 {
-                    let rate = (m == 0) ? assumedRapidFeed : (feed ?? assumedRapidFeed)
+                    let rate = (m == 0) ? rapidFeed : (feed ?? rapidFeed)
                     time += length / max(rate, 1) * 60
                     dist += length
                 }

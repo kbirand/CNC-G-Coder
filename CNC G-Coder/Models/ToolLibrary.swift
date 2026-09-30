@@ -24,6 +24,21 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
         }
     }
 
+    /// Climb or conventional milling (FlatCAM's "Milling Type").
+    enum Direction: String, Codable, CaseIterable, Identifiable, Sendable {
+        /// Whatever Machine setup says.
+        case machine, any, climb, conventional
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .machine: "Machine default"
+            case .any: "Either (shortest path)"
+            case .climb: "Climb"
+            case .conventional: "Conventional"
+            }
+        }
+    }
+
     /// Which layers the tool is offered for (FlatCAM's "Tool Target").
     enum Use: String, Codable, CaseIterable, Identifiable, Sendable {
         case general, isolation, drilling, cutout, mask, silk
@@ -64,6 +79,17 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
     var overlap: Double = 50
     /// Seconds to wait after the spindle starts; 0 = not set.
     var dwell: Double = 0
+    /// Height for moves between cuts (FlatCAM's Travel Z); 0 = Machine setup's Safe Z.
+    var travelZ: Double = 0
+    /// Height for tool changes and the end of the program (FlatCAM's
+    /// Tool-change Z / End Z); 0 = Machine setup's.
+    var toolChangeZ: Double = 0
+    /// Closed cuts run on this far past their start, so no sliver is left
+    /// where the loop meets itself (FlatCAM's Extra Cut); 0 = off.
+    var extraCut: Double = 0
+    var direction: Direction = .machine
+    /// M4 instead of M3 (FlatCAM's spindle direction CCW).
+    var spindleCCW = false
     var notes: String = ""
 
     init(name: String) { self.name = name }
@@ -95,6 +121,7 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, use, shape, diameter, tipDiameter, tipAngle, toleranceMin, toleranceMax
         case cutDepth, depthPerPass, feedXY, feedZ, spindle, overlap, dwell, notes
+        case travelZ, toolChangeZ, extraCut, direction, spindleCCW
     }
 
     init(from decoder: Decoder) throws {
@@ -119,6 +146,11 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
         spindle = d(.spindle, base.spindle)
         overlap = d(.overlap, base.overlap)
         dwell = d(.dwell, base.dwell)
+        travelZ = d(.travelZ, base.travelZ)
+        toolChangeZ = d(.toolChangeZ, base.toolChangeZ)
+        extraCut = d(.extraCut, base.extraCut)
+        direction = (try? c.decodeIfPresent(Direction.self, forKey: .direction)) ?? base.direction
+        spindleCCW = (try? c.decodeIfPresent(Bool.self, forKey: .spindleCCW)) ?? base.spindleCCW
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
     }
 }
@@ -380,6 +412,20 @@ final class ToolLibrary: ObservableObject {
             tool.overlap = num(data, "tools_iso_overlap") ?? tool.overlap
             tool.dwell = bool("dwell") ? (num(data, "dwelltime") ?? 0) : 0
         }
+
+        // Heights: pcb2gcode ends every program at the tool-change height, so
+        // FlatCAM's tool-change Z (when tool changes are on) or End Z is it.
+        tool.travelZ = num(data, tool.use == .drilling ? "tools_drill_travelz" : "travelz") ?? num(data, "travelz") ?? 0
+        tool.toolChangeZ = (bool("toolchange") ? num(data, "toolchangez") : nil) ?? num(data, "endz") ?? 0
+        if tool.use != .drilling {
+            tool.extraCut = bool("extracut") ? (num(data, "extracut_length") ?? 0) : 0
+            switch (data["tools_iso_milling_type"] as? String ?? "").lowercased() {
+            case "cl": tool.direction = .climb
+            case "cv": tool.direction = .conventional
+            default: break
+            }
+        }
+        tool.spindleCCW = (data["spindledir"] as? String ?? "").uppercased() == "CCW"
 
         var notes = ["Imported from FlatCAM"]
         if let offset = entry["offset"] as? String { notes.append("offset \(offset)") }

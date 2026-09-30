@@ -68,6 +68,17 @@ With a layer selected, **CNC export → Export <name>.ngc…** in the sidebar sa
 
 **Machining.** Each layer has one tool (from the library or typed in), a depth, depth per pass, feeds and spindle, and an operation. *Engrave* runs the tool centre along the drawn line; *Cut outside* / *Cut inside* offset closed shapes by half the tool so what you drew is the size that comes out (outside for a part you keep, inside for a hole). A shape's stroke width wider than the tool is cleared with overlapping passes; *Filled* pockets a closed shape inside-out. Shapes are drawn in design coordinates on the board, so they keep their place whatever origin you choose, and a Back-side layer is mirrored like back copper. Custom layers are saved in the project.
 
+## Editing imported layers
+
+Any imported Gerber or drill file can be edited in place: select a program made from one and click **Edit** at the top of its settings, or right-click the file under **Layer files** → **Edit…**. The file's artwork (pads, tracks, filled areas or holes) is drawn over its program in the 2D view.
+
+- **Select**: click, ⇧-click to add, drag a box (left-to-right encloses, right-to-left touches). ⌘A selects all; **Select Similar** (the wand) adds every track of the same width, pad of the same aperture or hole of the same size.
+- **Change sizes of the selection** in the Properties panel: track width, pad diameter or width × height, hole diameter. Only the selected objects change.
+- **Change a size everywhere**: while editing, the sidebar lists the file's apertures (Gerber) or drill tools (Excellon). Editing a row resizes everything that uses it, e.g. all 0.25 mm tracks at once. The target icon selects them.
+- **Move** by dragging or with the arrow keys (0.1 mm, ⇧ 1 mm); **Delete** with ⌫. Values commit on Return.
+
+Every edit writes an edited copy of the file; the original file is never modified. While editing, the sidebar shows only the file's sizes and pcb2gcode does not run — the toolpaths drawn under the artwork are the ones from before editing. Press **Done** (or Esc with nothing selected) and the preview regenerates once from the edited file. Edits are on the normal undo history (⌘Z), edited files are marked with an orange pencil, and saving the project packs the edited file. Custom-shaped (macro) pads and filled areas can be moved or deleted but not resized.
+
 ## Tool library
 
 **File → Tool Library…** (⇧⌘L) holds every bit you own with the cutting data that goes with it: shape (straight / ball / V-bit), what it is used for, diameter or tip + angle, depth, depth per pass (drills: peck depth), feeds, spindle, pass overlap, and for drills the range of hole sizes it may drill.
@@ -100,6 +111,8 @@ With a layer selected, **CNC export → Export <name>.ngc…** in the sidebar sa
 - **Safe Z** — travel height between cuts; must clear clamps and board warp.
 - **Plunge clearance** — vertical moves are rapid through the air and feed only below this height: descents rapid down to it then plunge at the Z feed; retracts feed up to it then rapid. This often halves program time (pcb2gcode alone feeds the whole descent — and drill retracts too). 0.2–0.5 mm typical; must clear board warp; 0 disables. The bit always enters and leaves the material at the programmed feed.
 - **Milling direction** (Machine setup) — Any lets pcb2gcode choose the shortest path; Climb or Conventional fixes it for every milling program (this turns off 2-opt path shortening, so programs get slightly longer).
+- **Rapid feed** (Machine setup) — your machine's G0 speed, used only for the time estimates (FlatCAM's FR Rapids).
+- **Heights & direction** (every layer; also stored per tool and imported from FlatCAM) — the layer's own **Travel Z** and **Tool-change Z** (the height for the tool-change pause and the end of the program; FlatCAM's Tool-change Z / End Z), left empty to use Machine setup's values, which show greyed in the field; **Extra cut** (isolation, mask, silkscreen and custom layers) — every closed contour runs on past its start by this length so no sliver is left where the loop closes; where pcb2gcode chains passes into one cut, the tool then retraces back along the groove, so only already-cut copper is cut again; **Milling direction** — Machine default or this layer's own; **Spindle** — clockwise (M3) or counter-clockwise (M4). Hole milling uses the drilling heights (it runs in the same pass).
 - **Spindle dwell** (every layer, next to its spindle speed; also stored per tool in the library and imported from FlatCAM's dwell) — pause after the spindle starts, so it is at speed before cutting, and after it stops, before a tool change. 0 = no pause. pcb2gcode writes dwells in milliseconds (`G04 P2000`), but GRBL and LinuxCNC read seconds, so the app writes each program's dwell in seconds (`G04 P2.000`). Machines configured for millisecond dwells (some Mach3 setups) need the value ×1000.
 
 ### Solder mask etch

@@ -25,6 +25,40 @@ nonisolated struct ParameterSnapshot: Sendable {
     var originMode: String                      // see ParametersStore.originMode
     var originX, originY: String                // custom origin, design coordinates
     var mirrorYAxis, zeroStart: Bool
+    /// Per settings group (keyed by ParametersStore.MotionGroup prefix):
+    /// travel and tool-change heights ("" = Machine setup's), extra cut
+    /// length, milling direction ("" = Machine setup's) and "cw"/"ccw".
+    var travelZ: [String: String] = [:]
+    var changeZ: [String: String] = [:]
+    var extraCut: [String: String] = [:]
+    var direction: [String: String] = [:]
+    var spindleDir: [String: String] = [:]
+    /// G0 speed for time estimates, mm/min.
+    var rapidFeed = "2000"
+
+    /// The group's travel height, or Machine setup's Safe Z.
+    func zSafe(_ group: ParametersStore.MotionGroup) -> String {
+        travelZ[group.rawValue].flatMap { Double($0) != nil ? $0 : nil } ?? zSafe
+    }
+
+    /// The group's tool-change (and end-of-program) height, or Machine setup's.
+    func zChange(_ group: ParametersStore.MotionGroup) -> String {
+        changeZ[group.rawValue].flatMap { Double($0) != nil ? $0 : nil } ?? zChange
+    }
+
+    /// "any" | "climb" | "conventional" for the group.
+    func millDirection(_ group: ParametersStore.MotionGroup) -> String {
+        let own = direction[group.rawValue] ?? ""
+        return own.isEmpty ? millDirection : own
+    }
+
+    func extraCutLength(_ group: ParametersStore.MotionGroup) -> Double {
+        max(0, Double(extraCut[group.rawValue] ?? "") ?? 0)
+    }
+
+    func spindleCCW(_ group: ParametersStore.MotionGroup) -> Bool {
+        spindleDir[group.rawValue] == "ccw"
+    }
 }
 
 /// All user-editable machining parameters, persisted across launches.
@@ -139,6 +173,89 @@ final class ParametersStore: ObservableObject {
     @AppStorage("param.originX") var originX = "0"
     @AppStorage("param.originY") var originY = "0"
 
+    // Heights, extra cut and directions per settings group (FlatCAM's
+    // per-tool Travel Z, Tool-change Z, Extra Cut, Milling Type and spindle
+    // direction). Empty heights and directions follow Machine setup.
+    @AppStorage("param.isoTravelZ") var isoTravelZ = ""
+    @AppStorage("param.isoChangeZ") var isoChangeZ = ""
+    @AppStorage("param.isoExtraCut") var isoExtraCut = "0"
+    @AppStorage("param.isoDirection") var isoDirection = ""
+    @AppStorage("param.isoSpindleDir") var isoSpindleDir = "cw"
+    @AppStorage("param.drillTravelZ") var drillTravelZ = ""
+    @AppStorage("param.drillChangeZ") var drillChangeZ = ""
+    @AppStorage("param.drillSpindleDir") var drillSpindleDir = "cw"
+    @AppStorage("param.holeMillSpindleDir") var holeMillSpindleDir = "cw"
+    @AppStorage("param.cutTravelZ") var cutTravelZ = ""
+    @AppStorage("param.cutChangeZ") var cutChangeZ = ""
+    @AppStorage("param.cutDirection") var cutDirection = ""
+    @AppStorage("param.cutSpindleDir") var cutSpindleDir = "cw"
+    @AppStorage("param.maskTravelZ") var maskTravelZ = ""
+    @AppStorage("param.maskChangeZ") var maskChangeZ = ""
+    @AppStorage("param.maskExtraCut") var maskExtraCut = "0"
+    @AppStorage("param.maskDirection") var maskDirection = ""
+    @AppStorage("param.maskSpindleDir") var maskSpindleDir = "cw"
+    @AppStorage("param.silkTravelZ") var silkTravelZ = ""
+    @AppStorage("param.silkChangeZ") var silkChangeZ = ""
+    @AppStorage("param.silkExtraCut") var silkExtraCut = "0"
+    @AppStorage("param.silkDirection") var silkDirection = ""
+    @AppStorage("param.silkSpindleDir") var silkSpindleDir = "cw"
+    /// G0 speed of the machine, for time estimates only (mm/min).
+    @AppStorage("param.rapidFeed") var rapidFeed = "2000"
+
+    /// The settings groups that have their own heights, extra cut and
+    /// directions; the raw value prefixes their parameter keys.
+    nonisolated enum MotionGroup: String, CaseIterable, Sendable {
+        case iso, drill, holeMill, cut, mask, silk
+
+        /// Hole milling runs in the drilling invocation: same heights.
+        var hasHeights: Bool { self != .holeMill }
+        /// Closed contours that can overrun their start.
+        var hasExtraCut: Bool { self == .iso || self == .mask || self == .silk }
+        var hasDirection: Bool { self == .iso || self == .cut || self == .mask || self == .silk }
+
+        var label: String {
+            switch self {
+            case .iso: "Isolation"
+            case .drill: "Drilling"
+            case .holeMill: "Hole milling"
+            case .cut: "Cutout"
+            case .mask: "Mask"
+            case .silk: "Silkscreen"
+            }
+        }
+
+        init?(_ section: SettingsSection) {
+            switch section {
+            case .isolation: self = .iso
+            case .drilling: self = .drill
+            case .holeMill: self = .holeMill
+            case .cutout: self = .cut
+            case .mask: self = .mask
+            case .silk: self = .silk
+            case .custom, .setup: return nil
+            }
+        }
+
+        init?(_ kind: LayerKind) {
+            switch kind {
+            case .front, .back: self = .iso
+            case .outline: self = .cut
+            case .drill: self = .drill
+            case .millDrill: self = .holeMill
+            case .maskTop, .maskBottom: self = .mask
+            case .silkTop, .silkBottom: self = .silk
+            case .custom, .test: return nil
+            }
+        }
+    }
+
+    /// The parameter behind one of a group's motion settings, if it has it.
+    func motionBinding(_ field: String, _ group: MotionGroup) -> Binding<String>? {
+        let key = group.rawValue + field
+        guard let path = Self.stringFields.first(where: { $0.0 == key })?.1 else { return nil }
+        return Binding(get: { self[keyPath: path] }, set: { self[keyPath: path] = $0 })
+    }
+
     // MARK: - Key table
 
     /// Every string parameter under its preset key. Presets, the preview
@@ -172,7 +289,18 @@ final class ParametersStore: ObservableObject {
         ("silkFeed", \.silkFeed), ("silkVertFeed", \.silkVertFeed), ("silkSpeed", \.silkSpeed),
         ("zSafe", \.zSafe), ("zChange", \.zChange), ("plungeClearance", \.plungeClearance),
         ("millDirection", \.millDirection), ("mirrorAxis", \.mirrorAxis),
-        ("originMode", \.originMode), ("originX", \.originX), ("originY", \.originY)
+        ("originMode", \.originMode), ("originX", \.originX), ("originY", \.originY),
+        ("isoTravelZ", \.isoTravelZ), ("isoChangeZ", \.isoChangeZ), ("isoExtraCut", \.isoExtraCut),
+        ("isoDirection", \.isoDirection), ("isoSpindleDir", \.isoSpindleDir),
+        ("drillTravelZ", \.drillTravelZ), ("drillChangeZ", \.drillChangeZ), ("drillSpindleDir", \.drillSpindleDir),
+        ("holeMillSpindleDir", \.holeMillSpindleDir),
+        ("cutTravelZ", \.cutTravelZ), ("cutChangeZ", \.cutChangeZ), ("cutDirection", \.cutDirection),
+        ("cutSpindleDir", \.cutSpindleDir),
+        ("maskTravelZ", \.maskTravelZ), ("maskChangeZ", \.maskChangeZ), ("maskExtraCut", \.maskExtraCut),
+        ("maskDirection", \.maskDirection), ("maskSpindleDir", \.maskSpindleDir),
+        ("silkTravelZ", \.silkTravelZ), ("silkChangeZ", \.silkChangeZ), ("silkExtraCut", \.silkExtraCut),
+        ("silkDirection", \.silkDirection), ("silkSpindleDir", \.silkSpindleDir),
+        ("rapidFeed", \.rapidFeed)
     ]
 
     private static let boolFields: [(String, ReferenceWritableKeyPath<ParametersStore, Bool>)] = [
@@ -256,6 +384,22 @@ final class ParametersStore: ObservableObject {
 
     func snapshot() -> ParameterSnapshot {
         func t(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces) }
+        var snapshot = baseSnapshot()
+        let values = exportValues()
+        for group in MotionGroup.allCases {
+            let g = group.rawValue
+            if let v = values[g + "TravelZ"] { snapshot.travelZ[g] = t(v) }
+            if let v = values[g + "ChangeZ"] { snapshot.changeZ[g] = t(v) }
+            if let v = values[g + "ExtraCut"] { snapshot.extraCut[g] = t(v) }
+            if let v = values[g + "Direction"] { snapshot.direction[g] = v }
+            if let v = values[g + "SpindleDir"] { snapshot.spindleDir[g] = v }
+        }
+        snapshot.rapidFeed = t(rapidFeed)
+        return snapshot
+    }
+
+    private func baseSnapshot() -> ParameterSnapshot {
+        func t(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces) }
         func eff(_ d: Double?, _ fallback: String) -> String { d.map(Self.format) ?? t(fallback) }
         return ParameterSnapshot(
             millDiameter: eff(effectiveMillDiameter, millDiameter), isolationWidth: t(isolationWidth), zWork: t(zWork),
@@ -311,6 +455,20 @@ final class ParametersStore: ObservableObject {
                         ("Hole mill spindle", holeMillSpeed), ("Hole mill dwell", holeMillDwell)]
         }
         if zeroStart, originMode == "custom" { doubles += [("Origin X", originX), ("Origin Y", originY)] }
+        doubles.append(("Rapid feed", rapidFeed))
+        // Per-group heights may be empty (= Machine setup); extra cuts may not.
+        for group in MotionGroup.allCases {
+            let label = group.label
+            if group.hasHeights {
+                for (field, name) in [("TravelZ", "travel Z"), ("ChangeZ", "tool-change Z")] {
+                    let v = motionBinding(field, group)?.wrappedValue.trimmingCharacters(in: .whitespaces) ?? ""
+                    if !v.isEmpty { doubles.append(("\(label) \(name)", v)) }
+                }
+            }
+            if group.hasExtraCut, let v = motionBinding("ExtraCut", group)?.wrappedValue {
+                doubles.append(("\(label) extra cut", v))
+            }
+        }
         if let name = bad(doubles) { return name }
         if Int(bridgeCount.trimmingCharacters(in: .whitespaces)) == nil { return "Bridge count" }
         if maskMode == "gcode" {
@@ -390,6 +548,16 @@ final class ParametersStore: ObservableObject {
                 v[prefix + "Shape"] = "flat"
                 v[diameterKey] = f(tool.diameter)
             }
+        }
+        if let group = MotionGroup(section) {
+            let g = group.rawValue
+            if group.hasHeights {
+                v[g + "TravelZ"] = tool.travelZ > 0 ? f(tool.travelZ) : ""
+                v[g + "ChangeZ"] = tool.toolChangeZ > 0 ? f(tool.toolChangeZ) : ""
+            }
+            if group.hasExtraCut { v[g + "ExtraCut"] = f(max(0, tool.extraCut)) }
+            if group.hasDirection { v[g + "Direction"] = tool.direction == .machine ? "" : tool.direction.rawValue }
+            v[g + "SpindleDir"] = tool.spindleCCW ? "ccw" : "cw"
         }
         switch section {
         case .isolation:
@@ -491,6 +659,11 @@ final class ParametersStore: ObservableObject {
         case .silk: silkToolID = ""
         case .custom, .setup: break
         }
+    }
+
+    /// Machine setup's Safe Z / Tool-change Z, shown where a group leaves them empty.
+    func machineHeight(_ field: String) -> String {
+        field == "TravelZ" ? zSafe : zChange
     }
 
     /// Shortest decimal text for a millimetre value (at most 5 places).

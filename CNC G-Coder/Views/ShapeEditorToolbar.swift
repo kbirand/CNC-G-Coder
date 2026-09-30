@@ -200,6 +200,9 @@ struct MeasureField: View {
     /// Sidebar style: borderless field with a fixed-width unit label, like ParamRow.
     var plain = false
     var width: CGFloat = 60
+    /// Commit on Return or when the field loses focus, not on every keystroke
+    /// — for values whose every change is expensive (a layer file rewrite).
+    var deferred = false
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
     @State private var text = ""
@@ -245,14 +248,21 @@ struct MeasureField: View {
             }
         }
         .onAppear { text = display(value) }
-        .onChange(of: text) {
-            guard text != display(value), var parsed = parse(text) else { return }
-            if let minimum { parsed = max(minimum, parsed) }
-            if abs(parsed - value) > 1e-9 { value = parsed }
-        }
+        .onChange(of: text) { if !deferred { apply() } }
+        .onSubmit { if deferred { apply() } }
         .onChange(of: value) { if !focused { text = display(value) } }
         .onChange(of: unitRaw) { text = display(value) }
-        .onChange(of: focused) { if !focused { text = display(value) } }
+        .onChange(of: focused) {
+            guard !focused else { return }
+            if deferred { apply() }
+            text = display(value)
+        }
+    }
+
+    private func apply() {
+        guard text != display(value), var parsed = parse(text) else { return }
+        if let minimum { parsed = max(minimum, parsed) }
+        if abs(parsed - value) > 1e-9 { value = parsed }
     }
 
     private var unitLabel: String {

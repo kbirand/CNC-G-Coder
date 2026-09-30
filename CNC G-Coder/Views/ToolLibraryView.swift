@@ -271,6 +271,30 @@ private struct ToolEditor: View {
                 }
             }
 
+            Section {
+                ParamRow("Travel Z", value: text(\.travelZ), kind: .length,
+                         help: "Height for moves between cuts with this tool. 0 = Machine setup's Safe Z.")
+                ParamRow("Tool-change Z", value: text(\.toolChangeZ), kind: .length,
+                         help: "Height for the tool-change pause and the end of the program. 0 = Machine setup's Tool-change Z.")
+                if !isDrill {
+                    ParamRow("Extra cut", value: text(\.extraCut), kind: .length,
+                             help: "Closed cuts run on this far past their start, so no copper sliver is left where the loop closes. 0 = off. Used by isolation, mask, silkscreen and custom layers.")
+                    Picker("Milling direction", selection: $tool.direction) {
+                        ForEach(MachineTool.Direction.allCases) { Text($0.title).tag($0) }
+                    }
+                    .help("Climb or conventional. Machine default follows Machine setup → Milling direction.")
+                }
+                Picker("Spindle", selection: $tool.spindleCCW) {
+                    Text("Clockwise (M3)").tag(false)
+                    Text("Counter-clockwise (M4)").tag(true)
+                }
+                .help("Almost every bit cuts clockwise; counter-clockwise is for left-hand tools.")
+            } header: {
+                Text("Heights & direction")
+            } footer: {
+                Text("Copied into the layer's Heights & direction when this tool is picked, like the cutting data above.")
+            }
+
             Section("Notes") {
                 TextField("Notes", text: $tool.notes, axis: .vertical)
                     .lineLimit(2...5)

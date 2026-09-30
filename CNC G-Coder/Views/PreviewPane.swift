@@ -6,6 +6,7 @@ struct PreviewPane: View {
     @ObservedObject var model: AppModel
     @ObservedObject var preview: PreviewController
     @ObservedObject var playback: PlaybackState
+    @ObservedObject var layerEditor: LayerFileEditor
 
     @AppStorage("sideViewVisible") private var showSideView = true
     @AppStorage("layout.sideViewHeight") private var sideViewHeight = 180.0
@@ -23,7 +24,7 @@ struct PreviewPane: View {
     /// A drawn layer is being edited: the canvas is a drawing board, so the
     /// regeneration cards and dimming that follow every edit stay out of the way.
     private var editorActive: Bool {
-        sectionOverride.isEmpty && playback.selectedLayer?.isCustom == true
+        (sectionOverride.isEmpty && playback.selectedLayer?.isCustom == true) || layerEditor.target != nil
     }
 
     private enum Tab: String, CaseIterable {
@@ -225,7 +226,7 @@ struct PreviewPane: View {
                                    tool: playback.selectedLayer.flatMap { model.toolGeometry(for: $0) })
                 } else {
                     ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters,
-                                       model: model, editor: model.editor)
+                                       model: model, editor: model.editor, layerEditor: model.layerEditor)
                 }
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -239,7 +240,7 @@ struct PreviewPane: View {
                     if show3D, editorActive {
                         HStack(spacing: 10) {
                             Image(systemName: "pencil.and.outline")
-                            Text("Drawing tools are in the 2D view")
+                            Text(layerEditor.target != nil ? "Layer editing is in the 2D view" : "Drawing tools are in the 2D view")
                             Button("Edit in 2D") { show3D = false }
                         }
                         .font(.callout)
@@ -258,11 +259,14 @@ struct PreviewPane: View {
                     }
                 }
                 .overlay(alignment: .bottom) {
-                    PlaybackControls(preview: preview, playback: playback)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
+                    // Editing a layer file: no program to play until editing ends.
+                    if layerEditor.target == nil {
+                        PlaybackControls(preview: preview, playback: playback)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 12)
+                    }
                 }
-            if showSideView {
+            if showSideView, layerEditor.target == nil {
                 SplitDragHandle(axisVertical: false) { delta in
                     sideViewHeight = min(500, max(90, sideViewHeight - Double(delta)))
                 }

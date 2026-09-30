@@ -39,12 +39,12 @@ nonisolated enum Pcb2GcodeService {
             "--mill-feed", "\(p.millFeed)mm/minute",
             "--mill-vertfeed", "\(p.millVertFeed)mm/minute",
             "--mill-speed", p.millSpeed,
-            "--zsafe", "\(p.zSafe)mm",
-            "--zchange", "\(p.zChange)mm",
+            "--zsafe", "\(p.zSafe(.iso))mm",
+            "--zchange", "\(p.zChange(.iso))mm",
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
         a += infeedArgs(depthPerPass: p.millInfeed, depth: p.zWork)
-        a += commonMillingArgs(p)
+        a += commonMillingArgs(p, .iso)
 
         // Never pcb2gcode's --zero-start: it zeroes each INVOCATION on its own
         // extents, so copper, drills and masks would get origins differing by
@@ -91,8 +91,8 @@ nonisolated enum Pcb2GcodeService {
             "--metric",
             "--metricoutput",
             "--path-finding-limit", "0",
-            "--zsafe", "\(p.zSafe)mm",
-            "--zchange", "\(p.zChange)mm",
+            "--zsafe", "\(p.zSafe(.cut))mm",
+            "--zchange", "\(p.zChange(.cut))mm",
             "--mirror-axis", "\(p.mirrorAxis)mm",
             "--outline", outline.path,
             "--cutter-diameter", "\(p.cutterDiameter)mm",
@@ -106,7 +106,7 @@ nonisolated enum Pcb2GcodeService {
             "--zbridges", "\(p.zBridge)mm",
             "--outline-output", outputURL(for: .outline, in: outputDir).path
         ]
-        a += commonMillingArgs(p)
+        a += commonMillingArgs(p, .cut)
         if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
     }
@@ -122,8 +122,8 @@ nonisolated enum Pcb2GcodeService {
             "--drill-side", "front",
             "--nog81",
             "--drill-output", output.path,
-            "--zsafe", "\(p.zSafe)mm",
-            "--zchange", "\(p.zChange)mm",
+            "--zsafe", "\(p.zSafe(.drill))mm",
+            "--zchange", "\(p.zChange(.drill))mm",
             "--mirror-axis", "\(p.mirrorAxis)mm",
             "--spinup-time", spinupPlaceholder
         ]
@@ -154,12 +154,13 @@ nonisolated enum Pcb2GcodeService {
     }
 
     /// Options every milling invocation shares: feed direction and spin-up.
-    private static func commonMillingArgs(_ p: ParameterSnapshot) -> [String] {
+    private static func commonMillingArgs(_ p: ParameterSnapshot, _ group: ParametersStore.MotionGroup) -> [String] {
         var a = ["--spinup-time", spinupPlaceholder]
-        if p.millDirection == "climb" || p.millDirection == "conventional" {
+        let direction = p.millDirection(group)
+        if direction == "climb" || direction == "conventional" {
             // pcb2gcode refuses a fixed direction while its 2-opt path
             // shortening may reverse paths.
-            a += ["--mill-feed-direction", p.millDirection, "--tsp-2opt=0"]
+            a += ["--mill-feed-direction", direction, "--tsp-2opt=0"]
         }
         return a
     }
@@ -214,11 +215,11 @@ nonisolated enum Pcb2GcodeService {
             "--mill-feed", "\(p.maskFeed)mm/minute",
             "--mill-vertfeed", "\(p.maskVertFeed)mm/minute",
             "--mill-speed", p.maskSpeed,
-            "--zsafe", "\(p.zSafe)mm",
-            "--zchange", "\(p.zChange)mm",
+            "--zsafe", "\(p.zSafe(.mask))mm",
+            "--zchange", "\(p.zChange(.mask))mm",
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
-        a += commonMillingArgs(p)
+        a += commonMillingArgs(p, .mask)
 
         if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
@@ -252,11 +253,11 @@ nonisolated enum Pcb2GcodeService {
             "--mill-feed", "\(p.silkFeed)mm/minute",
             "--mill-vertfeed", "\(p.silkVertFeed)mm/minute",
             "--mill-speed", p.silkSpeed,
-            "--zsafe", "\(p.zSafe)mm",
-            "--zchange", "\(p.zChange)mm",
+            "--zsafe", "\(p.zSafe(.silk))mm",
+            "--zchange", "\(p.zChange(.silk))mm",
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
-        a += commonMillingArgs(p)
+        a += commonMillingArgs(p, .silk)
 
         if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
@@ -527,6 +528,8 @@ nonisolated enum Pcb2GcodeService {
 
         // Local rewrites, before the plunge pass (pecks produce plunges it splits).
         setDwells(p, outputs: result.outputs, log: &result.log)
+        setSpindleDirections(p, outputs: result.outputs, log: &result.log)
+        addExtraCuts(p, outputs: result.outputs, log: &result.log)
         if let peck = Double(p.drillPeck), peck > 0 {
             peckDrill(peck: peck, clearance: Double(p.plungeClearance) ?? 0,
                       outputs: result.outputs.filter { $0.layer.isDrill }, log: &result.log)
@@ -636,6 +639,154 @@ nonisolated enum Pcb2GcodeService {
         if !summary.isEmpty {
             log += "Spindle dwell (G4 P, seconds): " + summary.joined(separator: ", ") + ".\n"
         }
+    }
+
+    // MARK: - Spindle direction
+
+    /// pcb2gcode always starts the spindle clockwise (M3). Groups set to
+    /// counter-clockwise get M4 instead.
+    private static func setSpindleDirections(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) {
+        var reversed: [String] = []
+        for output in outputs {
+            guard let group = ParametersStore.MotionGroup(output.layer), p.spindleCCW(group),
+                  let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
+            var changed = false
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+                let code = strippedOfComments(String(line)).uppercased().trimmingCharacters(in: .whitespaces)
+                guard code == "M3" || code == "M03" else { return String(line) }
+                changed = true
+                return "M4 ( Spindle on counter-clockwise. )"
+            }
+            if changed {
+                try? lines.joined(separator: "\n").write(to: output.url, atomically: true, encoding: .utf8)
+                reversed.append(output.layer.displayName)
+            }
+        }
+        if !reversed.isEmpty {
+            log += "Spindle counter-clockwise (M4): " + reversed.joined(separator: ", ") + ".\n"
+        }
+    }
+
+    // MARK: - Extra cut
+
+    /// FlatCAM's "extra cut": every closed contour runs on past its start
+    /// along its own first segments for the group's extra-cut length, so the
+    /// spot where the loop closes — where a sliver of copper tends to stay
+    /// — is cut twice.
+    private static func addExtraCuts(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) {
+        var loops = 0
+        var names: [String] = []
+        for output in outputs {
+            guard let group = ParametersStore.MotionGroup(output.layer), group.hasExtraCut else { continue }
+            let length = p.extraCutLength(group)
+            guard length > 0, let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
+            let (rewritten, count) = extendClosedLoops(text, length: length)
+            if count > 0 {
+                try? rewritten.write(to: output.url, atomically: true, encoding: .utf8)
+                loops += count
+                names.append(output.layer.displayName)
+            }
+        }
+        if loops > 0 {
+            log += "Extra cut: \(loops) closed contour\(loops == 1 ? "" : "s") overrun past their start (\(names.joined(separator: ", "))).\n"
+        }
+    }
+
+    /// Finds runs of G1 XY moves below the surface and every point where
+    /// such a run closes a loop (comes back to where the loop began), and
+    /// continues along the loop's first segments for `length` mm there.
+    /// pcb2gcode chains the passes around a trace into one run, so a loop
+    /// can close mid-run: the tool then retraces the extra cut back to the
+    /// closing point, and the move on to the next pass is left as planned —
+    /// only groove that is already cut is cut again.
+    static func extendClosedLoops(_ text: String, length: Double) -> (String, Int) {
+        var out: [String] = []
+        var modalG: Int?
+        var x: Double?, y: Double?, z: Double?
+        var run: [CGPoint] = []
+        var runLines: [Int] = []   // index in `out` of the move ending at run[k]; -1 for the start
+        var count = 0
+
+        func line(_ p: CGPoint) -> String { String(format: "G01 X%.5f Y%.5f ( extra cut )", p.x, p.y) }
+
+        func finishRun() {
+            defer { run = []; runLines = [] }
+            func key(_ p: CGPoint) -> String { String(format: "%.3f,%.3f", p.x, p.y) }
+            var seen: [String: Int] = [:]
+            var closures: [(start: Int, end: Int)] = []
+            for (k, p) in run.enumerated() {
+                if let i = seen[key(p)], k - i >= 3 {
+                    closures.append((i, k))
+                    seen = [key(p): k]
+                } else if seen[key(p)] == nil {
+                    seen[key(p)] = k
+                }
+            }
+            // Back to front, so earlier insertion points stay valid.
+            for (i, k) in closures.reversed() {
+                var remaining = length
+                var extra: [CGPoint] = []
+                var cursor = run[i]
+                for next in run[(i + 1)...k] {
+                    let d = hypot(next.x - cursor.x, next.y - cursor.y)
+                    guard d > 1e-9 else { continue }
+                    if d >= remaining {
+                        let t = remaining / d
+                        extra.append(CGPoint(x: cursor.x + (next.x - cursor.x) * t, y: cursor.y + (next.y - cursor.y) * t))
+                        remaining = 0
+                        break
+                    }
+                    extra.append(next)
+                    remaining -= d
+                    cursor = next
+                }
+                guard !extra.isEmpty else { continue }
+                var moves = extra
+                if k < run.count - 1 {
+                    moves += extra.dropLast().reversed()   // back along the same groove
+                    moves.append(run[k])
+                }
+                out.insert(contentsOf: moves.map(line), at: runLines[k] + 1)
+                count += 1
+            }
+        }
+
+        for lineSub in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(lineSub)
+            let code = strippedOfComments(line).uppercased()
+            let words = motionWords(code)
+            if let g = words.g { modalG = g }
+            let trimmed = code.trimmingCharacters(in: .whitespaces)
+            // Blank lines, comments and feed-only words neither extend nor end a run.
+            let neutral = trimmed.isEmpty || (!words.hasAny && words.g.map { $0 == 1 } != false
+                                               && trimmed.allSatisfy { "GF0123456789. ".contains($0) })
+            let isCutXY = (words.g ?? modalG) == 1 && words.hasXY && words.z == nil && (z ?? 0) < 0
+            let nx = xyValue(code, "X") ?? x, ny = xyValue(code, "Y") ?? y
+            if isCutXY, let nx, let ny {
+                if run.isEmpty, let x, let y {
+                    run.append(CGPoint(x: x, y: y))
+                    runLines.append(-1)
+                }
+                out.append(line)
+                run.append(CGPoint(x: nx, y: ny))
+                runLines.append(out.count - 1)
+            } else if neutral {
+                out.append(line)
+            } else {
+                if !run.isEmpty { finishRun() }
+                out.append(line)
+            }
+            x = nx; y = ny
+            if let wz = words.z { z = wz }
+        }
+        if !run.isEmpty { finishRun() }
+        return (out.joined(separator: "\n"), count)
+    }
+
+    private static func xyValue(_ code: String, _ axis: Character) -> Double? {
+        guard let i = code.firstIndex(of: axis) else { return nil }
+        let number = code[code.index(after: i)...].prefix { $0.isNumber || $0 == "." || $0 == "-" || $0 == "+" }
+        return Double(number)
     }
 
     // MARK: - Peck drilling

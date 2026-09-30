@@ -94,6 +94,10 @@ final class PreviewController: ObservableObject {
     func parametersDidChange() {
         objectWillChange.send()   // staleness badge is a computed property
         guard canPreview, refreshMode == .auto else { return }
+        // Editing a layer file: every edit writes a new copy, and running
+        // pcb2gcode after each would be wasted work — the preview catches
+        // up once when editing ends (LayerFileEditor.end()).
+        guard app?.layerEditor.target == nil else { return }
         // Every parameter lives in UserDefaults, and so does UI state (layer
         // picker, view toggles) — a single defaults write republishes the whole
         // store, so this fires for changes that cannot alter the G-code.
@@ -181,7 +185,7 @@ final class PreviewController: ObservableObject {
             batch = await Pcb2GcodeService.runBatch(
                 pcb2gcode: pcb2gcode, params: snapshot, files: files, outputDir: runDir,
                 cache: Pcb2GcodeService.previewCache,
-                onStep: { event, _ in
+                onStep: { [weak self] event, _ in
                     Task { @MainActor [weak self] in
                         // A late report from a cancelled run must not revive the bar.
                         guard let self, self.progress != nil else { return }

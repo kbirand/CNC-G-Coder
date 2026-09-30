@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     let player = PlaybackState()
     /// The shape editor for hand-drawn (custom) layers.
     let editor = ShapeEditor()
+    /// Edits imported Gerber and drill files (track widths, pad and hole sizes).
+    let layerEditor = LayerFileEditor()
     /// The app's undo history: parameter edits, layer-file changes and
     /// drawing edits, in the order they were made. Owned here rather than
     /// taken from the window — SwiftUI does not hand this window's undo
@@ -105,6 +107,7 @@ final class AppModel: ObservableObject {
         player.preview = preview
         editor.app = self
         editor.undoManager = history
+        layerEditor.app = self
         parameters.library = tools
         // objectWillChange fires before the new value lands; defer one runloop
         // turn so the preview controller reads the updated signature.
@@ -241,6 +244,37 @@ final class AppModel: ObservableObject {
                 try? line.write(toFile: NSTemporaryDirectory() + "cnc-undo-test.txt", atomically: true, encoding: .utf8)
             }
         }
+        // Dev hook: `-debugEditLayer front` (a LayerSlot raw value, or drill0,
+        // drill1…) opens that file in the layer editor once a preview exists;
+        // `-debugEditSelect tracks|pads|all` then selects in it,
+        // `-debugEditTrackWidth 0.8` / `-debugEditHole 1.2` resize the selection
+        // and `-debugEditDoneAfter` ends the edit (below).
+        if let raw = UserDefaults.standard.string(forKey: "debugEditLayer") {
+            let target: LayerEditTarget? = raw.hasPrefix("drill")
+                ? Int(raw.dropFirst(5)).map { .drill($0) } : LayerSlot(rawValue: raw).map { .layer($0) }
+            Task { [weak self] in
+                for _ in 0..<120 where self?.preview.document == nil { try? await Task.sleep(for: .seconds(0.5)) }
+                guard let self, let target else { return }
+                self.layerEditor.begin(target)
+                guard let artwork = self.layerEditor.artwork else { return }
+                switch (UserDefaults.standard.string(forKey: "debugEditSelect"), artwork) {
+                case ("tracks", .gerber(let image)): self.layerEditor.selection = Set(image.objects.filter(\.isTrack).map(\.id))
+                case ("pads", .gerber(let image)): self.layerEditor.selection = Set(image.objects.filter(\.isFlash).map(\.id))
+                case ("all", _): self.layerEditor.selectAll()
+                default: break
+                }
+                let width = UserDefaults.standard.double(forKey: "debugEditTrackWidth")
+                if width > 0 { self.layerEditor.setTrackWidth(width, of: self.layerEditor.selection) }
+                let hole = UserDefaults.standard.double(forKey: "debugEditHole")
+                if hole > 0 { self.layerEditor.setHoleDiameter(hole, of: self.layerEditor.selection) }
+                // `-debugEditDoneAfter 10` presses Done that many seconds later.
+                let done = UserDefaults.standard.double(forKey: "debugEditDoneAfter")
+                if done > 0 {
+                    try? await Task.sleep(for: .seconds(done))
+                    self.layerEditor.end()
+                }
+            }
+        }
         // Dev hook: `-debugOpenProject /path/x.cncproj` opens a saved project.
         if let path = UserDefaults.standard.string(forKey: "debugOpenProject") {
             openProject(at: URL(fileURLWithPath: path), confirmed: true)
@@ -270,6 +304,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectProjectFolder(_ url: URL) {
+        layerEditor.end()
         projectFolder = url
         chosenOutputDir = nil   // a new project must never inherit the old destination
         manualLayerEdits = false
@@ -384,7 +419,7 @@ final class AppModel: ObservableObject {
             if files.hasAnything, let pcb2gcodeURL {
                 batch = await Pcb2GcodeService.runBatch(
                     pcb2gcode: pcb2gcodeURL, params: snapshot, files: files, outputDir: workDir,
-                    onStep: { event, total in
+                    onStep: { [weak self] event, total in
                         Task { @MainActor [weak self] in self?.reportStep(event, total: total) }
                     })
                 self.appendLog(batch.log)

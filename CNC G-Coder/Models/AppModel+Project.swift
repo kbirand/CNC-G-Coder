@@ -69,6 +69,7 @@ extension AppModel {
 
     func newProject() {
         guard confirmDiscardChanges() else { return }
+        layerEditor.end()
         projectURL = nil
         projectFolder = nil
         chosenOutputDir = nil
@@ -188,6 +189,7 @@ extension AppModel {
         }
         let packed = document.version >= 3
 
+        layerEditor.end()
         parameters.apply(document.parameters)
         if let x = document.guidesX { UserDefaults.standard.set(x, forKey: "previewGuidesX") }
         if let y = document.guidesY { UserDefaults.standard.set(y, forKey: "previewGuidesY") }
@@ -354,6 +356,7 @@ extension AppModel {
         }
         pendingImports = []
         guard !added.isEmpty else { return }
+        layerEditor.end()
         if projectFolder == nil { projectFolder = files.drills.first?.deletingLastPathComponent()
             ?? LayerSlot.allCases.lazy.compactMap { files[$0] }.first?.deletingLastPathComponent() }
         setDetectedFiles(files, actionName: "Import Layers")
@@ -369,6 +372,7 @@ extension AppModel {
         panel.directoryURL = (drill ?? detectedFiles[slot])?.deletingLastPathComponent() ?? projectFolder
         panel.message = "Choose the file for \(slot.title)."
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        layerEditor.end()
         var files = detectedFiles
         if let drill, let index = files.drills.firstIndex(of: drill) {
             files.drills[index] = url
@@ -383,6 +387,7 @@ extension AppModel {
     }
 
     func removeLayer(_ slot: LayerSlot, drill: URL? = nil) {
+        layerEditor.end()
         var files = detectedFiles
         if let drill {
             files.drills.removeAll { $0 == drill }

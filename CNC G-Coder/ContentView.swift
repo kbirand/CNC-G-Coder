@@ -12,10 +12,10 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             ParameterFormView(model: model, params: model.parameters,
-                              preview: model.preview, playback: model.player)
+                              preview: model.preview, playback: model.player, layerEditor: model.layerEditor)
                 .navigationSplitViewColumnWidth(min: 310, ideal: 360, max: 480)
         } detail: {
-            PreviewPane(model: model, preview: model.preview, playback: model.player)
+            PreviewPane(model: model, preview: model.preview, playback: model.player, layerEditor: model.layerEditor)
         }
         .navigationTitle(model.projectURL == nil ? "CNC G-Coder" : model.projectName)
         .navigationSubtitle(windowSubtitle)

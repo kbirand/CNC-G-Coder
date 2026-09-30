@@ -135,9 +135,12 @@ nonisolated enum CustomLayerGenerator {
     }
 
     /// The whole program for one layer, or nil when there is nothing to cut.
-    static func gcode(for layer: CustomLayer, frame: ProgramFrame, zSafe: Double, plungeClearance: Double) -> String? {
+    static func gcode(for layer: CustomLayer, frame: ProgramFrame, zSafe machineSafe: Double, zChange: Double,
+                      plungeClearance: Double) -> String? {
         let passes = passes(for: layer)
         guard !passes.isEmpty else { return nil }
+        let zSafe = layer.travelZ > 0 ? layer.travelZ : machineSafe
+        let zEnd = layer.endZ > 0 ? layer.endZ : zChange
         let toProgram = frame.designToProgram(back: layer.back)
         let clearance = plungeClearance > 0 && plungeClearance < zSafe ? plungeClearance : 0
         let levels = depths(cutDepth: layer.cutDepth, depthPerPass: layer.depthPerPass)
@@ -151,7 +154,7 @@ nonisolated enum CustomLayerGenerator {
         g.append("G21 ( metric )")
         g.append("G90 ( absolute )")
         g.append("S\(Int(layer.spindle.rounded()))")
-        g.append("M3 ( spindle on )")
+        g.append(layer.spindleCCW ? "M4 ( spindle on counter-clockwise )" : "M3 ( spindle on )")
         if layer.dwell > 0 { g.append("G4 P\(ParametersStore.format(layer.dwell))") }
         g.append("G0 Z\(f(zSafe))")
 
@@ -171,6 +174,10 @@ nonisolated enum CustomLayerGenerator {
                     ? Array(pts.dropFirst()) + [start]
                     : (level % 2 == 0 ? Array(pts.dropFirst()) : Array(pts.reversed().dropFirst()))
                 for p in route { g.append("G1 X\(f(p.x)) Y\(f(p.y))") }
+                // Extra cut: a closed loop runs on past its start at the last depth.
+                if closed, level == levels.count - 1, layer.extraCut > 0 {
+                    for p in extraCut(pts, length: layer.extraCut) { g.append("G1 X\(f(p.x)) Y\(f(p.y)) ( extra cut )") }
+                }
             }
             if clearance > 0 {
                 g.append("G1 Z\(f(clearance)) F\(ParametersStore.format(layer.feedZ))")
@@ -180,10 +187,31 @@ nonisolated enum CustomLayerGenerator {
             }
         }
 
+        if zEnd > zSafe + 1e-9 { g.append("G0 Z\(f(zEnd)) ( end height )") }
         g.append("M5 ( spindle off )")
         if layer.dwell > 0 { g.append("G4 P\(ParametersStore.format(layer.dwell))") }
         g.append("M2 ( program end )")
         return g.joined(separator: "\n") + "\n"
+    }
+
+    /// Points continuing a closed loop past its start for `length` mm.
+    static func extraCut(_ loop: [CGPoint], length: Double) -> [CGPoint] {
+        var out: [CGPoint] = []
+        var remaining = length
+        guard var cursor = loop.first else { return out }
+        for next in Array(loop.dropFirst()) + [loop[0]] {
+            let d = ShapeMath.distance(cursor, next)
+            guard d > 1e-9 else { continue }
+            if d >= remaining {
+                let t = remaining / d
+                out.append(CGPoint(x: cursor.x + (next.x - cursor.x) * t, y: cursor.y + (next.y - cursor.y) * t))
+                return out
+            }
+            out.append(next)
+            remaining -= d
+            cursor = next
+        }
+        return out
     }
 
     /// The origin frame of a project that has ONLY drawn layers. With Gerbers,
@@ -222,13 +250,15 @@ nonisolated enum CustomLayerGenerator {
         let programFrame = ProgramFrame(frame: frame, mirrorAxis: Double(p.mirrorAxis) ?? 0, mirrorYAxis: p.mirrorYAxis)
         let zSafe = Double(p.zSafe) ?? 3
         let clearance = Double(p.plungeClearance) ?? 0
+        let zChange = Double(p.zChange) ?? zSafe
         for (index, layer) in layers.enumerated() where !layer.isEmpty {
             let kind = LayerKind.custom(layer.ref(index: index))
             if let problem = layer.validationError {
                 log += "WARNING: custom layer \"\(layer.name)\" skipped — \(problem).\n"
                 continue
             }
-            guard let text = gcode(for: layer, frame: programFrame, zSafe: zSafe, plungeClearance: clearance) else {
+            guard let text = gcode(for: layer, frame: programFrame, zSafe: zSafe, zChange: zChange,
+                                   plungeClearance: clearance) else {
                 log += "Custom layer \"\(layer.name)\": nothing to cut.\n"
                 continue
             }

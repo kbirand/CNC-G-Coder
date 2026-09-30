@@ -14,6 +14,8 @@ struct ToolpathCanvasView: View {
     @ObservedObject var model: AppModel
     /// The shape editor (model.editor), live while a drawn layer is selected.
     @ObservedObject var editor: ShapeEditor
+    /// Edits imported Gerber / drill files (model.layerEditor).
+    @ObservedObject var layerEditor: LayerFileEditor
 
     /// Display-only: un-mirror back-side programs (back copper, bottom mask) so
     /// they visually align with the front for registration checks. The
@@ -66,6 +68,7 @@ struct ToolpathCanvasView: View {
     @State var measuring = false
     @State var measurement: Measurement?
     @State var outlineCache = OutlineCache()
+    @State var artworkCache = ArtworkPieceCache()
     @State private var fitBox = FitBox()
 
     @State private var zoomFactor: CGFloat = 1     // relative to auto-fit
@@ -98,7 +101,7 @@ struct ToolpathCanvasView: View {
         .clipped()
         .background(Color(nsColor: .underPageBackgroundColor))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
-        .focusable(editorActive || measuring)
+        .focusable(editorActive || layerEditActive || measuring)
         .focusEffectDisabled()
         .focused($canvasFocused)
         .onKeyPress(phases: .down) { press in
@@ -111,6 +114,7 @@ struct ToolpathCanvasView: View {
             if press.modifiers.isEmpty, press.characters.lowercased() == "m" {
                 return afterKeyEvent { toggleMeasuring() }
             }
+            if layerEditActive { return layerEditKey(press) }
             return editorKey(press)
         }
         .pointerStyle(pointerStyle)
@@ -127,7 +131,7 @@ struct ToolpathCanvasView: View {
         }
         .onTapGesture(count: 2) { location in
             if measuring { return }
-            if editorActive, editor.draft != nil { editorDoubleClick(at: location) } else { resetView() }
+            if editorActive, editor.draft != nil { editorDoubleClick(at: location) } else if !layerEditActive { resetView() }
         }
         .onTapGesture { location in
             if measuring {
@@ -139,6 +143,8 @@ struct ToolpathCanvasView: View {
             resignTextFieldFocus()
             if editorActive {
                 editorClick(at: location)
+            } else if layerEditActive {
+                layerEditClick(at: location)
             }
         }
         // Zoom/pan intentionally survives layer switches; only overlay-mode
@@ -147,9 +153,11 @@ struct ToolpathCanvasView: View {
         .onChange(of: flipBackView) { resetView() }
         .onChange(of: playback.selectedLayer) {
             editor.layerDidChange()
+            layerEditor.selectedLayerChanged(to: playback.selectedLayer)
             fitBox.rect = nil
         }
         .onChange(of: editor.focusRequest) { canvasFocused = true }
+        .onChange(of: layerEditor.focusRequest) { canvasFocused = true }
         .onAppear {
             // Dev hook: `-debugDrawCircleAt x,y` adds an empty drawn layer and
             // then a 5 mm circle at those RULER coordinates, as a click would.
@@ -187,9 +195,14 @@ struct ToolpathCanvasView: View {
                     ShapeInspectorPanel(model: model, editor: editor)
                         .padding(.trailing, 10)
                         .padding(.bottom, 90)   // clear of the playback bar
+                } else if layerEditActive {
+                    LayerEditInspectorPanel(editor: layerEditor)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 90)
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: editor.selection.isEmpty)
+            .animation(.easeInOut(duration: 0.18), value: layerEditor.selection.isEmpty)
         }
         .overlay(alignment: .topLeading) { topOverlays }
         .overlay(alignment: .bottomLeading) {
@@ -214,6 +227,8 @@ struct ToolpathCanvasView: View {
         VStack(alignment: .leading, spacing: 8) {
             if editorActive {
                 ShapeEditorToolbar(model: model, editor: editor)
+            } else if layerEditActive {
+                LayerEditToolbar(model: model, editor: layerEditor)
             }
             originBanner
             measureBanner
@@ -264,11 +279,15 @@ struct ToolpathCanvasView: View {
 
         drawGrid(&ctx, world: map.visibleWorld, scale: scale, step: step)
 
-        if let doc = preview.document { drawLayers(&ctx, doc: doc, scale: scale) }
-
-        drawToolMarker(&ctx, scale: scale)
+        // Editing a layer file: only its artwork. The programs are out of
+        // date until editing ends, so they are not drawn under it.
+        if !layerEditActive {
+            if let doc = preview.document { drawLayers(&ctx, doc: doc, scale: scale) }
+            drawToolMarker(&ctx, scale: scale)
+        }
 
         drawEditor(context, map: map, world: world)
+        drawLayerEdit(context, map: map, world: world)
         drawMeasurement(context, map: map)
         drawGuides(context, map: map)
         drawOriginMarker(context, map: map)
@@ -687,7 +706,7 @@ struct ToolpathCanvasView: View {
         }
 
         // Drawing: everything inside the plot goes to the editor (⌥-drag pans).
-        if editorActive, plot.contains(start), !NSEvent.modifierFlags.contains(.option) {
+        if editorActive || layerEditActive, plot.contains(start), !NSEvent.modifierFlags.contains(.option) {
             editDrag = EditDrag(start: start)
             return .edit
         }
@@ -770,6 +789,8 @@ struct ToolpathCanvasView: View {
         if measuring, let hover, let map = mapping(in: canvasSize), map.plot.contains(hover) { return .rectSelection }
         if editorActive, let hover, let map = mapping(in: canvasSize), !isOnOriginMarker(hover, map: map),
            let style = editorPointerStyle(at: hover, map: map) { return style }
+        if layerEditActive, let hover, let map = mapping(in: canvasSize), !isOnOriginMarker(hover, map: map),
+           let style = layerEditPointerStyle(at: hover, map: map) { return style }
         if let hover, let map = mapping(in: canvasSize), isOnOriginMarker(hover, map: map) { return .grabIdle }
         guard showGuides, let hover, let map = mapping(in: canvasSize) else { return nil }
         if let drag = guide(at: hover, map: map) {
@@ -830,7 +851,7 @@ struct ToolpathCanvasView: View {
     /// The guide's exact position, shown in its ruler while it is being dragged.
     private func drawGuideBadge(_ context: GraphicsContext, map: Mapping, drag: GuideDrag) {
         guard showRulers else { return }
-        var ctx = context
+        let ctx = context
         let plot = map.plot
         let decimals = max(1, Int(ceil(-log10(Double(tickStep(scale: map.scale).display)))) + 1)
         let text = String(format: "%.\(decimals)f", Double(drag.value) * units.perMM)
@@ -1178,7 +1199,7 @@ struct ToolpathCanvasView: View {
                 if dragMode == .guide {
                     updateGuide(to: value.location)
                 } else if dragMode == .edit {
-                    editorDragChanged(value)
+                    if layerEditActive { layerEditDragChanged(value) } else { editorDragChanged(value) }
                 } else if dragMode == .measure {
                     hover = value.location   // the end follows the pointer
                 } else if dragMode == .origin {
@@ -1192,7 +1213,9 @@ struct ToolpathCanvasView: View {
             .onEnded { value in
                 lastDrag = .zero
                 if dragMode == .guide { commitGuide() }
-                if dragMode == .edit { editorDragEnded(value) }
+                if dragMode == .edit {
+                    if layerEditActive { layerEditDragEnded(value) } else { editorDragEnded(value) }
+                }
                 if dragMode == .measure { measureDragEnded(at: value.location) }
                 if dragMode == .origin {
                     if let target = originDrag {

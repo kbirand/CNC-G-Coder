@@ -47,7 +47,7 @@ nonisolated enum LayerSlot: String, CaseIterable, Identifiable, Codable, Sendabl
     }
 }
 
-extension DetectedFiles {
+nonisolated extension DetectedFiles {
     /// The file in a single-file role (nil for .drill, which holds a list).
     subscript(slot: LayerSlot) -> URL? {
         get {

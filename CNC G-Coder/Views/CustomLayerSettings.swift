@@ -135,6 +135,17 @@ struct CustomLayerSections: View {
             valueRow("Spindle", \.spindle, .plain("rpm"), minimum: 0, help: "Spindle speed written as the S-word.")
             valueRow("Spindle dwell", \.dwell, .plain("s"), minimum: 0,
                      help: "Pause after the spindle starts and stops (G4 P, seconds). 0 = none.")
+            Picker("Spindle", selection: field(\.spindleCCW, action: "Change Spindle Direction")) {
+                Text("Clockwise (M3)").tag(false)
+                Text("Counter-clockwise (M4)").tag(true)
+            }
+            .help("Almost every bit cuts clockwise; counter-clockwise is for left-hand tools.")
+            valueRow("Travel Z", \.travelZ, .length, minimum: 0,
+                     help: "Height between cuts. 0 = Machine setup's Safe Z.")
+            valueRow("End Z", \.endZ, .length, minimum: 0,
+                     help: "Height the program ends at. 0 = Machine setup's Tool-change Z.")
+            valueRow("Extra cut", \.extraCut, .length, minimum: 0,
+                     help: "Closed shapes run on this far past their start at the final depth, so no sliver is left where the loop closes. 0 = off.")
         } header: {
             Text("Tool")
         } footer: {

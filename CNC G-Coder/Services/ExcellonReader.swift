@@ -9,8 +9,8 @@ nonisolated enum ExcellonReader {
     /// a 0.001 mm placeholder tool into drill files with no holes; anything
     /// that small is ignored.
     static func holeSizes(in url: URL) -> [Double] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8)
-                ?? String(contentsOf: url, encoding: .isoLatin1) else { return [] }
+        guard let text = (try? String(contentsOf: url, encoding: .utf8))
+                ?? (try? String(contentsOf: url, encoding: .isoLatin1)) else { return [] }
         var inch = false
         var sizes = Set<Double>()
         for raw in text.split(whereSeparator: \.isNewline) {

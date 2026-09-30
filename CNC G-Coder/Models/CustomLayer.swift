@@ -259,6 +259,14 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
     var dwell: Double = 1
     /// Overlap between neighbouring clearing passes, percent.
     var overlap: Double = 40
+    /// Height between cuts; 0 = Machine setup's Safe Z.
+    var travelZ: Double = 0
+    /// Height the program ends at; 0 = Machine setup's Tool-change Z.
+    var endZ: Double = 0
+    /// Closed paths run on this far past their start; 0 = off.
+    var extraCut: Double = 0
+    /// M4 instead of M3.
+    var spindleCCW = false
 
     init(name: String) { self.name = name }
 
@@ -283,6 +291,7 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         if !(feedXY > 0) || !(feedZ > 0) { return "Feeds must be positive" }
         if spindle < 0 || dwell < 0 { return "Spindle and dwell cannot be negative" }
         if overlap < 0 || overlap >= 100 { return "Overlap must be 0–99 %" }
+        if travelZ < 0 || endZ < 0 || extraCut < 0 { return "Heights and extra cut cannot be negative" }
         return nil
     }
 
@@ -290,6 +299,7 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, back, operation, shapes, toolID, toolDiameter, cutDepth, depthPerPass
         case feedXY, feedZ, spindle, dwell, overlap
+        case travelZ, endZ, extraCut, spindleCCW
     }
 
     init(from decoder: Decoder) throws {
@@ -312,6 +322,10 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         spindle = d(.spindle, base.spindle)
         dwell = d(.dwell, base.dwell)
         overlap = d(.overlap, base.overlap)
+        travelZ = d(.travelZ, base.travelZ)
+        endZ = d(.endZ, base.endZ)
+        extraCut = d(.extraCut, base.extraCut)
+        spindleCCW = (try? c.decodeIfPresent(Bool.self, forKey: .spindleCCW)) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -330,6 +344,10 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         try c.encode(spindle, forKey: .spindle)
         try c.encode(dwell, forKey: .dwell)
         try c.encode(overlap, forKey: .overlap)
+        try c.encode(travelZ, forKey: .travelZ)
+        try c.encode(endZ, forKey: .endZ)
+        try c.encode(extraCut, forKey: .extraCut)
+        try c.encode(spindleCCW, forKey: .spindleCCW)
     }
 }
 
