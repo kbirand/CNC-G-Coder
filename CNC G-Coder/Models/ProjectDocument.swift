@@ -44,6 +44,8 @@ nonisolated struct ProjectDocument: Codable, Sendable {
     var outputFolder: StoredFile?
     var guidesX: String?
     var guidesY: String?
+    /// Hand-drawn layers from the shape editor (absent in older projects).
+    var customLayers: [CustomLayer]?
 
     static func link(_ url: URL) -> StoredFile {
         StoredFile(name: url.lastPathComponent, path: url.path)

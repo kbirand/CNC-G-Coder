@@ -18,6 +18,13 @@ struct PreviewPane: View {
     @AppStorage(SettingsKeys.snapToGrid) private var snapToGrid = false
     @AppStorage("previewGuidesX") private var guidesXRaw = ""
     @AppStorage("previewGuidesY") private var guidesYRaw = ""
+    @AppStorage("ui.sectionOverride") private var sectionOverride = ""
+
+    /// A drawn layer is being edited: the canvas is a drawing board, so the
+    /// regeneration cards and dimming that follow every edit stay out of the way.
+    private var editorActive: Bool {
+        sectionOverride.isEmpty && playback.selectedLayer?.isCustom == true
+    }
 
     private enum Tab: String, CaseIterable {
         case toolpath = "Toolpath"
@@ -217,7 +224,8 @@ struct PreviewPane: View {
                     Toolpath3DView(preview: preview, playback: playback,
                                    tool: playback.selectedLayer.flatMap { model.toolGeometry(for: $0) })
                 } else {
-                    ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters)
+                    ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters,
+                                       model: model, editor: model.editor)
                 }
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -227,11 +235,26 @@ struct PreviewPane: View {
                 .saturation(isRegenerating ? 0.3 : 1)
                 .animation(.easeInOut(duration: 0.25), value: isRegenerating)
                 .overlay { statusCard }
+                .overlay(alignment: .top) {
+                    if show3D, editorActive {
+                        HStack(spacing: 10) {
+                            Image(systemName: "pencil.and.outline")
+                            Text("Drawing tools are in the 2D view")
+                            Button("Edit in 2D") { show3D = false }
+                        }
+                        .font(.callout)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .glassEffect()
+                        .padding(.top, 10)
+                    }
+                }
                 .overlay(alignment: .topLeading) {
                     if !show3D {
                         canvasNotes
                             .padding(.leading, showRulers ? ToolpathCanvasView.leftGutter : 0)
-                            .padding(.top, showRulers ? ToolpathCanvasView.topGutter : 0)
+                            // Under the editor bar while drawing.
+                            .padding(.top, (showRulers ? ToolpathCanvasView.topGutter : 0) + (editorActive ? 64 : 0))
                     }
                 }
                 .overlay(alignment: .bottom) {
@@ -253,7 +276,7 @@ struct PreviewPane: View {
 
     /// A run is replacing a preview that is still on screen.
     private var isRegenerating: Bool {
-        preview.document != nil && preview.phase == .running
+        preview.document != nil && preview.phase == .running && !editorActive
     }
 
     /// One card in the middle of the canvas for every generation state —
@@ -264,7 +287,7 @@ struct PreviewPane: View {
         let hasPreview = preview.document != nil
         Group {
             switch preview.phase {
-            case .debouncing:
+            case .debouncing where !editorActive:
                 cardBody {
                     Label(hasPreview ? "Preview updates after your edits…" : "Preview starts after your edits…",
                           systemImage: "clock")
@@ -273,7 +296,7 @@ struct PreviewPane: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            case .running:
+            case .running where !editorActive:
                 cardBody {
                     progressBlock(title: hasPreview ? "Updating preview" : "Generating preview")
                     HStack {

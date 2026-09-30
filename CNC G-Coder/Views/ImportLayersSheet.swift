@@ -4,6 +4,13 @@ import SwiftUI
 /// pre-filled from the filename (and an M48 header for drill files).
 struct ImportLayersSheet: View {
     @ObservedObject var model: AppModel
+    /// Keep the Gerber files' own X0 Y0, or zero the programs on the board.
+    /// Starts on whatever the project currently does.
+    @State private var useGerberOrigin: Bool?
+
+    private var gerberOrigin: Binding<Bool> {
+        Binding(get: { useGerberOrigin ?? !model.parameters.zeroStart }, set: { useGerberOrigin = $0 })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -36,11 +43,26 @@ struct ImportLayersSheet: View {
             .formStyle(.grouped)
             .frame(minHeight: 120)
 
+            Form {
+                Picker("X0 Y0", selection: gerberOrigin) {
+                    Text("Gerber file's origin").tag(true)
+                    Text("Board \(model.zeroedOriginName)").tag(false)
+                }
+                .pickerStyle(.radioGroup)
+                Text("Gerber files have an origin of their own — the X0 Y0 of the design in the PCB editor. Keep it, or move X0 Y0 onto the board so you can touch off there. This applies to the whole project and can be changed later under Machine setup → Origin.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .fixedSize(horizontal: false, vertical: true)
+
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { model.pendingImports = [] }
                     .keyboardShortcut(.cancelAction)
-                Button("Import") { model.commitImports() }
+                Button("Import") { model.commitImports(useGerberOrigin: gerberOrigin.wrappedValue) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(model.pendingImports.allSatisfy { $0.slot == nil })
             }

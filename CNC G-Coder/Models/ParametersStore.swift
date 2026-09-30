@@ -445,8 +445,8 @@ final class ParametersStore: ObservableObject {
             positive("silkVertFeed", tool.feedZ)
             positive("silkSpeed", tool.spindle)
             dwell("silkDwell")
-        case .setup:
-            break
+        case .custom, .setup:
+            break   // drawn layers copy tool data into the layer itself
         }
         return v
     }
@@ -477,7 +477,7 @@ final class ParametersStore: ObservableObject {
         case .cutout: cutToolID
         case .mask: maskToolID
         case .silk: silkToolID
-        case .setup: ""
+        case .custom, .setup: ""
         }
     }
 
@@ -489,7 +489,7 @@ final class ParametersStore: ObservableObject {
         case .cutout: cutToolID = ""
         case .mask: maskToolID = ""
         case .silk: silkToolID = ""
-        case .setup: break
+        case .custom, .setup: break
         }
     }
 

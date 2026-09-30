@@ -11,6 +11,9 @@ struct ToolpathCanvasView: View {
     @ObservedObject var preview: PreviewController
     @ObservedObject var playback: PlaybackState
     @ObservedObject var params: ParametersStore
+    @ObservedObject var model: AppModel
+    /// The shape editor (model.editor), live while a drawn layer is selected.
+    @ObservedObject var editor: ShapeEditor
 
     /// Display-only: un-mirror back-side programs (back copper, bottom mask) so
     /// they visually align with the front for registration checks. The
@@ -21,14 +24,14 @@ struct ToolpathCanvasView: View {
     /// the selected one highlighted. Origins are normalized per side (see
     /// Pcb2GcodeService.normalizeOrigins), so overlays register exactly; the
     /// back side needs "Un-mirror Back Side" to land on the front.
-    @AppStorage("previewShowAllLayers") private var showAllLayers = false
+    @AppStorage("previewShowAllLayers") var showAllLayers = false
 
     /// Draw cutting moves as a swath at the real cutter diameter, showing the
     /// material actually removed (not just the tool centerline).
     @AppStorage("previewShowToolWidth") private var showToolWidth = true
 
     /// Rulers along the top (X) and left (Y) edges of the canvas.
-    @AppStorage("previewShowRulers") private var showRulers = true
+    @AppStorage("previewShowRulers") var showRulers = true
 
     /// Guides dragged out of the rulers, stored as world coordinates in
     /// millimetres: `guidesXRaw` holds vertical guides (a fixed X), `guidesYRaw`
@@ -36,15 +39,18 @@ struct ToolpathCanvasView: View {
     /// put through zoom, pan and layer changes — and across launches.
     @AppStorage("previewGuidesX") private var guidesXRaw = ""
     @AppStorage("previewGuidesY") private var guidesYRaw = ""
-    @AppStorage("previewShowGuides") private var showGuides = true
+    @AppStorage("previewShowGuides") var showGuides = true
     /// Moving the origin lands on grid lines (View Options / View menu).
-    @AppStorage(SettingsKeys.snapToGrid) private var snapToGrid = false
+    @AppStorage(SettingsKeys.snapToGrid) var snapToGrid = false
+    /// Non-empty when the sidebar shows a settings group instead of the
+    /// selected program; the editor stays out of the way then.
+    @AppStorage("ui.sectionOverride") var sectionOverride = ""
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
-    private var units: UnitSystem { UnitSystem(rawValue: unitRaw) ?? .metric }
+    var units: UnitSystem { UnitSystem(rawValue: unitRaw) ?? .metric }
 
     /// Cursor position in view coordinates, for the ruler crosshair readout.
-    @State private var hover: CGPoint?
+    @State var hover: CGPoint?
     /// The guide currently being dragged (pulled from a ruler, or an existing
     /// one being moved); nil when no guide drag is in progress.
     @State private var activeGuide: GuideDrag?
@@ -52,7 +58,15 @@ struct ToolpathCanvasView: View {
     @State private var dragMode: DragMode?
     /// Canvas size, mirrored out of the layout so gesture handlers can map
     /// view points to millimetres the same way `draw` does.
-    @State private var canvasSize: CGSize = .zero
+    @State var canvasSize: CGSize = .zero
+    /// Keyboard focus for the editor's shortcuts (Delete, Esc, arrows, V/L/R/C/T).
+    @FocusState var canvasFocused: Bool
+    @State var editDrag: EditDrag?
+    /// Tape measure mode (see ToolpathCanvasView+Measure.swift).
+    @State var measuring = false
+    @State var measurement: Measurement?
+    @State var outlineCache = OutlineCache()
+    @State private var fitBox = FitBox()
 
     @State private var zoomFactor: CGFloat = 1     // relative to auto-fit
     @State private var pan: CGSize = .zero
@@ -84,30 +98,89 @@ struct ToolpathCanvasView: View {
         .clipped()
         .background(Color(nsColor: .underPageBackgroundColor))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
+        .focusable(editorActive || measuring)
+        .focusEffectDisabled()
+        .focused($canvasFocused)
+        .onKeyPress(phases: .down) { press in
+            if measuring, press.key == .escape {
+                // Esc drops the measurement first, then leaves the tool.
+                if measurement != nil { measurement = nil } else { toggleMeasuring() }
+                return .handled
+            }
+            if press.modifiers.isEmpty, press.characters.lowercased() == "m" {
+                toggleMeasuring()
+                return .handled
+            }
+            return editorKey(press)
+        }
         .pointerStyle(pointerStyle)
         .gesture(dragGesture)
         .gesture(magnifyGesture)
         .onContinuousHover { phase in
             // Tracked even without rulers: the origin marker's grab cursor needs it.
             switch phase {
-            case .active(let point): hover = point
+            case .active(let point):
+                hover = point
+                if !measuring { editorHover(point) }
             case .ended: hover = nil
             }
         }
-        .onTapGesture(count: 2) { resetView() }
+        .onTapGesture(count: 2) { location in
+            if measuring { return }
+            if editorActive, editor.draft != nil { editorDoubleClick(at: location) } else { resetView() }
+        }
         .onTapGesture { location in
+            if measuring {
+                resignTextFieldFocus()
+                measureClick(at: location)
+                return
+            }
             if playback.placingOrigin { placeOrigin(at: location) }
             resignTextFieldFocus()
+            if editorActive {
+                editorClick(at: location)
+            }
         }
         // Zoom/pan intentionally survives layer switches; only overlay-mode
         // changes (different framing semantics) reset the view.
         .onChange(of: showAllLayers) { resetView() }
         .onChange(of: flipBackView) { resetView() }
+        .onChange(of: playback.selectedLayer) {
+            editor.layerDidChange()
+            fitBox.rect = nil
+        }
+        .onChange(of: editor.focusRequest) { canvasFocused = true }
+        .onAppear {
+            // Dev hook: `-debugMeasure x1,y1,x2,y2` shows a measurement (ruler coordinates, mm).
+            if let raw = UserDefaults.standard.string(forKey: "debugMeasure") {
+                let v = raw.split(separator: ",").compactMap { Double($0) }
+                if v.count == 4 {
+                    measuring = true
+                    measurement = Measurement(a: CGPoint(x: v[0], y: v[1]), b: CGPoint(x: v[2], y: v[3]))
+                }
+            }
+        }
         .overlay { scrollZoomCatcher }
-        .overlay(alignment: .topTrailing) { zoomControls }
-        .overlay(alignment: .top) { originBanner }
+        .overlay {
+            // Right- or middle-drag pans, in every mode, drawing included.
+            MousePanCatcher { delta in
+                pan = CGSize(width: pan.width + delta.width, height: pan.height + delta.height)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            VStack(alignment: .trailing, spacing: 0) {
+                zoomControls
+                if editorActive {
+                    ShapeInspectorPanel(model: model, editor: editor)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 90)   // clear of the playback bar
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: editor.selection.isEmpty)
+        }
+        .overlay(alignment: .topLeading) { topOverlays }
         .overlay(alignment: .bottomLeading) {
-            if preview.document == nil {
+            if preview.document == nil, !editorActive {
                 Text("No preview yet — choose a project folder, then Refresh.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -116,9 +189,24 @@ struct ToolpathCanvasView: View {
         }
     }
 
-    private func resetView() {
+    func resetView() {
         zoomFactor = 1
         pan = .zero
+        fitBox.rect = nil   // editing: refit to what is drawn now
+    }
+
+    /// The editor bar and the Set Origin banner, stacked under the ruler.
+    @ViewBuilder
+    private var topOverlays: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if editorActive {
+                ShapeEditorToolbar(model: model, editor: editor)
+            }
+            originBanner
+            measureBanner
+        }
+        .padding(.leading, (showRulers ? Self.leftGutter : 0) + 10)
+        .padding(.top, (showRulers ? Self.topGutter : 0) + 10)
     }
 
     private var scrollZoomCatcher: some View {
@@ -147,7 +235,7 @@ struct ToolpathCanvasView: View {
     // MARK: - Drawing
 
     private func draw(context: GraphicsContext, size: CGSize) {
-        guard let doc = preview.document, let map = mapping(in: size) else { return }
+        guard let map = mapping(in: size) else { return }
         let plot = map.plot
         let focus = map.focus
         let scale = map.scale
@@ -155,15 +243,30 @@ struct ToolpathCanvasView: View {
 
         var ctx = context
         ctx.clip(to: Path(plot))   // toolpaths never spill into the ruler bands
-        ctx.concatenate(
-            CGAffineTransform.identity
-                .translatedBy(x: plot.midX + pan.width, y: plot.midY + pan.height)
-                .scaledBy(x: scale, y: -scale)
-                .translatedBy(x: -focus.midX, y: -focus.midY)
-        )
+        let world = CGAffineTransform.identity
+            .translatedBy(x: plot.midX + pan.width, y: plot.midY + pan.height)
+            .scaledBy(x: scale, y: -scale)
+            .translatedBy(x: -focus.midX, y: -focus.midY)
+        ctx.concatenate(world)
 
         drawGrid(&ctx, world: map.visibleWorld, scale: scale, step: step)
 
+        if let doc = preview.document { drawLayers(&ctx, doc: doc, scale: scale) }
+
+        drawToolMarker(&ctx, scale: scale)
+
+        drawEditor(context, map: map, world: world)
+        drawMeasurement(context, map: map)
+        drawGuides(context, map: map)
+        drawOriginMarker(context, map: map)
+        if showRulers {
+            drawRulers(context, size: size, map: map, step: step)
+        }
+    }
+
+    /// The programs: the selected one alone, or — with All Layers Overlay on —
+    /// every program with the selected one on top.
+    private func drawLayers(_ ctx: inout GraphicsContext, doc: PreviewDocument, scale: CGFloat) {
         let cache = cachedPaths(for: doc)
         let engaged = playback.isEngaged
 
@@ -184,18 +287,18 @@ struct ToolpathCanvasView: View {
                                 toolDiameter: layer.toolDiameter)
                 }
             }
+        } else if editorActive {
+            // Only the drawn layer's own program — none yet while it is empty
+            // (never the fallback first program).
+            guard let kind = editorLayerKind, let layer = doc.layers.first(where: { $0.id == kind }),
+                  let paths = cache[layer.id] else { return }
+            var layerCtx = ctx
+            if let flip = displayTransform(for: layer.id) { layerCtx.concatenate(flip) }
+            drawSelectedLayer(&layerCtx, layer: layer, paths: paths, engaged: engaged, scale: scale)
         } else if let layer = selectedLayer(in: doc), let paths = cache[layer.id] {
             var layerCtx = ctx
             if let flip = displayTransform(for: layer.id) { layerCtx.concatenate(flip) }
             drawSelectedLayer(&layerCtx, layer: layer, paths: paths, engaged: engaged, scale: scale)
-        }
-
-        drawToolMarker(&ctx, scale: scale)
-
-        drawGuides(context, map: map)
-        drawOriginMarker(context, map: map)
-        if showRulers {
-            drawRulers(context, size: size, map: map, step: step)
         }
     }
 
@@ -342,7 +445,7 @@ struct ToolpathCanvasView: View {
     static let topGutter: CGFloat = 20
 
     /// The drawing area: the canvas minus the ruler gutters.
-    private func plotRect(in size: CGSize) -> CGRect {
+    func plotRect(in size: CGSize) -> CGRect {
         guard showRulers else { return CGRect(origin: .zero, size: size) }
         return CGRect(x: Self.leftGutter, y: Self.topGutter,
                       width: max(1, size.width - Self.leftGutter),
@@ -352,7 +455,7 @@ struct ToolpathCanvasView: View {
     /// World (mm) ↔ view (points) mapping for the current framing. Mirrors the
     /// transform applied to the toolpath context, so rulers, grid and the
     /// hover readout can never drift out of step with the drawing.
-    private struct Mapping {
+    struct Mapping {
         let plot: CGRect
         let pan: CGSize
         let focus: CGRect
@@ -373,11 +476,11 @@ struct ToolpathCanvasView: View {
 
     /// The framing for a given canvas size — the single definition of where
     /// world millimetres land on screen, used by drawing and by the gestures.
-    private func mapping(in size: CGSize) -> Mapping? {
-        guard let doc = preview.document else { return nil }
-        let focus = fitBounds(doc)
+    func mapping(in size: CGSize) -> Mapping? {
         let plot = plotRect(in: size)
-        guard focus.width > 0 || focus.height > 0, plot.width > 1, plot.height > 1 else { return nil }
+        guard plot.width > 1, plot.height > 1 else { return nil }
+        let focus = fitBounds()
+        guard focus.width > 0 || focus.height > 0 else { return nil }
         // Auto-fit scale from the real drawing area (canvas minus rulers), every frame.
         let fitScale = 0.9 * min(plot.width / max(focus.width, 0.001),
                                  plot.height / max(focus.height, 0.001))
@@ -397,7 +500,7 @@ struct ToolpathCanvasView: View {
 
     /// Spacing between labelled ticks, chosen in the DISPLAY unit so inches
     /// land on round inches rather than on converted millimetres.
-    private func tickStep(scale: CGFloat) -> (mm: CGFloat, display: CGFloat) {
+    func tickStep(scale: CGFloat) -> (mm: CGFloat, display: CGFloat) {
         let perMM = CGFloat(units.perMM)
         let display = niceStep(minimum: 64 / scale * perMM)
         return (display / perMM, display)
@@ -542,8 +645,8 @@ struct ToolpathCanvasView: View {
     private static let guideHitSlop: CGFloat = 4
     private static let guideColor = Color(red: 0.96, green: 0.32, blue: 0.84)
 
-    private var guidesX: [CGFloat] { Self.decodeGuides(guidesXRaw) }
-    private var guidesY: [CGFloat] { Self.decodeGuides(guidesYRaw) }
+    var guidesX: [CGFloat] { Self.decodeGuides(guidesXRaw) }
+    var guidesY: [CGFloat] { Self.decodeGuides(guidesYRaw) }
 
     private static func decodeGuides(_ raw: String) -> [CGFloat] {
         raw.split(separator: ",").compactMap { Double($0) }.map { CGFloat($0) }
@@ -562,6 +665,18 @@ struct ToolpathCanvasView: View {
         if isOnOriginMarker(start, map: map) {
             originDrag = originTarget(at: start, map: map)
             return .origin
+        }
+
+        // Measuring: a drag in the plot measures from press to release.
+        if measuring, plot.contains(start), !NSEvent.modifierFlags.contains(.option) {
+            measureDragBegan(at: start, map: map)
+            return .measure
+        }
+
+        // Drawing: everything inside the plot goes to the editor (⌥-drag pans).
+        if editorActive, plot.contains(start), !NSEvent.modifierFlags.contains(.option) {
+            editDrag = EditDrag(start: start)
+            return .edit
         }
 
         // Pulling a fresh guide out of a ruler band.
@@ -639,6 +754,9 @@ struct ToolpathCanvasView: View {
     private var pointerStyle: PointerStyle? {
         if originDrag != nil { return .grabActive }
         if playback.placingOrigin { return .rectSelection }
+        if measuring, let hover, let map = mapping(in: canvasSize), map.plot.contains(hover) { return .rectSelection }
+        if editorActive, let hover, let map = mapping(in: canvasSize), !isOnOriginMarker(hover, map: map),
+           let style = editorPointerStyle(at: hover, map: map) { return style }
         if let hover, let map = mapping(in: canvasSize), isOnOriginMarker(hover, map: map) { return .grabIdle }
         guard showGuides, let hover, let map = mapping(in: canvasSize) else { return nil }
         if let drag = guide(at: hover, map: map) {
@@ -723,14 +841,14 @@ struct ToolpathCanvasView: View {
 
     // MARK: - Layer selection / mirroring / bounds
 
-    private func selectedLayer(in doc: PreviewDocument) -> ParsedLayer? {
+    func selectedLayer(in doc: PreviewDocument) -> ParsedLayer? {
         doc.layers.first { $0.id == playback.selectedLayer } ?? doc.layers.first
     }
 
     /// Back-side programs are mirrored; "Un-mirror Back Side" maps them onto
     /// the front frame for display (see ProjectFrame.backToFront), so the two
     /// sides overlay in exact registration wherever the origin was put.
-    private func displayTransform(for kind: LayerKind) -> CGAffineTransform? {
+    func displayTransform(for kind: LayerKind) -> CGAffineTransform? {
         guard flipBackView, kind.isBackSide, let document = preview.document else { return nil }
         return document.backToFront
     }
@@ -745,7 +863,37 @@ struct ToolpathCanvasView: View {
     /// all layers' (display-space) extents when overlaying.
     /// The origin is always framed too (as in FlatCAM) once the programs are
     /// zeroed; raw design frames can sit far from their origin, so not then.
-    private func fitBounds(_ doc: PreviewDocument) -> CGRect {
+    private func fitBounds() -> CGRect {
+        let doc = preview.document
+        if editorActive, let id = editor.activeLayerID {
+            // Frozen per layer while drawing (see FitBox); Fit / double-click refits.
+            let toWorld = editorTransform()
+            if fitBox.layerID == id, let rect = fitBox.rect, fitBox.hadDocument == (doc != nil) {
+                return rect.applying(toWorld)
+            }
+            var bounds = editorFitBounds() ?? .null
+            // The other programs count only when they are shown — or, for an
+            // empty layer, to start the sheet on the board.
+            if let doc, showAllLayers || bounds.isNull {
+                for layer in doc.layers where layer.id != editorLayerKind {
+                    if let own = displayBounds(for: layer) { bounds = bounds.union(own) }
+                }
+            }
+            if bounds.isNull || (bounds.width == 0 && bounds.height == 0) {
+                bounds = CGRect(x: 0, y: 0, width: 100, height: 80)   // an empty sheet to start on
+            }
+            bounds = bounds.union(CGRect(origin: displayedOrigin, size: .zero))
+            fitBox.layerID = id
+            fitBox.rect = bounds.applying(toWorld.inverted())
+            fitBox.hadDocument = doc != nil
+            return bounds
+        }
+        fitBox.rect = nil
+        guard let doc else { return CGRect(x: 0, y: 0, width: 100, height: 80) }
+        return documentFitBounds(doc)
+    }
+
+    private func documentFitBounds(_ doc: PreviewDocument) -> CGRect {
         var bounds = CGRect.null
         if !showAllLayers, let layer = selectedLayer(in: doc), let own = displayBounds(for: layer) {
             bounds = own
@@ -767,7 +915,7 @@ struct ToolpathCanvasView: View {
     /// Where the displayed program's X0/Y0 sits in the drawing: the origin of
     /// the selected program, carried through the un-mirror when a back-side
     /// program is shown un-mirrored.
-    private var displayedOrigin: CGPoint {
+    var displayedOrigin: CGPoint {
         guard let selected = playback.selectedLayer, let flip = displayTransform(for: selected) else { return .zero }
         return CGPoint.zero.applying(flip)
     }
@@ -775,6 +923,7 @@ struct ToolpathCanvasView: View {
     /// FlatCAM-style origin marker: a ringed crosshair with X (red) and Y
     /// (green) axis arrows, fixed on screen size so it reads at any zoom.
     private func drawOriginMarker(_ context: GraphicsContext, map: Mapping) {
+        guard preview.document != nil else { return }
         let world = markerWorld
         let center = CGPoint(x: map.viewX(world.x), y: map.viewY(world.y))
         guard map.plot.insetBy(dx: -30, dy: -30).contains(center) else { return }
@@ -961,6 +1110,7 @@ struct ToolpathCanvasView: View {
         case .back: 5
         case .front: 6
         case .drill(let index, _), .millDrill(let index, _): 7 + index
+        case .custom(let ref): 50 + ref.index
         case .test: 100
         }
     }
@@ -998,7 +1148,7 @@ struct ToolpathCanvasView: View {
 
     /// One drag gesture serves three jobs; which one is decided from where the
     /// drag started (a ruler band, an existing guide, or open canvas).
-    private enum DragMode { case pan, guide, origin }
+    private enum DragMode { case pan, guide, origin, edit, measure }
 
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 1)
@@ -1006,6 +1156,10 @@ struct ToolpathCanvasView: View {
                 if dragMode == nil { dragMode = beginDrag(at: value.startLocation) }
                 if dragMode == .guide {
                     updateGuide(to: value.location)
+                } else if dragMode == .edit {
+                    editorDragChanged(value)
+                } else if dragMode == .measure {
+                    hover = value.location   // the end follows the pointer
                 } else if dragMode == .origin {
                     if let map = mapping(in: canvasSize) { originDrag = originTarget(at: value.location, map: map) }
                 } else {
@@ -1014,9 +1168,11 @@ struct ToolpathCanvasView: View {
                     lastDrag = value.translation
                 }
             }
-            .onEnded { _ in
+            .onEnded { value in
                 lastDrag = .zero
                 if dragMode == .guide { commitGuide() }
+                if dragMode == .edit { editorDragEnded(value) }
+                if dragMode == .measure { measureDragEnded(at: value.location) }
                 if dragMode == .origin {
                     if let target = originDrag {
                         if let token = preview.document?.token { pendingOrigin = (target, token) }
@@ -1046,6 +1202,10 @@ struct ToolpathCanvasView: View {
                 .help("Zoom out")
             Button { resetView() } label: { Image(systemName: "arrow.down.left.and.arrow.up.right") }
                 .help("Fit the selected program to the view (double-click does the same)")
+            Button { toggleMeasuring() } label: {
+                Image(systemName: "ruler").foregroundStyle(measuring ? Color.yellow : Color.primary)
+            }
+            .help("Measure (M): click two points — or drag between them — to read the distance, ΔX, ΔY and angle. Snaps to toolpath corners, drill holes, drawn shapes, the origin, guides and the grid; Shift keeps the line horizontal, vertical or at 45°. Esc clears the measurement, then leaves the tool.")
             Button { playback.placingOrigin.toggle() } label: { Image(systemName: "scope") }
                 .help("Set Origin: click a point in the view to make it X0 Y0 for every program. You can also drag the origin marker itself. Both snap to drill holes and to the project's corners and centre.")
                 .disabled(preview.document == nil)

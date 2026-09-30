@@ -37,6 +37,8 @@ struct CNC_G_CoderApp: App {
                     .keyboardShortcut("o", modifiers: [.command, .shift])
                 Button("Import Layer…") { model.importLayers() }
                     .keyboardShortcut("i")
+                Button("New Custom Layer") { model.addCustomLayer() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                 Divider()
                 Button("Generate Test Board…") { model.showTestBoardDialog = true }
                     .keyboardShortcut("T", modifiers: [.command, .shift])
@@ -48,6 +50,31 @@ struct CNC_G_CoderApp: App {
                     .keyboardShortcut("s")
                 Button("Save Project As…") { model.saveProjectAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+            // One history for the whole app: parameters, layer files, drawing.
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") { model.history.undo() }
+                    .keyboardShortcut("z")
+                Button("Redo") { model.history.redo() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Button("Select All Shapes") { model.editor.selectAll() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("Duplicate Shapes") { model.editor.duplicateSelection() }
+                    .keyboardShortcut("d")
+                Button("Delete Shapes") { model.editor.deleteSelection() }
+                Menu("Align Shapes") {
+                    ForEach(ShapeEditor.AlignEdge.allCases) { edge in
+                        Button(edge.title) { model.editor.align(edge) }
+                    }
+                }
+                Menu("Distribute Shapes") {
+                    ForEach(ShapeEditor.DistributeAxis.allCases) { axis in
+                        Button(axis.title) { model.editor.distribute(axis) }
+                    }
+                }
             }
             CommandGroup(after: .toolbar) {
                 Toggle("Snap to Grid", isOn: $snapToGrid)

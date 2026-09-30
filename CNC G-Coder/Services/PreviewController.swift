@@ -77,7 +77,7 @@ final class PreviewController: ObservableObject {
 
     var currentSignature: String {
         guard let app else { return "" }
-        return app.parameters.signature + "||" + app.detectedFiles.signature
+        return app.parameters.signature + "||" + app.detectedFiles.signature + "||" + app.customLayers.signature
     }
 
     var isStale: Bool {
@@ -86,7 +86,8 @@ final class PreviewController: ObservableObject {
 
     var canPreview: Bool {
         guard let app else { return false }
-        return app.projectFolder != nil && app.detectedFiles.hasAnyToolpathInput && app.pcb2gcodeURL != nil
+        let gerbers = app.projectFolder != nil && app.detectedFiles.hasAnyToolpathInput && app.pcb2gcodeURL != nil
+        return gerbers || app.customLayers.hasShapes
     }
 
     /// Called after every parameter edit and after project-folder/file changes.
@@ -121,10 +122,15 @@ final class PreviewController: ObservableObject {
             phase = .failed("Invalid value: \(bad)")
             return
         }
-        guard let pcb2gcode = app.pcb2gcodeURL else { return }
+        if let layer = app.customLayers.first(where: { !$0.isEmpty && $0.validationError != nil }) {
+            phase = .failed("Custom layer \"\(layer.name)\": \(layer.validationError ?? "")")
+            return
+        }
+        let pcb2gcode = app.pcb2gcodeURL
 
         let snapshot = app.parameters.snapshot()
         let files = app.detectedFiles
+        let custom = app.customLayers
         let signature = currentSignature
         lastRequestedSignature = signature   // manual Refresh always regenerates
 
@@ -134,7 +140,8 @@ final class PreviewController: ObservableObject {
         runTask = Task { [weak self] in
             if let previous { await previous.value }   // single-flight
             guard !Task.isCancelled else { return }
-            await self?.executePreview(pcb2gcode: pcb2gcode, snapshot: snapshot, files: files, signature: signature)
+            await self?.executePreview(pcb2gcode: pcb2gcode, snapshot: snapshot, files: files,
+                                       custom: custom, signature: signature)
         }
     }
 
@@ -149,7 +156,8 @@ final class PreviewController: ObservableObject {
         }
     }
 
-    private func executePreview(pcb2gcode: URL, snapshot: ParameterSnapshot, files: DetectedFiles, signature: String) async {
+    private func executePreview(pcb2gcode: URL?, snapshot: ParameterSnapshot, files: DetectedFiles,
+                                custom: [CustomLayer], signature: String) async {
         let runDir = PreviewPaths.newRunDir()
         do {
             try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
@@ -158,40 +166,63 @@ final class PreviewController: ObservableObject {
             return
         }
 
+        // Gerber layers need pcb2gcode; drawn layers are generated in-app.
+        let useBatch = files.hasAnyToolpathInput && pcb2gcode != nil
         // One more step than the batch reports: reading the programs back.
-        let total = Pcb2GcodeService.stepCount(snapshot, files: files) + 1
-        progress = RunProgress(step: 0, total: total, label: "Starting pcb2gcode")
+        let total = (useBatch ? Pcb2GcodeService.stepCount(snapshot, files: files) : 0)
+            + (custom.hasShapes ? 1 : 0) + 1
+        progress = RunProgress(step: 0, total: total, label: useBatch ? "Starting pcb2gcode" : "Custom layers")
         defer { progress = nil }
         // Unchanged layers come straight from the cache; the rest run in parallel.
         running = [:]
         finishedSteps = 0
-        let batch = await Pcb2GcodeService.runBatch(
-            pcb2gcode: pcb2gcode, params: snapshot, files: files, outputDir: runDir,
-            cache: Pcb2GcodeService.previewCache,
-            onStep: { event, _ in
-                Task { @MainActor [weak self] in
-                    // A late report from a cancelled run must not revive the bar.
-                    guard let self, self.progress != nil else { return }
-                    switch event {
-                    case .started(let id, let label): self.running[id] = label
-                    case .finished(let id):
-                        self.running[id] = nil
-                        self.finishedSteps += 1
+        var batch = Pcb2GcodeService.BatchResult()
+        if useBatch, let pcb2gcode {
+            batch = await Pcb2GcodeService.runBatch(
+                pcb2gcode: pcb2gcode, params: snapshot, files: files, outputDir: runDir,
+                cache: Pcb2GcodeService.previewCache,
+                onStep: { event, _ in
+                    Task { @MainActor [weak self] in
+                        // A late report from a cancelled run must not revive the bar.
+                        guard let self, self.progress != nil else { return }
+                        switch event {
+                        case .started(let id, let label): self.running[id] = label
+                        case .finished(let id):
+                            self.running[id] = nil
+                            self.finishedSteps += 1
+                        }
+                        let label = self.running.sorted { $0.key < $1.key }.map(\.value).joined(separator: " · ")
+                        self.progress = RunProgress(step: self.finishedSteps, total: total,
+                                                    label: label.isEmpty ? "Finishing" : label)
                     }
-                    let label = self.running.sorted { $0.key < $1.key }.map(\.value).joined(separator: " · ")
-                    self.progress = RunProgress(step: self.finishedSteps, total: total,
-                                                label: label.isEmpty ? "Finishing" : label)
-                }
-            })
+                })
+        }
 
         if Task.isCancelled {
             try? FileManager.default.removeItem(at: runDir)
             return
         }
-        guard batch.succeeded, !batch.outputs.isEmpty else {
+        guard batch.succeeded else {
             app?.appendLog("\n--- Preview failed ---\n" + batch.log)
             try? FileManager.default.removeItem(at: runDir)
             phase = .failed(Self.excerpt(batch.log))
+            return
+        }
+        if custom.hasShapes {
+            progress = RunProgress(step: finishedSteps, total: total, label: "Custom layers")
+            // No Gerber programs: the drawing sets the origin frame itself.
+            if batch.outputs.isEmpty { batch.frame = CustomLayerGenerator.frame(layers: custom, params: snapshot) }
+            let frame = batch.frame
+            let result = await Task.detached(priority: .userInitiated) {
+                CustomLayerGenerator.write(layers: custom, params: snapshot, frame: frame, outputDir: runDir)
+            }.value
+            batch.outputs += result.outputs
+            if result.log.contains("WARNING") || result.log.contains("ERROR") { app?.appendLog(result.log) }
+            finishedSteps += 1
+        }
+        guard !batch.outputs.isEmpty else {
+            try? FileManager.default.removeItem(at: runDir)
+            phase = .failed("No programs to preview")
             return
         }
 

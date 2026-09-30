@@ -49,7 +49,7 @@ extension AppModel {
     /// Everything a project file records, as one comparable string.
     private var projectState: String {
         parameters.signature + "||" + detectedFiles.signature + "||" + (projectFolder?.path ?? "")
-            + "||" + (chosenOutputDir?.path ?? "")
+            + "||" + (chosenOutputDir?.path ?? "") + "||" + customLayers.signature
     }
 
     /// Unsaved changes worth asking about: an untitled project counts once it
@@ -73,8 +73,11 @@ extension AppModel {
         projectFolder = nil
         chosenOutputDir = nil
         layerOrigins = [:]
+        customLayers = []
         detectedFiles = DetectedFiles()
         preview.clear()
+        editor.layerDidChange()
+        clearUndoHistory()
         markSaved()
         appendLog("\nNew project.\n")
     }
@@ -87,8 +90,51 @@ extension AppModel {
         panel.canChooseFiles = false
         panel.message = "Choose the folder exported by EasyEDA (Gerber + drill files)."
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let useGerberOrigin = askGerberOrigin() else { return }
         projectURL = nil
+        setGerberOrigin(useGerberOrigin)
         selectProjectFolder(url)
+    }
+
+    // MARK: - Origin of imported Gerbers
+
+    /// Where X0 Y0 goes when the programs are zeroed on the board, in words.
+    var zeroedOriginName: String {
+        switch parameters.originMode {
+        case "bottomRight": "lower-right corner"
+        case "topLeft": "upper-left corner"
+        case "topRight": "upper-right corner"
+        case "center": "centre"
+        case "custom": "custom point"
+        default: "lower-left corner"
+        }
+    }
+
+    /// Gerber files carry their own origin — the X0 Y0 of the design in the
+    /// PCB editor. True keeps it (no zeroing); false moves X0 Y0 onto the board.
+    func setGerberOrigin(_ useGerberOrigin: Bool) {
+        guard parameters.zeroStart == useGerberOrigin else { return }
+        parameters.zeroStart = !useGerberOrigin
+        appendLog(useGerberOrigin
+                  ? "\nOrigin: the Gerber files' own X0 Y0 (no zeroing).\n"
+                  : "\nOrigin: X0 Y0 at the project's \(zeroedOriginName).\n")
+    }
+
+    /// Asks which origin the programs should use. Nil = cancelled.
+    private func askGerberOrigin() -> Bool? {
+        let alert = NSAlert()
+        alert.messageText = "Use the Gerber files' own origin?"
+        alert.informativeText = "Gerber files have an origin of their own — the X0 Y0 of the design in the PCB editor. "
+            + "Keep it, or move X0 Y0 to the \(zeroedOriginName) of the board so you can touch off there.\n\n"
+            + "You can change this later under Machine setup → Origin."
+        alert.addButton(withTitle: "Use Gerber Origin")
+        alert.addButton(withTitle: "Zero at \(zeroedOriginName.prefix(1).uppercased() + zeroedOriginName.dropFirst())")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return true
+        case .alertSecondButtonReturn: return false
+        default: return nil
+        }
     }
 
     func openProject() {
@@ -150,12 +196,24 @@ extension AppModel {
         chosenOutputDir = document.outputFolder.map { URL(fileURLWithPath: $0.path) }
             .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
         layerOrigins = origins
+        customLayers = document.customLayers ?? []
+        // A drawing-only project opens on the drawing board: the 3D view has
+        // no drawing tools, and shows such a project as a bare board.
+        if !customLayers.isEmpty, !files.hasAnyToolpathInput {
+            UserDefaults.standard.set(false, forKey: "preview3D")
+        }
         detectedFiles = files
         preview.clear()
+        editor.layerDidChange()
         preview.parametersDidChange()
+        clearUndoHistory()
         markSaved()
         noteRecent(url)
 
+        if !customLayers.isEmpty {
+            let shapes = customLayers.reduce(0) { $0 + $1.shapes.count }
+            appendLog("\nCustom layers: \(customLayers.map(\.name).joined(separator: ", ")) — \(shapes) shape\(shapes == 1 ? "" : "s") (stored in project.json, not in Layers).")
+        }
         appendLog("\nOpened project \(url.path)"
                   + (packed ? " — \(origins.count) packed layer file\(origins.count == 1 ? "" : "s").\n"
                             : " (older format; saving converts it to a package with its layer files inside).\n"))
@@ -201,6 +259,7 @@ extension AppModel {
         if let chosenOutputDir { document.outputFolder = ProjectDocument.link(chosenOutputDir) }
         document.guidesX = UserDefaults.standard.string(forKey: "previewGuidesX")
         document.guidesY = UserDefaults.standard.string(forKey: "previewGuidesY")
+        document.customLayers = customLayers
         let layers = LayerSlot.allCases.filter { $0 != .drill }.compactMap { slot in
             detectedFiles[slot].map { (slot: slot.rawValue, file: $0, origin: layerOrigins[$0]) }
         }
@@ -278,7 +337,10 @@ extension AppModel {
     }
 
     /// Applies the confirmed roles from the import sheet.
-    func commitImports() {
+    func commitImports(useGerberOrigin: Bool? = nil) {
+        if let useGerberOrigin, pendingImports.contains(where: { $0.slot != nil }) {
+            setGerberOrigin(useGerberOrigin)
+        }
         var files = detectedFiles
         var added: [String] = []
         for item in pendingImports {
@@ -294,7 +356,7 @@ extension AppModel {
         guard !added.isEmpty else { return }
         if projectFolder == nil { projectFolder = files.drills.first?.deletingLastPathComponent()
             ?? LayerSlot.allCases.lazy.compactMap { files[$0] }.first?.deletingLastPathComponent() }
-        detectedFiles = files
+        setDetectedFiles(files, actionName: "Import Layers")
         if projectURL == nil { manualLayerEdits = true }
         appendLog("\nImported layers:\n" + added.map { "  \($0)\n" }.joined())
         preview.parametersDidChange()
@@ -314,7 +376,7 @@ extension AppModel {
             files[slot] = url
         }
         if projectFolder == nil { projectFolder = url.deletingLastPathComponent() }
-        detectedFiles = files
+        setDetectedFiles(files, actionName: "Replace Layer")
         if projectURL == nil { manualLayerEdits = true }
         appendLog("\n\(slot.title) → \(url.path)\n")
         preview.parametersDidChange()
@@ -327,10 +389,10 @@ extension AppModel {
         } else {
             files[slot] = nil
         }
-        detectedFiles = files
+        setDetectedFiles(files, actionName: "Remove Layer")
         if projectURL == nil { manualLayerEdits = true }
         appendLog("\nRemoved \(slot.title)\(drill.map { " (\($0.lastPathComponent))" } ?? "").\n")
-        if files.hasAnyToolpathInput { preview.parametersDidChange() } else { preview.clear() }
+        if files.hasAnyToolpathInput || customLayers.hasShapes { preview.parametersDidChange() } else { preview.clear() }
     }
 
     private func showError(_ message: String, _ detail: String) {

@@ -34,6 +34,22 @@ struct HelpView: View {
                 Verification: mill a test board (File → Generate Test Board…) and measure the 0.2 mm test trace. If it comes out ~0.13 mm with a 60° V-bit entered as 0.1, your effective diameter is ~0.07 mm larger than entered — fix the parameter, not the design.
                 """)
 
+                section("Custom layers — drawing your own shapes", """
+                File → New Custom Layer (⇧⌘N, also in the sidebar's layer menu) adds a layer you draw on: lines and polygons, rectangles (with corner radius and rotation), circles, and text — in the built-in single-stroke engraving font or any installed font, engraved along its outlines. Every non-empty layer becomes one program, written by Generate and the CNC export like any other, and shown in the preview as it regenerates after each edit.
+
+                Drawing: with the layer selected, a bar appears over the preview with the tools — Select (V), Line (L), Rectangle (R), Circle (C), Text (T). Click or drag to draw; double-click or Return finishes a line, clicking its first point closes it into a polygon; Shift constrains to 45° and makes squares. Points snap to the grid (Snap to Grid), to guides, and to other shapes' corners, vertices, centres and quadrants (Snap to Objects); a green ring shows the snap. Right- or middle-drag pans (Option-drag too), scroll zooms as usual. The other programs show behind the drawing only with All Layers Overlay on (View Options).
+
+                Editing: click to select, shift-click to add, drag a box (rightwards: enclosed shapes, leftwards: touched shapes). Drag shapes to move them — they snap to each other — or drag the handles to resize rectangles and circles and to move a line's vertices. Arrow keys nudge by 0.1 mm (Shift: 1 mm), ⌘D duplicates, Delete deletes, ⌘Z undoes everything. The sidebar lists the shapes; selecting one opens a floating Properties panel at the right of the drawing with its numbers — position, size, corner radius, rotation, text, font, stroke width — for exact values; with several selected, Align (edges and centres) and Distribute (equal gaps) line them up.
+
+                Machining: each layer has one tool (from the library or typed in), a depth, depth per pass, feeds and spindle, and an operation. Engrave runs the tool centre along the drawn line; Cut outside / Cut inside offset closed shapes by half the tool so what you drew is the size that comes out (outside for a part you keep, inside for a hole). A shape's stroke width wider than the tool is cleared with overlapping passes; Filled pockets a closed shape inside-out. Shapes are drawn in design coordinates on the board, so they keep their place whatever origin you choose, and a Back-side layer is mirrored like back copper.
+                """)
+
+                section("Measuring & undo", """
+                Measure: the ruler button at the top right of the 2D view (or M while the view has focus) turns on the tape measure, on any layer. Click two points — or drag between them — to read the distance, ΔX, ΔY and angle. It snaps to toolpath corners, drill holes, drawn shapes, the origin, guides and (with Snap to Grid) the grid; Shift keeps the line horizontal, vertical or at 45°. Esc clears the measurement, then leaves the tool.
+
+                Undo: Edit → Undo / Redo (⌘Z / ⇧⌘Z) step through one history for the whole app — parameter edits, tools and presets being applied, the origin being moved, layer files imported, replaced or removed, and every drawing edit. Opening another project starts a new history.
+                """)
+
                 section("Tool library", """
                 File → Tool Library… (⇧⌘L) holds every bit you own with its cutting data: shape (straight, ball, V-bit), what it is used for, diameter or tip + angle, depth, depth per pass (drills: peck), feeds, spindle, overlap, and for drills the range of hole sizes it may drill. Import FlatCAM… reads a FlatCAM Tools Database export; re-importing updates tools with the same name.
 

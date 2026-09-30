@@ -67,6 +67,13 @@ struct ContentView: View {
                 Divider()
 
                 Button {
+                    model.addCustomLayer()
+                } label: {
+                    Label("New Custom Layer", systemImage: "pencil.and.outline")
+                }
+                .help("Add a layer to draw on — lines, rectangles, circles and text, machined with a tool of your choice.")
+
+                Button {
                     model.showTestBoardDialog = true
                 } label: {
                     Label("Generate Test Board…", systemImage: "square.grid.3x3.topleft.filled")
@@ -103,7 +110,7 @@ struct ContentView: View {
                 }
             }
             .buttonStyle(.glassProminent)
-            .disabled(model.pcb2gcodeURL == nil || !model.detectedFiles.hasAnything)
+            .disabled(!model.detectedFiles.hasAnything && !model.customLayers.hasShapes)
             .help("Choose what to produce — CNC G-code or laser artwork — where to put it, and watch it run.")
         }
     }

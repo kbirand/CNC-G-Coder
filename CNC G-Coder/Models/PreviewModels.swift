@@ -13,6 +13,8 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
     case maskBottom
     case silkTop
     case silkBottom
+    /// A layer drawn by hand in the shape editor (see CustomLayer).
+    case custom(CustomLayerRef)
     case test
 
     var displayName: String {
@@ -26,8 +28,20 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         case .maskBottom: "Bottom mask etch"
         case .silkTop: "Top silkscreen"
         case .silkBottom: "Bottom silkscreen"
+        case .custom(let ref): ref.name
         case .test: "Test board"
         }
+    }
+
+    var isCustom: Bool {
+        if case .custom = self { return true }
+        return false
+    }
+
+    /// The drawn layer behind a `.custom` kind.
+    var customRef: CustomLayerRef? {
+        if case .custom(let ref) = self { return ref }
+        return nil
     }
 
     var isDrill: Bool {
@@ -65,6 +79,7 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         case .maskBottom: 1001
         case .silkTop: 1100       // legend last of all, on top of the cured mask
         case .silkBottom: 1101
+        case .custom(let ref): 1500 + ref.index   // drawn layers, in their list order
         case .test: 2000
         }
     }
@@ -164,6 +179,23 @@ nonisolated struct ProjectFrame: Sendable, Equatable {
     func designPoint(fromFront point: CGPoint) -> CGPoint {
         CGPoint(x: point.x + rect.minX + frontOrigin.x, y: point.y + rect.minY + frontOrigin.y)
     }
+
+    /// Design (Gerber) coordinates → front-program coordinates.
+    var designToFront: CGAffineTransform {
+        CGAffineTransform(translationX: -(rect.minX + frontOrigin.x), y: -(rect.minY + frontOrigin.y))
+    }
+
+    /// Design (Gerber) coordinates → back-program coordinates: the mirror
+    /// pcb2gcode applies, followed by the back side's own zeroing shift
+    /// (see Pcb2GcodeService.normalizeOrigins — the axis value cancels out).
+    var designToBack: CGAffineTransform {
+        if mirrorYAxis {
+            return CGAffineTransform(a: 1, b: 0, c: 0, d: -1,
+                                     tx: -(rect.minX + backOrigin.x), ty: rect.maxY - backOrigin.y)
+        }
+        return CGAffineTransform(a: -1, b: 0, c: 0, d: 1,
+                                 tx: rect.maxX - backOrigin.x, ty: -(rect.minY + backOrigin.y))
+    }
 }
 
 extension PreviewDocument {
@@ -185,6 +217,7 @@ extension PreviewDocument {
 extension LayerKind {
     /// Programs machined after flipping the board (mirrored coordinates).
     nonisolated var isBackSide: Bool {
-        self == .back || self == .maskBottom || self == .silkBottom
+        if case .custom(let ref) = self { return ref.back }
+        return self == .back || self == .maskBottom || self == .silkBottom
     }
 }

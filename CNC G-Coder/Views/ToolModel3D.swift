@@ -329,6 +329,15 @@ extension AppModel {
             let file = index < detectedFiles.drills.count ? detectedFiles.drills[index] : nil
             let size = file.flatMap { drillHoleSizes[$0]?.first } ?? 0.8
             return ToolGeometry(kind: .drill, diameter: size)
+        case .custom(let ref):
+            guard let layer = customLayers.first(where: { $0.id == ref.id }) else { return nil }
+            if let tool = tools.tool(id: layer.toolID) {
+                if tool.shape == .vBit {
+                    return ToolGeometry(kind: .vBit, diameter: 0, tipDiameter: tool.tipDiameter, angle: tool.tipAngle)
+                }
+                if tool.shape == .ball { return ToolGeometry(tool: tool) }
+            }
+            return ToolGeometry(kind: .endMill, diameter: max(layer.toolDiameter, 0.05))
         case .test:
             return ToolGeometry(kind: .vBit, diameter: 0, tipDiameter: 0.1, angle: 30)
         }

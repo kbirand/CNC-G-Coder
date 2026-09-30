@@ -58,6 +58,16 @@ Move or copy the project on its own — it never loses its layers. (To email one
 
 With a layer selected, **CNC export → Export <name>.ngc…** in the sidebar saves just that program — exactly the previewed G-code, with the same post-processing and origin Generate would write. It is available once the preview is up to date. The "X0 Y0 at" link beside it jumps to the origin setting.
 
+## Custom layers — drawing your own shapes
+
+**File → New Custom Layer** (⇧⌘N, also in the sidebar's layer menu) adds a layer you draw on: lines and polygons, rectangles (with corner radius and rotation), circles, and text — in the built-in single-stroke engraving font or any installed font, engraved along its outlines. Every non-empty layer becomes one program, written by Generate and the CNC export like any other, and shown in the preview as it regenerates after each edit.
+
+**Drawing.** With the layer selected, a bar appears over the preview with the tools — Select (V), Line (L), Rectangle (R), Circle (C), Text (T). Click or drag to draw; double-click or Return finishes a line, clicking its first point closes it into a polygon; Shift constrains to 45° and makes squares. Points snap to the grid (Snap to Grid), to guides, and to other shapes' corners, vertices, centres and quadrants (Snap to Objects); a green ring shows the snap. Right- or middle-drag pans (Option-drag too), scroll zooms as usual. The other programs show behind the drawing only with All Layers Overlay on (View Options).
+
+**Editing.** Click to select, shift-click to add, drag a box (rightwards: enclosed shapes, leftwards: touched shapes). Drag shapes to move them — they snap to each other — or drag the handles to resize rectangles and circles and to move a line's vertices. Arrow keys nudge by 0.1 mm (Shift: 1 mm), ⌘D duplicates, Delete deletes, ⌘Z undoes everything. The sidebar lists the shapes; selecting one opens a floating Properties panel at the right of the drawing with its numbers — position, size, corner radius, rotation, text, font, stroke width — for exact values; with several selected, **Align** (edges and centres) and **Distribute** (equal gaps) line them up.
+
+**Machining.** Each layer has one tool (from the library or typed in), a depth, depth per pass, feeds and spindle, and an operation. *Engrave* runs the tool centre along the drawn line; *Cut outside* / *Cut inside* offset closed shapes by half the tool so what you drew is the size that comes out (outside for a part you keep, inside for a hole). A shape's stroke width wider than the tool is cleared with overlapping passes; *Filled* pockets a closed shape inside-out. Shapes are drawn in design coordinates on the board, so they keep their place whatever origin you choose, and a Back-side layer is mirrored like back copper. Custom layers are saved in the project.
+
 ## Tool library
 
 **File → Tool Library…** (⇧⌘L) holds every bit you own with the cutting data that goes with it: shape (straight / ball / V-bit), what it is used for, diameter or tip + angle, depth, depth per pass (drills: peck depth), feeds, spindle, pass overlap, and for drills the range of hole sizes it may drill.
@@ -123,6 +133,12 @@ X–Z / Y–Z projections or a Z-vs-distance **Profile**, with labeled reference
 ## View controls
 
 Scroll wheel / pinch = zoom (anchored at cursor) · drag = pan · double-click / fit button = reset. Zoom and pan survive layer switches; panel divider positions and all parameters persist across launches.
+
+## Measuring & undo
+
+**Measure.** the ruler button at the top right of the 2D view (or M while the view has focus) turns on the tape measure, on any layer. Click two points — or drag between them — to read the distance, ΔX, ΔY and angle. It snaps to toolpath corners, drill holes, drawn shapes, the origin, guides and (with Snap to Grid) the grid; Shift keeps the line horizontal, vertical or at 45°. Esc clears the measurement, then leaves the tool.
+
+**Undo.** Edit → Undo / Redo (⌘Z / ⇧⌘Z) step through one history for the whole app — parameter edits, tools and presets being applied, the origin being moved, layer files imported, replaced or removed, and every drawing edit. Opening another project starts a new history.
 
 ## Presets & settings
 

@@ -86,6 +86,10 @@ struct SideViewCanvas: View {
             add("etch", p.maskDepth)
         case .silkTop, .silkBottom:
             add("silk", p.silkDepth)
+        case .custom(let ref):
+            if let layer = model.customLayers.first(where: { $0.id == ref.id }) {
+                lines.append(("depth", layer.cutDepth, false))
+            }
         case .test:
             break   // patches sweep multiple depths; Z0/zsafe suffice
         case nil:

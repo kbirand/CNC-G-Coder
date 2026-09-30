@@ -14,6 +14,13 @@ final class AppModel: ObservableObject {
     /// panel (it also decides which settings are shown) while the transport bar
     /// and canvases live in the preview pane.
     let player = PlaybackState()
+    /// The shape editor for hand-drawn (custom) layers.
+    let editor = ShapeEditor()
+    /// The app's undo history: parameter edits, layer-file changes and
+    /// drawing edits, in the order they were made. Owned here rather than
+    /// taken from the window — SwiftUI does not hand this window's undo
+    /// manager to the model — and driven by Edit → Undo / Redo.
+    let history = UndoManager()
 
     @Published var projectFolder: URL?
     @Published var detectedFiles = DetectedFiles() {
@@ -24,6 +31,20 @@ final class AppModel: ObservableObject {
     }
     /// Hole diameters (mm) declared by each detected drill file.
     @Published private(set) var drillHoleSizes: [URL: [Double]] = [:]
+    /// Hand-drawn layers from the shape editor; every non-empty one becomes
+    /// a program of its own (see CustomLayerGenerator). Saved in the project.
+    @Published var customLayers: [CustomLayer] = [] {
+        didSet {
+            guard customLayers != oldValue else { return }
+            if projectURL == nil, !customLayers.isEmpty { manualLayerEdits = true }
+            // The last drawing gone and nothing else to show: drop the preview
+            // rather than keep showing a program for shapes that no longer exist.
+            if !customLayers.hasShapes, !detectedFiles.hasAnyToolpathInput, preview.document != nil {
+                preview.clear()
+            }
+            preview.parametersDidChange()
+        }
+    }
     @Published var log = "Ready.\n"
     @Published var isGenerating = false
     @Published var showTestBoardDialog = false
@@ -67,6 +88,9 @@ final class AppModel: ObservableObject {
     let gerbvURL = ToolLocator.gerbv
 
     private var cancellables = Set<AnyCancellable>()
+    /// Parameter values as of the last recorded undo step (see AppModel+Undo.swift).
+    var lastParameterValues: [String: String] = [:]
+    var lastParameterEdit: (key: String, date: Date)?
     private var generateTask: Task<Void, Never>?
 
     /// The user's chosen output folder, falling back to the suggested default
@@ -79,12 +103,18 @@ final class AppModel: ObservableObject {
         Self.current = self
         preview.app = self
         player.preview = preview
+        editor.app = self
+        editor.undoManager = history
         parameters.library = tools
         // objectWillChange fires before the new value lands; defer one runloop
         // turn so the preview controller reads the updated signature.
+        lastParameterValues = parameters.exportValues()
         parameters.objectWillChange
             .sink { [weak self] _ in
-                DispatchQueue.main.async { self?.preview.parametersDidChange() }
+                DispatchQueue.main.async {
+                    self?.preview.parametersDidChange()
+                    self?.noteParameterChange()
+                }
             }
             .store(in: &cancellables)
         // Drill bits on hand resolve through the library: editing one must
@@ -156,6 +186,61 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+        // Dev hook: `-debugCustomDemo 1` adds a drawn layer with one of every
+        // shape kind and selects it (custom-only when no folder is given).
+        if UserDefaults.standard.bool(forKey: "debugCustomDemo") {
+            let layer = addCustomLayer()
+            var demo = layer
+            demo.toolDiameter = 0.3
+            demo.cutDepth = -0.1
+            demo.shapes = [
+                DrawnShape(geometry: .line(points: [CGPoint(x: 2, y: 2), CGPoint(x: 14, y: 2), CGPoint(x: 14, y: 8)], closed: false), strokeWidth: 0.8),
+                DrawnShape(geometry: .rect(origin: CGPoint(x: 18, y: 2), size: CGSize(width: 10, height: 6), cornerRadius: 1, rotation: 0), filled: true),
+                DrawnShape(geometry: .circle(center: CGPoint(x: 36, y: 5), diameter: 6), strokeWidth: 0),
+                DrawnShape(geometry: .line(points: [CGPoint(x: 44, y: 2), CGPoint(x: 52, y: 2), CGPoint(x: 48, y: 9)], closed: true)),
+                DrawnShape(geometry: .text(origin: CGPoint(x: 2, y: 12), string: "CNC G-CODER", height: 3, rotation: 0, style: TextStyle())),
+                DrawnShape(geometry: .text(origin: CGPoint(x: 2, y: 18), string: "Label 42", height: 3, rotation: 0,
+                                           style: TextStyle(family: "Helvetica", bold: true)))
+            ]
+            editor.setLayer(demo, actionName: "Demo")
+            // `-debugSelectShape 1` also selects the demo's rectangle, which
+            // opens the floating properties panel.
+            // Delayed: the canvas resets the selection when it sees the layer change.
+            if UserDefaults.standard.bool(forKey: "debugSelectShape") {
+                let id = demo.shapes[1].id
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    self?.editor.selection = [id]
+                }
+            }
+            appendLog("[debug] custom demo layer added\n")
+            // Save again so the drawn layer is in the project file.
+            if let path = UserDefaults.standard.string(forKey: "debugSaveProject") {
+                saveProject(to: URL(fileURLWithPath: path))
+            }
+        }
+        // Dev hook: `-debugUndoTest 1` edits a parameter, undoes and redoes it,
+        // logging the value at each step.
+        if UserDefaults.standard.bool(forKey: "debugUndoTest") {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard let self else { return }
+                let before = self.parameters.isolationWidth
+                self.parameters.isolationWidth = "0.77"
+                try? await Task.sleep(for: .seconds(1))
+                let edited = self.parameters.isolationWidth
+                self.undoManager?.undo()
+                try? await Task.sleep(for: .seconds(1))
+                let undone = self.parameters.isolationWidth
+                self.undoManager?.redo()
+                try? await Task.sleep(for: .seconds(1))
+                let redone = self.parameters.isolationWidth
+                self.undoManager?.undo()
+                let line = "[debug] undo test: \(before) → \(edited) → undo \(undone) → redo \(redone) → undo \(self.parameters.isolationWidth) (manager \(self.undoManager == nil ? "missing" : "ok"))\n"
+                self.appendLog(line)
+                try? line.write(toFile: NSTemporaryDirectory() + "cnc-undo-test.txt", atomically: true, encoding: .utf8)
+            }
+        }
         // Dev hook: `-debugOpenProject /path/x.cncproj` opens a saved project.
         if let path = UserDefaults.standard.string(forKey: "debugOpenProject") {
             openProject(at: URL(fileURLWithPath: path), confirmed: true)
@@ -189,6 +274,7 @@ final class AppModel: ObservableObject {
         chosenOutputDir = nil   // a new project must never inherit the old destination
         manualLayerEdits = false
         layerOrigins = [:]
+        customLayers = []
         detectedFiles = GerberDetector.detect(in: url)
 
         appendLog("\nSelected project folder: \(url.path)\n")
@@ -201,6 +287,7 @@ final class AppModel: ObservableObject {
         appendLog("Top silkscreen: \(detectedFiles.topSilk?.lastPathComponent ?? "NOT FOUND")\n")
         appendLog("Bottom silkscreen: \(detectedFiles.bottomSilk?.lastPathComponent ?? "NOT FOUND")\n")
         appendLog("Drills: \(detectedFiles.drills.count)\n")
+        clearUndoHistory()
 
         preview.parametersDidChange()
     }
@@ -234,17 +321,26 @@ final class AppModel: ObservableObject {
 
     /// Why a run cannot start, or nil when it can.
     func generationBlocker(for target: GenerateTarget) -> String? {
-        if pcb2gcodeURL == nil { return "pcb2gcode not found — install it with: brew install pcb2gcode" }
-        if projectFolder == nil { return "Choose a project folder first." }
-        if !detectedFiles.hasAnything { return "No Gerber files were recognized in this project." }
+        let hasCustom = customLayers.hasShapes
+        if !detectedFiles.hasAnything && !hasCustom {
+            return "Nothing to generate — open a project, or draw on a custom layer."
+        }
+        if detectedFiles.hasAnything {
+            if pcb2gcodeURL == nil { return "pcb2gcode not found — install it with: brew install pcb2gcode" }
+            if projectFolder == nil { return "Choose a project folder first." }
+        }
         if let bad = parameters.validationError { return "Invalid value in \"\(bad)\" — fix it before generating." }
+        if let layer = customLayers.first(where: { !$0.isEmpty && $0.validationError != nil }) {
+            return "Custom layer \"\(layer.name)\": \(layer.validationError ?? "")."
+        }
         return nil
     }
 
     /// Runs a generation into `destination`. Both targets share the same
     /// pcb2gcode batch; only what is written at the end differs.
     func startGeneration(target: GenerateTarget, destination: URL) {
-        guard !isGenerating, let pcb2gcodeURL else { return }
+        guard !isGenerating else { return }
+        let pcb2gcodeURL = self.pcb2gcodeURL
         if let blocker = generationBlocker(for: target) {
             appendLog("\nERROR: \(blocker)\n")
             return
@@ -256,12 +352,14 @@ final class AppModel: ObservableObject {
         generationSteps = []
         generationSummary = nil
         generationFailed = false
-        generationTotal = Pcb2GcodeService.stepCount(parameters.snapshot(), files: detectedFiles)
+        generationTotal = (detectedFiles.hasAnything ? Pcb2GcodeService.stepCount(parameters.snapshot(), files: detectedFiles) : 0)
+            + (customLayers.hasShapes ? 1 : 0)
             + (target == .laser ? 1 : 0)   // plus the rendering pass
         appendLog("\n--- \(target == .cnc ? "Generating" : "Exporting laser artwork") into \(destination.path) ---\n")
 
         let snapshot = parameters.snapshot()
         let files = detectedFiles
+        let custom = customLayers
         let gerbv = gerbvURL
         let options = ArtworkExport.Options.current
 
@@ -282,19 +380,40 @@ final class AppModel: ObservableObject {
             }
             defer { if target == .laser { try? FileManager.default.removeItem(at: workDir) } }
 
-            let batch = await Pcb2GcodeService.runBatch(
-                pcb2gcode: pcb2gcodeURL, params: snapshot, files: files, outputDir: workDir,
-                onStep: { event, total in
-                    Task { @MainActor [weak self] in self?.reportStep(event, total: total) }
-                })
-            self.appendLog(batch.log)
+            var batch = Pcb2GcodeService.BatchResult()
+            if files.hasAnything, let pcb2gcodeURL {
+                batch = await Pcb2GcodeService.runBatch(
+                    pcb2gcode: pcb2gcodeURL, params: snapshot, files: files, outputDir: workDir,
+                    onStep: { event, total in
+                        Task { @MainActor [weak self] in self?.reportStep(event, total: total) }
+                    })
+                self.appendLog(batch.log)
+            }
 
             if Task.isCancelled {
                 self.finishGeneration(summary: "Cancelled.", failed: true)
                 return
             }
-            guard batch.succeeded, !batch.outputs.isEmpty else {
-                self.finishGeneration(summary: "pcb2gcode produced no programs — see the Log.", failed: true)
+            guard batch.succeeded else {
+                self.finishGeneration(summary: "pcb2gcode failed — see the Log.", failed: true)
+                return
+            }
+            // Drawn layers are generated in-app, into the same folder and frame.
+            if custom.hasShapes {
+                let stepID = 100_000
+                self.reportStep(.started(id: stepID, label: "Custom layers"), total: self.generationTotal)
+                // No Gerber programs: the drawing sets the origin frame itself.
+                if batch.outputs.isEmpty { batch.frame = CustomLayerGenerator.frame(layers: custom, params: snapshot) }
+                let frame = batch.frame
+                let result = await Task.detached(priority: .userInitiated) {
+                    CustomLayerGenerator.write(layers: custom, params: snapshot, frame: frame, outputDir: workDir)
+                }.value
+                self.appendLog(result.log)
+                batch.outputs += result.outputs
+                self.reportStep(.finished(id: stepID), total: self.generationTotal)
+            }
+            guard !batch.outputs.isEmpty else {
+                self.finishGeneration(summary: "No programs were produced — see the Log.", failed: true)
                 return
             }
 

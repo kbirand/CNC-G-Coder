@@ -84,6 +84,9 @@ extension LayerKind {
         case .maskBottom: .brown
         case .silkTop: Color(white: 0.92)      // the legend is printed white
         case .silkBottom: Color(white: 0.62)
+        case .custom(let ref):
+            // Warm hues no generated layer uses, one per drawn layer.
+            Color(hue: (0.0 + 0.11 * Double(ref.index)).truncatingRemainder(dividingBy: 1), saturation: 0.85, brightness: 1)
         case .test: .mint
         }
     }

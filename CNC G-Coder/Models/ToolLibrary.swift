@@ -136,6 +136,7 @@ extension MachineTool.Use {
         case .cutout: return self == .cutout
         case .mask: return self == .mask || self == .isolation
         case .silk: return self == .silk || self == .isolation
+        case .custom: return self != .drilling   // any milling bit can follow a drawing
         case .setup: return false
         }
     }

@@ -101,3 +101,63 @@ nonisolated func formatDuration(_ seconds: Double) -> String {
     }
     return String(format: "%d:%02d", s / 60, s % 60)
 }
+
+/// Invisible overlay that pans with the right or middle mouse button, the
+/// way the 3D view does, without taking left clicks or drags from the views
+/// underneath. A local event monitor picks up drags that start over it.
+struct MousePanCatcher: NSViewRepresentable {
+    var onPan: (_ delta: CGSize) -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        let view = CatcherView()
+        view.onPan = onPan
+        return view
+    }
+
+    func updateNSView(_ view: CatcherView, context: Context) {
+        view.onPan = onPan
+    }
+
+    final class CatcherView: NSView {
+        var onPan: ((CGSize) -> Void)?
+        private var monitor: Any?
+        private var last: CGPoint?
+
+        override var isFlipped: Bool { true }   // match SwiftUI's top-left origin
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil, monitor == nil {
+                let mask: NSEvent.EventTypeMask = [.rightMouseDown, .rightMouseDragged, .rightMouseUp,
+                                                   .otherMouseDown, .otherMouseDragged, .otherMouseUp]
+                monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+                    guard let self, let window = self.window, event.window === window else { return event }
+                    let location = self.convert(event.locationInWindow, from: nil)
+                    switch event.type {
+                    case .rightMouseDown, .otherMouseDown:
+                        guard self.bounds.contains(location) else { return event }
+                        self.last = location
+                        return nil   // no context menu: the button pans here
+                    case .rightMouseDragged, .otherMouseDragged:
+                        guard let last = self.last else { return event }
+                        self.onPan?(CGSize(width: location.x - last.x, height: location.y - last.y))
+                        self.last = location
+                        return nil
+                    default:
+                        guard self.last != nil else { return event }
+                        self.last = nil
+                        return nil
+                    }
+                }
+            } else if window == nil, let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+}

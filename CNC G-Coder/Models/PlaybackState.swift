@@ -115,7 +115,9 @@ final class PlaybackState: ObservableObject {
     /// to the first layer, rewound.
     func syncToDocument() {
         guard let doc = preview?.document else {
-            selectedLayer = nil
+            // A drawn layer stays selected with nothing generated yet: the
+            // editor is open on it.
+            if selectedLayer?.isCustom != true { selectedLayer = nil }
             currentTime = 0
             isPlaying = false
             documentToken = nil
@@ -131,6 +133,10 @@ final class PlaybackState: ObservableObject {
             if wasPlaying, currentTime < totalTime {
                 isPlaying = true
             }
+        } else if selectedLayer?.isCustom == true {
+            // An empty drawn layer has no program yet; keep editing it.
+            isPlaying = false
+            currentTime = 0
         } else {
             isPlaying = false
             selectedLayer = doc.layers.first?.id

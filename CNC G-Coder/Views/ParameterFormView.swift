@@ -3,7 +3,7 @@ import Combine
 
 /// Which group of machining parameters the sidebar shows.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case isolation, drilling, holeMill, cutout, mask, silk, setup
+    case isolation, drilling, holeMill, cutout, mask, silk, custom, setup
     var id: String { rawValue }
 
     var title: String {
@@ -14,6 +14,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .cutout: "Board cutout"
         case .mask: "Solder mask"
         case .silk: "Silkscreen"
+        case .custom: "Custom layer"
         case .setup: "Machine setup"
         }
     }
@@ -26,6 +27,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .cutout: "scissors"
         case .mask: "paintbrush.pointed.fill"
         case .silk: "textformat"
+        case .custom: "pencil.and.outline"
         case .setup: "gearshape.fill"
         }
     }
@@ -38,6 +40,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .cutout: .orange
         case .mask: .cyan
         case .silk: .yellow
+        case .custom: .red
         case .setup: .gray
         }
     }
@@ -53,6 +56,7 @@ extension LayerKind {
         case .outline: .cutout
         case .maskTop, .maskBottom: .mask
         case .silkTop, .silkBottom: .silk
+        case .custom: .custom
         case .test: nil
         }
     }
@@ -128,7 +132,7 @@ struct ParameterFormView: View {
         let covered = Set((preview.document?.layers ?? []).compactMap { $0.id.settingsSection })
         // Hole milling only exists as a group while it is switched on.
         return SettingsSection.allCases.filter {
-            $0 != .setup && !covered.contains($0) && ($0 != .holeMill || params.drillMillLarge)
+            $0 != .setup && $0 != .custom && !covered.contains($0) && ($0 != .holeMill || params.drillMillLarge)
         }
     }
 
@@ -242,6 +246,28 @@ struct ParameterFormView: View {
                     }
                 }
             }
+            // Drawn layers with nothing on them yet have no program; list them
+            // here so they can be picked up and drawn on.
+            let emptyCustom = model.customLayers.enumerated().filter { pair in
+                !(preview.document?.layers.contains { $0.id == .custom(pair.element.ref(index: pair.offset)) } ?? false)
+            }
+            if !emptyCustom.isEmpty {
+                Divider()
+                ForEach(emptyCustom, id: \.element.id) { pair in
+                    Toggle(isOn: Binding(
+                        get: { sectionOverride.isEmpty && playback.selectedLayer?.customRef?.id == pair.element.id },
+                        set: { if $0 { model.selectCustomLayer(pair.element.id) } }
+                    )) {
+                        Label("\(pair.element.name)  ·  empty", systemImage: "pencil.and.outline")
+                    }
+                }
+            }
+            Divider()
+            Button {
+                model.addCustomLayer()
+            } label: {
+                Label("New Custom Layer", systemImage: "plus")
+            }
             let missing = sectionsWithoutLayers
             if !missing.isEmpty {
                 Divider()
@@ -278,6 +304,19 @@ struct ParameterFormView: View {
                     Text(layer.displayName)
                         .font(.headline)
                     Text("est. \(formatDuration(layer.totalTime)) · \(layer.moves.count) moves")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if sectionOverride.isEmpty, let ref = playback.selectedLayer?.customRef,
+                      let layer = model.customLayers.first(where: { $0.id == ref.id }) {
+                Circle()
+                    .fill(LayerKind.custom(ref).color)
+                    .frame(width: 11, height: 11)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(layer.name)
+                        .font(.headline)
+                    Text(layer.shapes.isEmpty ? "Empty — draw with the tools above the preview"
+                         : "\(layer.shapes.count) shape\(layer.shapes.count == 1 ? "" : "s") · generating…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -327,7 +366,28 @@ struct ParameterFormView: View {
             case .cutout: cutoutSections
             case .mask: maskSections
             case .silk: silkSections
+            case .custom: customSections
             case .setup: setupSections
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var customSections: some View {
+        if sectionOverride.isEmpty, let ref = playback.selectedLayer?.customRef {
+            CustomLayerSections(model: model, editor: model.editor, layerID: ref.id,
+                                openLibrary: { openWindow(id: "tools") })
+        } else {
+            Section {
+                Button {
+                    model.addCustomLayer()
+                } label: {
+                    Label("New Custom Layer", systemImage: "plus")
+                }
+            } header: {
+                sectionHeader(.custom)
+            } footer: {
+                Text("Draw lines, rectangles, circles and text on a layer of your own and machine them with a tool you choose.")
             }
         }
     }
@@ -899,20 +959,15 @@ struct ParameterFormView: View {
 
     /// A read-only value worked out from other fields.
     private func derivedRow(_ label: String, _ value: String?, help: String) -> some View {
-        LabeledContent(label) {
-            Text(value ?? "—")
-                .font(.body.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-        .help(help)
+        ParamRowLayout(label) { ParamReadout(value: value ?? "—", unit: "") }
+            .help(help)
     }
 
     private func effectiveDiameterRow(_ diameter: Double?) -> some View {
         let units = UnitSystem(rawValue: unitRaw) ?? .metric
-        return LabeledContent("Width at depth") {
-            Text(diameter.map { "\(units.length($0, decimals: units.lengthDecimals + 1)) \(units.lengthSymbol)" } ?? "—")
-                .font(.body.monospacedDigit())
-                .foregroundStyle(.secondary)
+        return ParamRowLayout("Width at depth") {
+            ParamReadout(value: diameter.map { units.length($0, decimals: units.lengthDecimals + 1) } ?? "—",
+                         unit: units.lengthSymbol)
         }
         .help("What the V-bit actually cuts at this depth: tip + 2 × |depth| × tan(angle ÷ 2). This is the diameter pcb2gcode is given.")
     }
@@ -1120,6 +1175,64 @@ private struct FileRow: View {
     }
 }
 
+/// The two columns every numeric row shares, so numbers and units line up
+/// down the whole sidebar whether a row is a field or a read-only value.
+enum ParamColumns {
+    static let value: CGFloat = 68
+    static let unit: CGFloat = 44
+    static let spacing: CGFloat = 5
+}
+
+/// One sidebar row: the label on the left, the value (and unit) columns on
+/// the right, all on one text baseline.
+struct ParamRowLayout<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ label: String, @ViewBuilder content: @escaping () -> Content) {
+        self.label = label
+        self.content = content
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: ParamColumns.spacing) {
+            Text(label)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            content()
+        }
+    }
+}
+
+/// The unit column.
+struct ParamUnit: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(width: ParamColumns.unit, alignment: .leading)
+    }
+}
+
+/// A read-only value in the same columns as the editable fields.
+struct ParamReadout: View {
+    let value: String
+    let unit: String
+
+    var body: some View {
+        Text(value)
+            .font(.body.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(width: ParamColumns.value, alignment: .trailing)
+        ParamUnit(unit)
+    }
+}
+
 /// What a parameter measures — decides the unit suffix and whether the value
 /// is converted for display.
 enum ParamKind {
@@ -1186,19 +1299,14 @@ struct ParamRow: View {
     }
 
     var body: some View {
-        LabeledContent(label) {
-            HStack(spacing: 5) {
-                TextField("", text: $text)
-                    .textFieldStyle(.plain)
-                    .multilineTextAlignment(.trailing)
-                    .font(.body.monospacedDigit())
-                    .frame(width: 68)
-                    .focused($focused)
-                Text(unitLabel)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 52, alignment: .leading)
-            }
+        ParamRowLayout(label) {
+            TextField("", text: $text)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.trailing)
+                .font(.body.monospacedDigit())
+                .frame(width: ParamColumns.value)
+                .focused($focused)
+            ParamUnit(unitLabel)
         }
         .help(help)
         .onAppear { text = display(value) }
