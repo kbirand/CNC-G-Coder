@@ -74,6 +74,8 @@ struct SideViewCanvas: View {
             add("zbridge", p.zBridge)
         case .drill:
             add("zdrill", p.zDrill)
+        case .millDrill:
+            add("zmill", p.holeMillDepth)
         case .maskTop, .maskBottom:
             add("etch", p.maskDepth)
         case .silkTop, .silkBottom:
@@ -143,28 +145,13 @@ struct SideViewCanvas: View {
     /// Display-only un-mirroring of back-side programs (matches the top view).
     private var isFlipped: Bool {
         guard flipBackView, let selected = playback.selectedLayer else { return false }
-        return selected == .back || selected == .maskBottom
+        return selected.isBackSide
     }
 
-    /// The reflection axes that map back-side frames onto the front (matches
-    /// the top view): project-rectangle center with normalized origins,
-    /// configured mirror axis with raw frames.
-    private var flipAxes: (x: Double, y: Double) {
-        if let size = preview.document?.projectSize {
-            return (Double(size.width) / 2, Double(size.height) / 2)
-        }
-        let axis = preview.document?.mirrorAxis ?? 0
-        return (axis, axis)
-    }
-
+    /// Back-side coordinates onto the front frame, exactly as the top view does.
     private func reflected(_ point: CGPoint) -> CGPoint {
-        guard isFlipped else { return point }
-        let axes = flipAxes
-        if preview.document?.mirrorYAxis == true {
-            return CGPoint(x: point.x, y: 2 * axes.y - point.y)
-        } else {
-            return CGPoint(x: 2 * axes.x - point.x, y: point.y)
-        }
+        guard isFlipped, let document = preview.document else { return point }
+        return point.applying(document.backToFront)
     }
 
     /// Maps a move into side-view "domain space" (horizontal value, warped z).
@@ -185,13 +172,8 @@ struct SideViewCanvas: View {
 
     private func bounds(of layer: ParsedLayer) -> CGRect? {
         guard let b = layer.allBounds else { return nil }
-        guard isFlipped else { return b }
-        let axes = flipAxes
-        if preview.document?.mirrorYAxis == true {
-            return CGRect(x: b.minX, y: 2 * axes.y - b.maxY, width: b.width, height: b.height)
-        } else {
-            return CGRect(x: 2 * axes.x - b.maxX, y: b.minY, width: b.width, height: b.height)
-        }
+        guard isFlipped, let document = preview.document else { return b }
+        return b.applying(document.backToFront)
     }
 
     private func viewTransform(domains: (x: ClosedRange<Double>, z: ClosedRange<Double>), size: CGSize) -> CGAffineTransform {

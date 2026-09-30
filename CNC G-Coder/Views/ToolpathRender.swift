@@ -78,7 +78,7 @@ extension LayerKind {
         case .front: .blue
         case .back: .green
         case .outline: .orange
-        case .drill(let index, _):
+        case .drill(let index, _), .millDrill(let index, _):
             [Color.purple, .pink, .teal, .indigo][index % 4]
         case .maskTop: .cyan
         case .maskBottom: .brown

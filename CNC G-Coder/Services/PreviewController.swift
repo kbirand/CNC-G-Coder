@@ -10,6 +10,7 @@ nonisolated enum SettingsKeys {
     static let refreshMode = "previewRefreshMode"
     static let debounceSeconds = "previewDebounceSeconds"
     static let unitSystem = "unitSystem"
+    static let snapToGrid = "previewSnapToGrid"
 }
 
 /// Temp-directory layout for preview runs.
@@ -40,7 +41,20 @@ final class PreviewController: ObservableObject {
         case failed(String)
     }
 
+    /// Where a running preview generation is, for the progress shown on the canvas.
+    struct RunProgress: Equatable {
+        var step: Int
+        var total: Int
+        var label: String
+        var fraction: Double { total > 0 ? min(1, Double(step) / Double(total)) : 0 }
+    }
+
     @Published private(set) var phase: Phase = .idle
+    /// Set while a run is in progress; nil otherwise.
+    @Published private(set) var progress: RunProgress?
+    /// Jobs of the current run that are in flight, by id → label.
+    private var running: [Int: String] = [:]
+    private var finishedSteps = 0
     @Published private(set) var document: PreviewDocument?
     @Published private(set) var lastRenderedSignature: String?
     /// Signature of the most recently *scheduled* run (debounced or running).
@@ -144,7 +158,31 @@ final class PreviewController: ObservableObject {
             return
         }
 
-        let batch = await Pcb2GcodeService.runBatch(pcb2gcode: pcb2gcode, params: snapshot, files: files, outputDir: runDir)
+        // One more step than the batch reports: reading the programs back.
+        let total = Pcb2GcodeService.stepCount(snapshot, files: files) + 1
+        progress = RunProgress(step: 0, total: total, label: "Starting pcb2gcode")
+        defer { progress = nil }
+        // Unchanged layers come straight from the cache; the rest run in parallel.
+        running = [:]
+        finishedSteps = 0
+        let batch = await Pcb2GcodeService.runBatch(
+            pcb2gcode: pcb2gcode, params: snapshot, files: files, outputDir: runDir,
+            cache: Pcb2GcodeService.previewCache,
+            onStep: { event, _ in
+                Task { @MainActor [weak self] in
+                    // A late report from a cancelled run must not revive the bar.
+                    guard let self, self.progress != nil else { return }
+                    switch event {
+                    case .started(let id, let label): self.running[id] = label
+                    case .finished(let id):
+                        self.running[id] = nil
+                        self.finishedSteps += 1
+                    }
+                    let label = self.running.sorted { $0.key < $1.key }.map(\.value).joined(separator: " · ")
+                    self.progress = RunProgress(step: self.finishedSteps, total: total,
+                                                label: label.isEmpty ? "Finishing" : label)
+                }
+            })
 
         if Task.isCancelled {
             try? FileManager.default.removeItem(at: runDir)
@@ -158,6 +196,7 @@ final class PreviewController: ObservableObject {
         }
 
         // Parse the generated .ngc files off the main actor.
+        progress = RunProgress(step: total - 1, total: total, label: "Reading toolpaths")
         let layers = await GCodeParser.parseLayers(batch.outputs)
 
         if Task.isCancelled {
@@ -181,7 +220,7 @@ final class PreviewController: ObservableObject {
             bounds: bounds.isNull ? .zero : bounds,
             tempDir: runDir,
             token: UUID(),
-            projectSize: batch.projectSize,
+            frame: batch.frame,
             mirrorAxis: Double(snapshot.mirrorAxis) ?? 0,
             mirrorYAxis: snapshot.mirrorYAxis
         )
@@ -196,6 +235,18 @@ final class PreviewController: ObservableObject {
         if let previousTemp {
             try? FileManager.default.removeItem(at: previousTemp)
         }
+    }
+
+    /// Drops the current preview (new project, or no inputs left).
+    func clear() {
+        debounceTask?.cancel()
+        runTask?.cancel()
+        progress = nil
+        if let temp = document?.tempDir { try? FileManager.default.removeItem(at: temp) }
+        document = nil
+        lastRenderedSignature = nil
+        lastRequestedSignature = nil
+        phase = .idle
     }
 
     /// Shows an externally generated G-code file (e.g. the parameter test

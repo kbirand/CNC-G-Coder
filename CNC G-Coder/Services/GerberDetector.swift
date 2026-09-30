@@ -6,15 +6,35 @@ import Foundation
 nonisolated enum GerberDetector {
 
     static func detect(in folder: URL) -> DetectedFiles {
-        var detected = DetectedFiles()
-
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: folder,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) else {
-            return detected
+            return DetectedFiles()
         }
+        return detect(files: files)
+    }
+
+    /// Best guess at what a single imported file is: by name first (the same
+    /// rules as folder detection), then by content — Excellon drill files
+    /// start with an M48 header whatever they are called.
+    static func guessSlot(for url: URL) -> LayerSlot? {
+        let detected = detect(files: [url])
+        if !detected.drills.isEmpty || isExcellon(url) { return .drill }
+        return LayerSlot.allCases.first { $0 != .drill && detected[$0] != nil }
+    }
+
+    static func isExcellon(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let head = String(decoding: (try? handle.read(upToCount: 512)) ?? Data(), as: UTF8.self)
+        return head.split(whereSeparator: \.isNewline).prefix(5)
+            .contains { $0.trimmingCharacters(in: .whitespaces).uppercased() == "M48" }
+    }
+
+    static func detect(files: [URL]) -> DetectedFiles {
+        var detected = DetectedFiles()
 
         func score(_ name: String, preferred: [String]) -> Int {
             let lower = name.lowercased()
@@ -82,7 +102,7 @@ nonisolated enum GerberDetector {
         detected.bottomSilk = best(bottomSilkCandidates, preferred: ["gerber_bottomsilkscreenlayer", "bottomsilkscreen", "bottomsilk", "gbo"])
 
         detected.drills = gerbers
-            .filter { $0.pathExtension.lowercased() == "drl" }
+            .filter { ["drl", "xln", "exc", "drd"].contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 
         return detected

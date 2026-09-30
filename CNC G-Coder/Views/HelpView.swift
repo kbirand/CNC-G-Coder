@@ -34,8 +34,14 @@ struct HelpView: View {
                 Verification: mill a test board (File → Generate Test Board…) and measure the 0.2 mm test trace. If it comes out ~0.13 mm with a 60° V-bit entered as 0.1, your effective diameter is ~0.07 mm larger than entered — fix the parameter, not the design.
                 """)
 
+                section("Tool library", """
+                File → Tool Library… (⇧⌘L) holds every bit you own with its cutting data: shape (straight, ball, V-bit), what it is used for, diameter or tip + angle, depth, depth per pass (drills: peck), feeds, spindle, overlap, and for drills the range of hole sizes it may drill. Import FlatCAM… reads a FlatCAM Tools Database export; re-importing updates tools with the same name.
+
+                The Tool menu at the top of each settings group copies a tool's values into that layer — the fields stay editable. "Edited" means they no longer match the tool (click to restore); "Custom" means values entered by hand. V-bits: choose Bit → V-bit and enter tip and angle; the width at depth is worked out and follows the cut depth.
+                """)
+
                 section("Parameters — copper isolation", """
-                Isolation width is the total copper cleared around each trace; passes overlap 50%, so time grows almost linearly with it. Cut depth only needs to pass the ~0.035 mm copper foil (−0.05…−0.08 mm typical); deeper cutting widens V-bit kerf and thins traces.
+                Isolation width is the total copper cleared around each trace; passes overlap by Pass overlap (default 50%), so time grows almost linearly with it. Depth per pass splits the cut into several shallower passes (0 = one pass). Cut depth only needs to pass the ~0.035 mm copper foil (−0.05…−0.08 mm typical); deeper cutting widens V-bit kerf and thins traces.
 
                 Important: traces are never cut into — the first pass is offset outward so the cutter just grazes the trace edge. Isolation eats surrounding waste copper only.
                 """)
@@ -44,10 +50,14 @@ struct HelpView: View {
                 Depths for drills and cutout are board thickness + ~0.2 mm into the spoilboard (1.6 mm stock → −1.8). The cutout runs multiple laps of Pass depth each; machining time = laps × perimeter ÷ feed.
 
                 Bridges: on passes deeper than Bridge Z, the cutter lifts and leaves tabs of material (white in the preview) so the board can't break loose on the final lap. Tab thickness = board bottom − Bridge Z. After machining, snap the board out and file the tabs flush.
+
+                Peck depth drills in pecks, clearing chips between them (0 = one stroke). Bits on hand: every hole inside a checked bit's range is drilled with that bit, so a job needs only the bits you own; holes no bit covers keep their designed size and the Log names them. Hole milling: turn on Mill large holes and holes from the given size up are cut in circles, spiralling down, with their own end mill (e.g. a 2 mm corn bit — its own tool, depth, pass depth, feeds, spindle and dwell) into a separate "… milled" program. The bit must be smaller than the holes it mills.
                 """)
 
                 section("Parameters — safety heights & plunge clearance", """
                 Safe Z is the travel height between cuts — it must clear clamps and board warp. Plunge clearance makes vertical moves cross the air at rapid speed: descents rapid down to it and plunge at the Z feed only from there; retracts feed up to it and rapid the rest. This often halves a program's time — pcb2gcode alone feeds the entire descent from Safe Z, and drill retracts come up at feed too. 0.2–0.5 mm is typical; it must clear board warp; 0 disables. The bit always enters and leaves the material at the programmed feed.
+
+                Machine setup also holds Milling direction (Any / Climb / Conventional, for every milling program). Spindle dwell is set per layer, next to its spindle speed: the pause after the spindle starts and stops, written as G4 P in seconds as GRBL and LinuxCNC expect (pcb2gcode itself writes milliseconds; the app converts). 0 = no pause.
                 """)
 
                 section("Parameters — solder mask etch", """
@@ -87,7 +97,11 @@ struct HelpView: View {
                 """)
 
                 section("Machine zeroing & double-sided work", """
-                With \"Zero project at X0/Y0\" on, every program shares one origin per side: zero X/Y once at the project corner for all front-side programs (copper, drills, outline, top mask), then once more after flipping the board for the back-side programs — copper, drills and masks stay registered. Zero Z on the board surface.
+                Machine setup → Origin → \"X0 Y0 at\" decides where the machine origin is: a corner or the centre of the project (as the machine sees each side, so after flipping you touch off at the same fixture corner), a custom point in design coordinates (the same physical spot on both sides — e.g. a registration hole), or the design's own origin (no zeroing). The view marks X0 Y0 with a ringed crosshair and red X / green Y arrows. To move it, drag the marker, or use Set Origin in View (Machine setup) or the scope button and click the spot — both snap to the project's corners, centre and drill holes, and with Snap to Grid on (View Options, or View → Snap to Grid, ⌘') to the grid shown in the view.
+
+                To save a single program, select its layer and use CNC export → Export <name>.ngc… in the sidebar: it writes exactly the previewed G-code.
+
+                Zero X/Y at the origin once for all front-side programs (copper, drills, outline, top mask), then once more after flipping the board for the back-side programs — copper, drills and masks stay registered. Zero Z on the board surface.
 
                 Choose the flip direction with \"Board flips\" to match how you physically turn the board, and verify with \"Un-mirror Back Side\": flipped back copper must sit exactly over the front. The app intentionally generates no probing/height-map G-code — use your sender's autolevel (e.g. UGS AutoLeveler) on the isolation programs.
                 """)

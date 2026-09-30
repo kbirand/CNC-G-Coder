@@ -7,6 +7,8 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
     case back
     case outline
     case drill(index: Int, name: String)
+    /// Holes too large for any bit on hand, milled as helices (same drill file).
+    case millDrill(index: Int, name: String)
     case maskTop
     case maskBottom
     case silkTop
@@ -19,6 +21,7 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         case .back: "Back copper"
         case .outline: "Outline"
         case .drill(_, let name): name
+        case .millDrill(_, let name): name + " milled"
         case .maskTop: "Top mask etch"
         case .maskBottom: "Bottom mask etch"
         case .silkTop: "Top silkscreen"
@@ -56,7 +59,8 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         case .front: 0
         case .back: 1
         case .outline: 2
-        case .drill(let index, _): 3 + index
+        case .drill(let index, _): 3 + 2 * index
+        case .millDrill(let index, _): 4 + 2 * index   // right after its drill program
         case .maskTop: 1000       // mask etching happens late in the workflow
         case .maskBottom: 1001
         case .silkTop: 1100       // legend last of all, on top of the cured mask
@@ -119,11 +123,10 @@ nonisolated struct PreviewDocument: Sendable {
     var bounds: CGRect        // union of cut bounds (fallback: all bounds), mm
     var tempDir: URL
     var token: UUID           // identity for view-side caches
-    /// Project extent (mm) when origins were normalized (zeroing on): every
-    /// program shares one origin per side and the back frame is the mirror
-    /// image of the front frame across this rectangle. nil = raw pcb2gcode
-    /// frames (zeroing off, or externally loaded G-code).
-    var projectSize: CGSize? = nil
+    /// Where X0/Y0 was put when origins were normalized (zeroing on). nil =
+    /// raw pcb2gcode frames (zeroing off, or externally loaded G-code).
+    var frame: ProjectFrame? = nil
+    var projectSize: CGSize? { frame?.rect.size }
     /// The mirror settings these programs were generated with. Views must use
     /// THESE, not the live parameters: editing the mirror axis re-renders the
     /// canvas long before pcb2gcode has produced matching geometry, and
@@ -131,4 +134,57 @@ nonisolated struct PreviewDocument: Sendable {
     /// the canvas until the run finishes.
     var mirrorAxis: Double = 0
     var mirrorYAxis: Bool = false
+}
+
+/// How the programs were zeroed. Every program shares one origin per board
+/// side; the back side's programs are mirrored, so its origin is given in its
+/// own (mirrored) view.
+nonisolated struct ProjectFrame: Sendable, Equatable {
+    /// Extent of all programs in the design (Gerber) frame, front side.
+    var rect: CGRect
+    /// X0/Y0 of the front programs, from the project's lower-left corner.
+    var frontOrigin: CGPoint
+    /// X0/Y0 of the back programs, from the lower-left corner of the project
+    /// as the machine sees it after the flip.
+    var backOrigin: CGPoint
+    var mirrorYAxis: Bool
+
+    /// Maps back-side program coordinates onto the front programs' frame —
+    /// the display-only "un-mirror" that overlays the two sides.
+    var backToFront: CGAffineTransform {
+        let w = rect.width, h = rect.height
+        let fo = frontOrigin, bo = backOrigin
+        if mirrorYAxis {
+            return CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: bo.x - fo.x, ty: h - bo.y - fo.y)
+        }
+        return CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: w - bo.x - fo.x, ty: bo.y - fo.y)
+    }
+
+    /// A front-program point in design (Gerber) coordinates.
+    func designPoint(fromFront point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x + rect.minX + frontOrigin.x, y: point.y + rect.minY + frontOrigin.y)
+    }
+}
+
+extension PreviewDocument {
+    /// Back-side coordinates → front-side coordinates, for overlaying.
+    var backToFront: CGAffineTransform {
+        if let frame { return frame.backToFront }
+        let axis = CGFloat(mirrorAxis)
+        return mirrorYAxis
+            ? CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 2 * axis)
+            : CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 2 * axis, ty: 0)
+    }
+
+    /// A front-program point in design (Gerber) coordinates.
+    func designPoint(fromFront point: CGPoint) -> CGPoint {
+        frame?.designPoint(fromFront: point) ?? point
+    }
+}
+
+extension LayerKind {
+    /// Programs machined after flipping the board (mirrored coordinates).
+    nonisolated var isBackSide: Bool {
+        self == .back || self == .maskBottom || self == .silkBottom
+    }
 }

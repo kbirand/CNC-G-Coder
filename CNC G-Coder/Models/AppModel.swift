@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import Combine
 
 /// Root application model: project folder, detected files, log, generation.
@@ -7,6 +8,7 @@ import Combine
 final class AppModel: ObservableObject {
 
     let parameters = ParametersStore()
+    let tools = ToolLibrary()
     let preview = PreviewController()
     /// Playback/selection state is app-wide: the layer picker lives in the left
     /// panel (it also decides which settings are shown) while the transport bar
@@ -14,7 +16,14 @@ final class AppModel: ObservableObject {
     let player = PlaybackState()
 
     @Published var projectFolder: URL?
-    @Published var detectedFiles = DetectedFiles()
+    @Published var detectedFiles = DetectedFiles() {
+        didSet {
+            guard detectedFiles != oldValue else { return }
+            drillHoleSizes = Dictionary(uniqueKeysWithValues: detectedFiles.drills.map { ($0, ExcellonReader.holeSizes(in: $0)) })
+        }
+    }
+    /// Hole diameters (mm) declared by each detected drill file.
+    @Published private(set) var drillHoleSizes: [URL: [Double]] = [:]
     @Published var log = "Ready.\n"
     @Published var isGenerating = false
     @Published var showTestBoardDialog = false
@@ -36,6 +45,24 @@ final class AppModel: ObservableObject {
     /// session, cleared when the project changes).
     @Published var chosenOutputDir: URL?
 
+    // MARK: Project file (see AppModel+Project.swift)
+
+    /// The .cncproj this session was opened from or saved to; nil = untitled.
+    @Published var projectURL: URL?
+    /// Project state at the last open/save, for the "Edited" mark.
+    @Published var savedProjectState: String?
+    @Published var recentProjects: [URL] = []
+    /// Files picked with Import Layer…, waiting for their roles to be confirmed.
+    @Published var pendingImports: [PendingImport] = []
+    /// An untitled project whose layers were imported, replaced or removed by
+    /// hand — the only untitled state worth asking about before discarding.
+    @Published var manualLayerEdits = false
+    /// Unpacked project files → the file each was originally packed from.
+    var layerOrigins: [URL: URL] = [:]
+
+    /// The app's one model, for AppKit callbacks outside SwiftUI (quit).
+    static weak var current: AppModel?
+
     let pcb2gcodeURL = ToolLocator.pcb2gcode
     let gerbvURL = ToolLocator.gerbv
 
@@ -49,8 +76,10 @@ final class AppModel: ObservableObject {
     }
 
     init() {
+        Self.current = self
         preview.app = self
         player.preview = preview
+        parameters.library = tools
         // objectWillChange fires before the new value lands; defer one runloop
         // turn so the preview controller reads the updated signature.
         parameters.objectWillChange
@@ -58,6 +87,14 @@ final class AppModel: ObservableObject {
                 DispatchQueue.main.async { self?.preview.parametersDidChange() }
             }
             .store(in: &cancellables)
+        // Drill bits on hand resolve through the library: editing one must
+        // regenerate like any parameter edit (the signature includes them).
+        tools.objectWillChange
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.preview.parametersDidChange() }
+            }
+            .store(in: &cancellables)
+        loadRecentProjects()
         Task { await startup() }
     }
 
@@ -67,6 +104,7 @@ final class AppModel: ObservableObject {
 
     private func startup() async {
         PreviewPaths.cleanRoot()
+        try? FileManager.default.removeItem(at: ProjectDocument.workingRoot)
         guard let pcb2gcodeURL else {
             appendLog("WARNING: pcb2gcode not found. Install with: brew install pcb2gcode\n")
             return
@@ -87,10 +125,40 @@ final class AppModel: ObservableObject {
             if UserDefaults.standard.bool(forKey: "debugGenerateDialog") { showGenerateDialog = true }
             let target: GenerateTarget? = UserDefaults.standard.bool(forKey: "debugGenerate") ? .cnc
                 : (UserDefaults.standard.bool(forKey: "debugGenerateLaser") ? .laser : nil)
+            // `-debugSaveProject /path/x.cncproj` saves it straight away.
+            if let path = UserDefaults.standard.string(forKey: "debugSaveProject") {
+                saveProject(to: URL(fileURLWithPath: path))
+            }
             if let target, let projectFolder {
                 startGeneration(target: target,
                                 destination: projectFolder.appendingPathComponent(target.folderName, isDirectory: true))
             }
+        }
+        // Dev hook: `-debugImport /a.gbr,/b.drl` shows the Import Layers sheet for those files.
+        if let list = UserDefaults.standard.string(forKey: "debugImport") {
+            pendingImports = list.split(separator: ",").map { URL(fileURLWithPath: String($0)) }
+                .map { PendingImport(url: $0, slot: GerberDetector.guessSlot(for: $0)) }
+        }
+        // Dev hook: `-debugRefreshAfter 12` regenerates the preview after that
+        // many seconds (to watch an update over an existing preview); with
+        // `-debugEdit key=value` it edits that parameter instead, as a user would.
+        let refreshDelay = UserDefaults.standard.double(forKey: "debugRefreshAfter")
+        if refreshDelay > 0 {
+            let edit = UserDefaults.standard.string(forKey: "debugEdit")?.split(separator: "=", maxSplits: 1).map(String.init)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(refreshDelay))
+                guard let self else { return }
+                if let edit, edit.count == 2 {
+                    self.appendLog("\n[debug] edit \(edit[0]) = \(edit[1])\n")
+                    self.parameters.apply([edit[0]: edit[1]])
+                } else {
+                    self.preview.refreshNow()
+                }
+            }
+        }
+        // Dev hook: `-debugOpenProject /path/x.cncproj` opens a saved project.
+        if let path = UserDefaults.standard.string(forKey: "debugOpenProject") {
+            openProject(at: URL(fileURLWithPath: path), confirmed: true)
         }
         // Dev hook: `-debugTestBoard /path/out.ngc` generates a default test
         // board there and shows it in the preview.
@@ -113,18 +181,14 @@ final class AppModel: ObservableObject {
     // MARK: - Project folder
 
     func chooseProjectFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        selectProjectFolder(url)
+        openGerberFolder()
     }
 
     func selectProjectFolder(_ url: URL) {
         projectFolder = url
         chosenOutputDir = nil   // a new project must never inherit the old destination
+        manualLayerEdits = false
+        layerOrigins = [:]
         detectedFiles = GerberDetector.detect(in: url)
 
         appendLog("\nSelected project folder: \(url.path)\n")
@@ -220,8 +284,8 @@ final class AppModel: ObservableObject {
 
             let batch = await Pcb2GcodeService.runBatch(
                 pcb2gcode: pcb2gcodeURL, params: snapshot, files: files, outputDir: workDir,
-                onStep: { index, total, label in
-                    Task { @MainActor [weak self] in self?.reportStep(index: index, total: total, label: label) }
+                onStep: { event, total in
+                    Task { @MainActor [weak self] in self?.reportStep(event, total: total) }
                 })
             self.appendLog(batch.log)
 
@@ -248,8 +312,8 @@ final class AppModel: ObservableObject {
                 self.finishGeneration(summary: "\(count) program\(count == 1 ? "" : "s") written.", failed: false)
 
             case .laser:
-                self.reportStep(index: self.generationTotal, total: self.generationTotal,
-                                label: "Rendering \(options.format.title) artwork")
+                self.reportStep(.started(id: self.generationTotal, label: "Rendering \(options.format.title) artwork"),
+                                total: self.generationTotal)
                 let layers = await GCodeParser.parseLayers(batch.outputs)
                 var bounds = CGRect.null
                 for layer in layers {
@@ -260,7 +324,7 @@ final class AppModel: ObservableObject {
                     bounds: bounds.isNull ? .zero : bounds,
                     tempDir: workDir,
                     token: UUID(),
-                    projectSize: batch.projectSize,
+                    frame: batch.frame,
                     mirrorAxis: Double(snapshot.mirrorAxis) ?? 0,
                     mirrorYAxis: snapshot.mirrorYAxis
                 )
@@ -287,10 +351,16 @@ final class AppModel: ObservableObject {
         generateTask?.cancel()
     }
 
-    private func reportStep(index: Int, total: Int, label: String) {
-        for i in generationSteps.indices { generationSteps[i].isDone = true }
+    /// Jobs run in parallel: each appears when it starts and is ticked off
+    /// when it finishes, in whatever order that happens.
+    private func reportStep(_ event: Pcb2GcodeService.StepEvent, total: Int) {
         generationTotal = max(generationTotal, total)
-        generationSteps.append(GenerationStep(id: index, label: label))
+        switch event {
+        case .started(let id, let label):
+            generationSteps.append(GenerationStep(id: id, label: label))
+        case .finished(let id):
+            if let i = generationSteps.firstIndex(where: { $0.id == id }) { generationSteps[i].isDone = true }
+        }
     }
 
     private func finishGeneration(summary: String, failed: Bool) {
@@ -299,6 +369,40 @@ final class AppModel: ObservableObject {
         generationFailed = failed
         isGenerating = false
         appendLog("\n\(summary)\n")
+    }
+
+    // MARK: - Program export (CNC, per layer)
+
+    /// Saves one layer's program exactly as the preview shows it — the same
+    /// pcb2gcode run, post-processing and origin as Generate would write.
+    func exportProgram(layer: LayerKind) {
+        guard let document = preview.document,
+              let parsed = document.layers.first(where: { $0.id == layer }) else {
+            appendLog("\nERROR: \(layer.displayName) is not in the current preview; refresh first.\n")
+            return
+        }
+        guard !preview.isStale else {
+            appendLog("\nERROR: the preview is out of date — refresh it before exporting \(layer.displayName).\n")
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = layer.fileSlug + ".ngc"
+        panel.allowedContentTypes = [UTType(filenameExtension: "ngc") ?? .plainText]
+        panel.allowsOtherFileTypes = true
+        panel.canCreateDirectories = true
+        panel.directoryURL = chosenOutputDir ?? projectFolder
+        panel.message = "Save the \(layer.displayName) program for the CNC."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let fm = FileManager.default
+            if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
+            try fm.copyItem(at: parsed.fileURL, to: url)
+            appendLog("\nExported \(layer.displayName) → \(url.path)\n")
+        } catch {
+            appendLog("\nERROR exporting \(layer.displayName): \(error.localizedDescription)\n")
+        }
     }
 
     // MARK: - Layer artwork export (laser)

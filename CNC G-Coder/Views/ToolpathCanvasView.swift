@@ -37,6 +37,8 @@ struct ToolpathCanvasView: View {
     @AppStorage("previewGuidesX") private var guidesXRaw = ""
     @AppStorage("previewGuidesY") private var guidesYRaw = ""
     @AppStorage("previewShowGuides") private var showGuides = true
+    /// Moving the origin lands on grid lines (View Options / View menu).
+    @AppStorage(SettingsKeys.snapToGrid) private var snapToGrid = false
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
     private var units: UnitSystem { UnitSystem(rawValue: unitRaw) ?? .metric }
@@ -56,6 +58,11 @@ struct ToolpathCanvasView: View {
     @State private var pan: CGSize = .zero
     @State private var lastMagnification: CGFloat = 1
     @State private var lastDrag: CGSize = .zero
+    /// Where the origin marker is being dragged to (nil when not dragging).
+    @State private var originDrag: OriginTarget?
+    /// A dropped origin, shown until the preview regenerates around it (the
+    /// document it was dropped on is remembered; any newer one supersedes it).
+    @State private var pendingOrigin: (target: OriginTarget, token: UUID)?
 
     private final class CacheBox {
         var token: UUID?
@@ -75,20 +82,24 @@ struct ToolpathCanvasView: View {
         .gesture(dragGesture)
         .gesture(magnifyGesture)
         .onContinuousHover { phase in
-            guard showRulers else { hover = nil; return }
+            // Tracked even without rulers: the origin marker's grab cursor needs it.
             switch phase {
             case .active(let point): hover = point
             case .ended: hover = nil
             }
         }
         .onTapGesture(count: 2) { resetView() }
-        .onTapGesture { resignTextFieldFocus() }
+        .onTapGesture { location in
+            if playback.placingOrigin { placeOrigin(at: location) }
+            resignTextFieldFocus()
+        }
         // Zoom/pan intentionally survives layer switches; only overlay-mode
         // changes (different framing semantics) reset the view.
         .onChange(of: showAllLayers) { resetView() }
         .onChange(of: flipBackView) { resetView() }
         .overlay { scrollZoomCatcher }
         .overlay(alignment: .topTrailing) { zoomControls }
+        .overlay(alignment: .top) { originBanner }
         .overlay(alignment: .bottomLeading) {
             if preview.document == nil {
                 Text("No preview yet — choose a project folder, then Refresh.")
@@ -176,6 +187,7 @@ struct ToolpathCanvasView: View {
         drawToolMarker(&ctx, scale: scale)
 
         drawGuides(context, map: map)
+        drawOriginMarker(context, map: map)
         if showRulers {
             drawRulers(context, size: size, map: map, step: step)
         }
@@ -301,14 +313,6 @@ struct ToolpathCanvasView: View {
         if !axes.isEmpty {
             ctx.stroke(axes, with: .color(.gray.opacity(0.28)), lineWidth: 0.7 / scale)
         }
-
-        // Origin crosshair.
-        var origin = Path()
-        origin.move(to: CGPoint(x: -3, y: 0))
-        origin.addLine(to: CGPoint(x: 3, y: 0))
-        origin.move(to: CGPoint(x: 0, y: -3))
-        origin.addLine(to: CGPoint(x: 0, y: 3))
-        ctx.stroke(origin, with: .color(.gray.opacity(0.5)), lineWidth: 1 / scale)
     }
 
     private func drawToolMarker(_ ctx: inout GraphicsContext, scale: CGFloat) {
@@ -478,7 +482,7 @@ struct ToolpathCanvasView: View {
     /// Crosshair guides plus the cursor's machine coordinates, shown in the
     /// rulers — the quickest way to check where a feature really sits.
     private func drawHoverReadout(_ ctx: inout GraphicsContext, map: Mapping, step: CGFloat) {
-        guard let hover, map.plot.contains(hover) else { return }
+        guard showRulers, let hover, map.plot.contains(hover) else { return }
         let plot = map.plot
         let tint = Color.accentColor
 
@@ -547,6 +551,12 @@ struct ToolpathCanvasView: View {
     private func beginDrag(at start: CGPoint) -> DragMode {
         guard let map = mapping(in: canvasSize) else { return .pan }
         let plot = map.plot
+
+        // Grabbing the origin marker moves the origin.
+        if isOnOriginMarker(start, map: map) {
+            originDrag = originTarget(at: start, map: map)
+            return .origin
+        }
 
         // Pulling a fresh guide out of a ruler band.
         if showRulers, showGuides {
@@ -621,6 +631,9 @@ struct ToolpathCanvasView: View {
     /// Cursor feedback: a resize cursor over a guide, a crosshair over the
     /// rulers where a new guide can be pulled out.
     private var pointerStyle: PointerStyle? {
+        if originDrag != nil { return .grabActive }
+        if playback.placingOrigin { return .rectSelection }
+        if let hover, let map = mapping(in: canvasSize), isOnOriginMarker(hover, map: map) { return .grabIdle }
         guard showGuides, let hover, let map = mapping(in: canvasSize) else { return nil }
         if let drag = guide(at: hover, map: map) {
             return drag.axis == .vertical ? .columnResize : .rowResize
@@ -708,35 +721,12 @@ struct ToolpathCanvasView: View {
         doc.layers.first { $0.id == playback.selectedLayer } ?? doc.layers.first
     }
 
-    private func isBackSide(_ kind: LayerKind) -> Bool {
-        kind == .back || kind == .maskBottom || kind == .silkBottom
-    }
-
-    /// Back-side programs are mirrored; this reflection maps them back onto
-    /// the front frame for display. With normalized origins (zeroing on), both
-    /// sides span the same [0, W]×[0, H] project rectangle, so the back frame
-    /// is the mirror image across its center — exact registration. With raw
-    /// frames (zeroing off), the configured mirror axis is the exact inverse
-    /// (reflection is an involution: applying it twice is identity).
-    private var mirrorReflection: CGAffineTransform {
-        guard let document = preview.document else { return .identity }
-        if let size = document.projectSize {
-            if document.mirrorYAxis {
-                return CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height)
-            } else {
-                return CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: size.width, ty: 0)
-            }
-        }
-        let axis = CGFloat(document.mirrorAxis)
-        if document.mirrorYAxis {
-            return CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 2 * axis)
-        } else {
-            return CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 2 * axis, ty: 0)
-        }
-    }
-
+    /// Back-side programs are mirrored; "Un-mirror Back Side" maps them onto
+    /// the front frame for display (see ProjectFrame.backToFront), so the two
+    /// sides overlay in exact registration wherever the origin was put.
     private func displayTransform(for kind: LayerKind) -> CGAffineTransform? {
-        flipBackView && isBackSide(kind) ? mirrorReflection : nil
+        guard flipBackView, kind.isBackSide, let document = preview.document else { return nil }
+        return document.backToFront
     }
 
     private func displayBounds(for layer: ParsedLayer) -> CGRect? {
@@ -747,15 +737,212 @@ struct ToolpathCanvasView: View {
 
     /// The region the view frames: the selected layer's extent, or the union of
     /// all layers' (display-space) extents when overlaying.
+    /// The origin is always framed too (as in FlatCAM) once the programs are
+    /// zeroed; raw design frames can sit far from their origin, so not then.
     private func fitBounds(_ doc: PreviewDocument) -> CGRect {
-        if !showAllLayers, let layer = selectedLayer(in: doc), let bounds = displayBounds(for: layer) {
-            return bounds
+        var bounds = CGRect.null
+        if !showAllLayers, let layer = selectedLayer(in: doc), let own = displayBounds(for: layer) {
+            bounds = own
+        } else {
+            for layer in doc.layers {
+                if let own = displayBounds(for: layer) { bounds = bounds.union(own) }
+            }
         }
-        var union = CGRect.null
-        for layer in doc.layers {
-            if let bounds = displayBounds(for: layer) { union = union.union(bounds) }
+        if bounds.isNull { bounds = doc.bounds }
+        if doc.frame != nil {
+            let origin = displayedOrigin
+            bounds = bounds.union(CGRect(origin: origin, size: .zero))
         }
-        return union.isNull ? doc.bounds : union
+        return bounds
+    }
+
+    // MARK: - Origin
+
+    /// Where the displayed program's X0/Y0 sits in the drawing: the origin of
+    /// the selected program, carried through the un-mirror when a back-side
+    /// program is shown un-mirrored.
+    private var displayedOrigin: CGPoint {
+        guard let selected = playback.selectedLayer, let flip = displayTransform(for: selected) else { return .zero }
+        return CGPoint.zero.applying(flip)
+    }
+
+    /// FlatCAM-style origin marker: a ringed crosshair with X (red) and Y
+    /// (green) axis arrows, fixed on screen size so it reads at any zoom.
+    private func drawOriginMarker(_ context: GraphicsContext, map: Mapping) {
+        let world = markerWorld
+        let center = CGPoint(x: map.viewX(world.x), y: map.viewY(world.y))
+        guard map.plot.insetBy(dx: -30, dy: -30).contains(center) else { return }
+        var ctx = context
+        ctx.clip(to: Path(map.plot))
+
+        let arm: CGFloat = 30
+        func arrow(to end: CGPoint, head: (CGPoint, CGPoint), color: Color, label: String, labelAt: CGPoint) {
+            var shaft = Path()
+            shaft.move(to: center)
+            shaft.addLine(to: end)
+            ctx.stroke(shaft, with: .color(color), lineWidth: 1.5)
+            var tip = Path()
+            tip.move(to: end)
+            tip.addLine(to: head.0)
+            tip.addLine(to: head.1)
+            tip.closeSubpath()
+            ctx.fill(tip, with: .color(color))
+            ctx.draw(Text(label).font(.system(size: 10, weight: .bold)).foregroundStyle(color), at: labelAt)
+        }
+        let xEnd = CGPoint(x: center.x + arm, y: center.y)
+        arrow(to: xEnd, head: (CGPoint(x: xEnd.x - 6, y: xEnd.y - 3.5), CGPoint(x: xEnd.x - 6, y: xEnd.y + 3.5)),
+              color: .red, label: "X", labelAt: CGPoint(x: xEnd.x + 7, y: xEnd.y))
+        let yEnd = CGPoint(x: center.x, y: center.y - arm)
+        arrow(to: yEnd, head: (CGPoint(x: yEnd.x - 3.5, y: yEnd.y + 6), CGPoint(x: yEnd.x + 3.5, y: yEnd.y + 6)),
+              color: .green, label: "Y", labelAt: CGPoint(x: yEnd.x, y: yEnd.y - 8))
+
+        let r: CGFloat = 6
+        let ring = Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
+        ctx.fill(ring, with: .color(.black.opacity(0.35)))
+        ctx.stroke(ring, with: .color(.white), lineWidth: 1.5)
+        var cross = Path()
+        cross.move(to: CGPoint(x: center.x - r - 4, y: center.y))
+        cross.addLine(to: CGPoint(x: center.x + r + 4, y: center.y))
+        cross.move(to: CGPoint(x: center.x, y: center.y - r - 4))
+        cross.addLine(to: CGPoint(x: center.x, y: center.y + r + 4))
+        ctx.stroke(cross, with: .color(.white), lineWidth: 1)
+
+        let side = playback.selectedLayer.map { $0.isBackSide && !flipBackView } ?? false
+        let pending = pendingOrigin.map { $0.token == preview.document?.token } ?? false
+        let caption = originDrag.map { target -> String in
+            let units = UnitSystem(rawValue: unitRaw) ?? .metric
+            let offset = "X\(units.length(target.display.x)) Y\(units.length(target.display.y))"
+            return target.label.isEmpty ? "Drop at \(offset)" : "Drop: \(target.label) · \(offset)"
+        }
+            ?? (pending ? "Moving X0 Y0…" : (side ? "X0 Y0 · back" : "X0 Y0"))
+        ctx.draw(Text(caption)
+                    .font(.system(size: 9, design: .rounded).weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.85)),
+                 at: CGPoint(x: center.x - 8, y: center.y + 14), anchor: .topTrailing)
+    }
+
+    /// Snap distance when placing the origin, in points.
+    private static let originSnap: CGFloat = 10
+
+    /// A place the origin can be put: a project corner/centre (stored as that
+    /// mode) or any other point (stored as a custom design-coordinate point).
+    struct OriginTarget {
+        /// Where it sits in the drawing's current frame.
+        var display: CGPoint
+        var mode: String
+        var design: CGPoint?
+        /// What it snapped to, for the marker caption; empty = free point.
+        var label: String
+    }
+
+    /// Where the marker is drawn: mid-drag, just dropped, or the real origin.
+    private var markerWorld: CGPoint {
+        if let originDrag { return originDrag.display }
+        if let pendingOrigin, pendingOrigin.token == preview.document?.token { return pendingOrigin.target.display }
+        return displayedOrigin
+    }
+
+    /// The whole marker is a handle: the ring, both axis arrows and the caption.
+    private func isOnOriginMarker(_ location: CGPoint, map: Mapping) -> Bool {
+        guard preview.document != nil else { return false }
+        let o = markerWorld
+        let center = CGPoint(x: map.viewX(o.x), y: map.viewY(o.y))
+        let dx = location.x - center.x, dy = location.y - center.y
+        if hypot(dx, dy) <= 14 { return true }
+        if abs(dy) <= 7, dx >= 0, dx <= 44 { return true }       // X arrow and its label
+        if abs(dx) <= 7, dy <= 0, dy >= -44 { return true }      // Y arrow and its label
+        return dx >= -60 && dx <= 0 && dy >= 8 && dy <= 28     // caption
+    }
+
+    /// Resolves a view location to an origin target, snapping to the
+    /// project's corners and centre first, then to drill holes.
+    private func originTarget(at location: CGPoint, map: Mapping) -> OriginTarget? {
+        guard let doc = preview.document else { return nil }
+        let displayed = CGPoint(x: map.worldX(location.x), y: map.worldY(location.y))
+        let slop = Self.originSnap / map.scale
+        // A back program shown in its own (mirrored) frame, as the machine sees it after the flip.
+        let backFrame = playback.selectedLayer.map { $0.isBackSide && !flipBackView } ?? false
+
+        if let frame = doc.frame {
+            let o = backFrame ? frame.backOrigin : frame.frontOrigin
+            let r = CGRect(x: -o.x, y: -o.y, width: frame.rect.width, height: frame.rect.height)
+            let anchors: [(String, CGPoint, String)] = [
+                ("bottomLeft", CGPoint(x: r.minX, y: r.minY), "Lower-left corner"),
+                ("bottomRight", CGPoint(x: r.maxX, y: r.minY), "Lower-right corner"),
+                ("topLeft", CGPoint(x: r.minX, y: r.maxY), "Upper-left corner"),
+                ("topRight", CGPoint(x: r.maxX, y: r.maxY), "Upper-right corner"),
+                ("center", CGPoint(x: r.midX, y: r.midY), "Centre")
+            ]
+            if let hit = anchors.min(by: { hypot($0.1.x - displayed.x, $0.1.y - displayed.y)
+                                           < hypot($1.1.x - displayed.x, $1.1.y - displayed.y) }),
+               hypot(hit.1.x - displayed.x, hit.1.y - displayed.y) <= slop {
+                return OriginTarget(display: hit.1, mode: hit.0, design: nil, label: hit.2)
+            }
+        }
+
+        // Into the front programs' frame, where the drill holes are.
+        let toFront = backFrame ? doc.backToFront : .identity
+        let front = displayed.applying(toFront)
+        var best: (distance: CGFloat, hit: CGPoint)?
+        for layer in doc.layers where layer.id.isDrill {
+            for hit in layer.drillHits {
+                let d = hypot(hit.x - front.x, hit.y - front.y)
+                if d <= slop, d < (best?.distance ?? .infinity) { best = (d, hit) }
+            }
+        }
+        if let best {
+            return OriginTarget(display: best.hit.applying(toFront.inverted()), mode: "custom",
+                                design: doc.designPoint(fromFront: best.hit), label: "drill hole")
+        }
+
+        // The grid as drawn: lines every half ruler tick, counted from the
+        // current X0/Y0 — so the origin moves in whole grid steps.
+        var point = displayed
+        var label = ""
+        if snapToGrid {
+            let step = tickStep(scale: map.scale).mm / 2
+            point = CGPoint(x: (displayed.x / step).rounded() * step, y: (displayed.y / step).rounded() * step)
+            label = "grid"
+        }
+        return OriginTarget(display: point, mode: "custom",
+                            design: doc.designPoint(fromFront: point.applying(toFront)), label: label)
+    }
+
+    private func apply(_ target: OriginTarget) {
+        if let design = target.design {
+            func rounded(_ v: CGFloat) -> String { ParametersStore.format((Double(v) * 1000).rounded() / 1000) }
+            params.originX = rounded(design.x)
+            params.originY = rounded(design.y)
+        }
+        params.originMode = target.mode
+        params.zeroStart = true
+    }
+
+    /// "Set Origin" click: the origin goes where the view was clicked; the
+    /// preview regenerates around it.
+    private func placeOrigin(at location: CGPoint) {
+        playback.placingOrigin = false
+        guard let map = mapping(in: canvasSize), map.plot.contains(location),
+              let target = originTarget(at: location, map: map) else { return }
+        if let token = preview.document?.token { pendingOrigin = (target, token) }
+        apply(target)
+    }
+
+    @ViewBuilder
+    private var originBanner: some View {
+        if playback.placingOrigin {
+            HStack(spacing: 10) {
+                Image(systemName: "scope")
+                Text("Click to place X0 Y0 — snaps to corners, centre and drill holes")
+                Button("Cancel") { playback.placingOrigin = false }
+                    .buttonStyle(.borderless)
+            }
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .glassEffect()
+            .padding(.top, (showRulers ? Self.topGutter : 0) + 10)
+        }
     }
 
     private func drawRank(_ kind: LayerKind) -> Int {
@@ -767,7 +954,7 @@ struct ToolpathCanvasView: View {
         case .silkTop: 4
         case .back: 5
         case .front: 6
-        case .drill(let index, _): 7 + index
+        case .drill(let index, _), .millDrill(let index, _): 7 + index
         case .test: 100
         }
     }
@@ -805,7 +992,7 @@ struct ToolpathCanvasView: View {
 
     /// One drag gesture serves three jobs; which one is decided from where the
     /// drag started (a ruler band, an existing guide, or open canvas).
-    private enum DragMode { case pan, guide }
+    private enum DragMode { case pan, guide, origin }
 
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 1)
@@ -813,6 +1000,8 @@ struct ToolpathCanvasView: View {
                 if dragMode == nil { dragMode = beginDrag(at: value.startLocation) }
                 if dragMode == .guide {
                     updateGuide(to: value.location)
+                } else if dragMode == .origin {
+                    if let map = mapping(in: canvasSize) { originDrag = originTarget(at: value.location, map: map) }
                 } else {
                     pan = CGSize(width: pan.width + value.translation.width - lastDrag.width,
                                  height: pan.height + value.translation.height - lastDrag.height)
@@ -822,6 +1011,13 @@ struct ToolpathCanvasView: View {
             .onEnded { _ in
                 lastDrag = .zero
                 if dragMode == .guide { commitGuide() }
+                if dragMode == .origin {
+                    if let target = originDrag {
+                        if let token = preview.document?.token { pendingOrigin = (target, token) }
+                        apply(target)
+                    }
+                    originDrag = nil
+                }
                 dragMode = nil
             }
     }
@@ -844,6 +1040,9 @@ struct ToolpathCanvasView: View {
                 .help("Zoom out")
             Button { resetView() } label: { Image(systemName: "arrow.down.left.and.arrow.up.right") }
                 .help("Fit the selected program to the view (double-click does the same)")
+            Button { playback.placingOrigin.toggle() } label: { Image(systemName: "scope") }
+                .help("Set Origin: click a point in the view to make it X0 Y0 for every program. You can also drag the origin marker itself. Both snap to drill holes and to the project's corners and centre.")
+                .disabled(preview.document == nil)
         }
         .buttonStyle(.glass)
         .controlSize(.small)

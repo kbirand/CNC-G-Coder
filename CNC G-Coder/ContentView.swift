@@ -17,8 +17,15 @@ struct ContentView: View {
         } detail: {
             PreviewPane(model: model, preview: model.preview, playback: model.player)
         }
-        .navigationTitle("CNC G-Coder")
-        .navigationSubtitle(model.projectFolder?.lastPathComponent ?? "No project")
+        .navigationTitle(model.projectURL == nil ? "CNC G-Coder" : model.projectName)
+        .navigationSubtitle(windowSubtitle)
+        .modifier(ProjectDocumentProxy(url: model.projectURL))
+        .sheet(isPresented: Binding(
+            get: { !model.pendingImports.isEmpty },
+            set: { if !$0 { model.pendingImports = [] } }
+        )) {
+            ImportLayersSheet(model: model)
+        }
         .toolbar { toolbarContent }
         .sheet(isPresented: $model.showTestBoardDialog) {
             TestBoardDialog(model: model)
@@ -26,6 +33,13 @@ struct ContentView: View {
         .sheet(isPresented: $model.showGenerateDialog) {
             GenerateDialog(model: model)
         }
+    }
+
+    private var windowSubtitle: String {
+        let base = model.projectURL == nil
+            ? (model.projectFolder?.lastPathComponent ?? "No project")
+            : (model.projectFolder?.lastPathComponent ?? "")
+        return model.isProjectEdited ? base + " — Edited" : base
     }
 
     @ToolbarContentBuilder
@@ -92,6 +106,14 @@ struct ContentView: View {
             .disabled(model.pcb2gcodeURL == nil || !model.detectedFiles.hasAnything)
             .help("Choose what to produce — CNC G-code or laser artwork — where to put it, and watch it run.")
         }
+    }
+}
+
+/// The title-bar proxy icon for the open project file (none when untitled).
+private struct ProjectDocumentProxy: ViewModifier {
+    let url: URL?
+    func body(content: Content) -> some View {
+        if let url { content.navigationDocument(url) } else { content }
     }
 }
 

@@ -3,13 +3,14 @@ import Combine
 
 /// Which group of machining parameters the sidebar shows.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case isolation, drilling, cutout, mask, silk, setup
+    case isolation, drilling, holeMill, cutout, mask, silk, setup
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .isolation: "Copper isolation"
         case .drilling: "Drilling"
+        case .holeMill: "Hole milling"
         case .cutout: "Board cutout"
         case .mask: "Solder mask"
         case .silk: "Silkscreen"
@@ -21,6 +22,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .isolation: "pencil.tip"
         case .drilling: "smallcircle.filled.circle"
+        case .holeMill: "circle.dashed"
         case .cutout: "scissors"
         case .mask: "paintbrush.pointed.fill"
         case .silk: "textformat"
@@ -32,6 +34,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .isolation: .blue
         case .drilling: .purple
+        case .holeMill: .purple
         case .cutout: .orange
         case .mask: .cyan
         case .silk: .yellow
@@ -46,6 +49,7 @@ extension LayerKind {
         switch self {
         case .front, .back: .isolation
         case .drill: .drilling
+        case .millDrill: .holeMill
         case .outline: .cutout
         case .maskTop, .maskBottom: .mask
         case .silkTop, .silkBottom: .silk
@@ -67,6 +71,7 @@ struct ParameterFormView: View {
     @AppStorage("ui.sectionOverride") private var sectionOverride = ""
     @AppStorage("ui.filesExpanded") private var filesExpanded = false
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
+    @Environment(\.openWindow) private var openWindow
 
     // Laser export options — remembered, and applied to whichever layer is selected.
     @AppStorage("export.format") private var exportFormat = ArtworkExport.Format.svg.rawValue
@@ -121,7 +126,10 @@ struct ParameterFormView: View {
     /// which is never a program) — still reachable from the picker.
     private var sectionsWithoutLayers: [SettingsSection] {
         let covered = Set((preview.document?.layers ?? []).compactMap { $0.id.settingsSection })
-        return SettingsSection.allCases.filter { $0 != .setup && !covered.contains($0) }
+        // Hole milling only exists as a group while it is switched on.
+        return SettingsSection.allCases.filter {
+            $0 != .setup && !covered.contains($0) && ($0 != .holeMill || params.drillMillLarge)
+        }
     }
 
     // MARK: - Project
@@ -140,45 +148,67 @@ struct ParameterFormView: View {
     private var projectSection: some View {
         Section("Project") {
             HStack(spacing: 10) {
-                Image(systemName: "folder.fill")
+                Image(systemName: model.projectURL == nil ? "folder.fill" : "doc.fill")
                     .foregroundStyle(.tint)
                     .font(.title3)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(model.projectFolder?.lastPathComponent ?? "No folder selected")
+                    Text(model.projectURL != nil ? model.projectName
+                         : (model.projectFolder?.lastPathComponent ?? "No project"))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(model.projectFolder == nil ? "Choose an EasyEDA Gerber export" : detectedSummary)
+                    Text(model.projectFolder == nil && !model.detectedFiles.hasAnything
+                         ? "Open a project, a Gerber folder, or import layers"
+                         : detectedSummary + (model.isProjectEdited ? " · edited" : ""))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Choose…") { model.chooseProjectFolder() }
-                    .help("Pick the folder exported by EasyEDA (Gerber + drill files). Layers are auto-detected by filename; Generate asks separately where to write the G-code.")
+                Menu("Open") {
+                    Button("Open Project…") { model.openProject() }
+                    Button("Open Gerber Folder…") { model.openGerberFolder() }
+                    Button("Import Layer…") { model.importLayers() }
+                    if !model.recentProjects.isEmpty {
+                        Divider()
+                        ForEach(model.recentProjects, id: \.self) { url in
+                            Button(url.deletingPathExtension().lastPathComponent) { model.openProject(at: url) }
+                        }
+                    }
+                }
+                .fixedSize()
+                .help("Open a saved project, an EasyEDA Gerber export folder (layers are detected by filename), or add single Gerber / drill files as layers.")
             }
-            .help(model.projectFolder?.path ?? "")
+            .help(model.projectURL?.path ?? model.projectFolder?.path ?? "")
 
-            if model.projectFolder != nil {
+            if model.projectFolder != nil || model.detectedFiles.hasAnything {
                 DisclosureGroup(isExpanded: $filesExpanded) {
-                    FileRow(label: "Top copper", url: model.detectedFiles.front,
+                    FileRow(slot: .front, model: model, url: model.detectedFiles.front,
                             help: "Top copper layer (Gerber_TopLayer.GTL). Becomes front-copper.ngc — isolation milling around every trace and pad.")
-                    FileRow(label: "Bottom copper", url: model.detectedFiles.back,
+                    FileRow(slot: .back, model: model, url: model.detectedFiles.back,
                             help: "Bottom copper layer (Gerber_BottomLayer.GBL). Becomes back-copper.ngc, mirrored around the mirror axis so it machines correctly after flipping the board.")
-                    FileRow(label: "Board outline", url: model.detectedFiles.outline,
+                    FileRow(slot: .outline, model: model, url: model.detectedFiles.outline,
                             help: "Board outline (Gerber_BoardOutlineLayer.GKO). Becomes outline.ngc — the cutout program with holding bridges.")
-                    FileRow(label: "Top mask", url: model.detectedFiles.topMask,
+                    FileRow(slot: .topMask, model: model, url: model.detectedFiles.topMask,
                             help: "Top solder-mask openings (.GTS) — pads/vias that must stay exposed.")
-                    FileRow(label: "Bottom mask", url: model.detectedFiles.bottomMask,
+                    FileRow(slot: .bottomMask, model: model, url: model.detectedFiles.bottomMask,
                             help: "Bottom solder-mask openings (.GBS). Mirrored like bottom copper.")
-                    FileRow(label: "Top silkscreen", url: model.detectedFiles.topSilk,
+                    FileRow(slot: .topSilk, model: model, url: model.detectedFiles.topSilk,
                             help: "Top printed legend (.GTO) — designators, outlines, text. Becomes top-silkscreen.ngc when Silkscreen is set to Engrave.")
-                    FileRow(label: "Bottom silkscreen", url: model.detectedFiles.bottomSilk,
+                    FileRow(slot: .bottomSilk, model: model, url: model.detectedFiles.bottomSilk,
                             help: "Bottom printed legend (.GBO). Mirrored like bottom copper.")
                     ForEach(model.detectedFiles.drills, id: \.self) { url in
-                        FileRow(label: "Drill", url: url,
+                        FileRow(slot: .drill, model: model, url: url, drill: url,
                                 help: "Excellon drill file. EasyEDA splits PTH / via / NPTH holes into separate files; each becomes its own drill program.")
                     }
+                    Button {
+                        model.importLayers()
+                    } label: {
+                        Label("Import Layer…", systemImage: "plus")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Add Gerber or Excellon drill files from anywhere as layers. Right-click a layer to replace or remove it.")
                 } label: {
-                    Text("Detected files")
+                    Text("Layer files")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -277,6 +307,7 @@ struct ParameterFormView: View {
     @ViewBuilder
     private var contextualSections: some View {
         layerSections
+        cncExportSection
         laserExportSection
     }
 
@@ -292,6 +323,7 @@ struct ParameterFormView: View {
             switch currentSection {
             case .isolation: isolationSections
             case .drilling: drillingSections
+            case .holeMill: holeMillSections
             case .cutout: cutoutSections
             case .mask: maskSections
             case .silk: silkSections
@@ -303,12 +335,28 @@ struct ParameterFormView: View {
     @ViewBuilder
     private var isolationSections: some View {
         Section {
-            ParamRow("Tool diameter", value: params.$millDiameter, kind: .length,
-                     help: "EFFECTIVE cutting diameter of the isolation bit at cut depth. V-bits cut wider than their tip: effective ≈ tip + 2 × |cut depth| × tan(half-angle). Example: 0.1 mm tip, 60° V at −0.06 mm ≈ 0.17 mm. Enter the effective value or traces come out thinner than designed.")
+            toolPicker(.isolation)
+            bitShapePicker(params.$millShape)
+            if params.millShape == "vbit" {
+                ParamRow("V-bit tip", value: params.$millVTip, kind: .length,
+                         help: "Flat width at the very point of the V-bit, as printed on the bit.")
+                ParamRow("V-bit angle", value: params.$millVAngle, kind: .plain("°"),
+                         help: "Included angle of the cone — a \"30°\" bit has 15° each side of the axis.")
+                effectiveDiameterRow(params.effectiveMillDiameter)
+            } else {
+                ParamRow("Tool diameter", value: params.$millDiameter, kind: .length,
+                         help: "Cutting diameter of a straight bit. For a V-bit pick V-bit above instead: its width grows with depth and is worked out for you from tip, angle and cut depth.")
+            }
             ParamRow("Isolation width", value: params.$isolationWidth, kind: .length,
                      help: "Total width of copper cleared around every trace and pad. Wider = better clearance for soldering but more passes. Machining time scales almost linearly with this. 2–3× the tool diameter is a good starting point.")
+            derivedRow("Passes", params.effectivePasses.map { "\($0)" },
+                       help: "How many times the bit goes around each trace for this width, bit and overlap (FlatCAM's pass count): 1 pass clears one bit width, each extra pass adds a bit width minus the overlap.")
             ParamRow("Cut depth", value: params.$zWork, kind: .length,
                      help: "Z depth of isolation passes. Copper foil is ~0.035 mm, so −0.05…−0.08 mm cuts through with margin for board unevenness. Cutting deeper makes V-bits cut wider (thinner traces) and wears bits faster.")
+            ParamRow("Depth per pass", value: params.$millInfeed, kind: .length,
+                     help: "Reach the cut depth in several passes of at most this depth — gentler on fine bits, or for thick copper. 0 cuts the full depth in one pass.")
+            ParamRow("Pass overlap", value: params.$millOverlap, kind: .plain("%"),
+                     help: "How much neighbouring isolation passes overlap when the isolation width needs more than one. Higher leaves no copper slivers between passes but adds passes; 30–50% is typical.")
         } header: {
             sectionHeader(.isolation)
         } footer: {
@@ -321,28 +369,143 @@ struct ParameterFormView: View {
                      help: "Plunge speed when the bit enters the copper. Keep slow (40–80 mm/min) — plunging is the hardest move on fine engraving bits.")
             ParamRow("Spindle", value: params.$millSpeed, kind: .plain("rpm"),
                      help: "Spindle speed written as the S-word. Small engraving bits like high RPM (12000+).")
+            ParamRow("Spindle dwell", value: params.$millDwell, kind: .plain("s"),
+                     help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
         }
     }
 
     @ViewBuilder
     private var drillingSections: some View {
         Section {
+            toolPicker(.drilling)
             ParamRow("Drill depth", value: params.$zDrill, kind: .length,
                      help: "Final Z for every hole. Board thickness plus a small margin into the spoilboard: 1.6 mm stock → −1.8 mm.")
+            ParamRow("Peck depth", value: params.$drillPeck, kind: .length,
+                     help: "Drill in steps of this depth instead of one plunge: after each step the bit rapids up out of the hole to clear chips, rapids back to just above where it stopped, and feeds on (0.6 on −1.8 mm: −0.6, −1.2, −1.8). Stops chips packing the flutes and snapping small drills in FR4. 0 = one stroke. Drilled holes only — milled holes use their own pass depth.")
             ParamRow("Drill feed", value: params.$drillFeed, kind: .feed,
                      help: "Downward feed while drilling. Carbide PCB drills like fast RPM and moderate feed; 60–120 mm/min is typical.")
             ParamRow("Spindle", value: params.$drillSpeed, kind: .plain("rpm"),
                      help: "Spindle speed while drilling. As high as your spindle allows for clean small holes.")
+            ParamRow("Spindle dwell", value: params.$drillDwell, kind: .plain("s"),
+                     help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
         } header: {
             sectionHeader(.drilling)
         } footer: {
             Text("Each drill file becomes its own program — change bits at the M0 pauses.")
+        }
+        DrillBitsSection(params: params, library: model.tools, openLibrary: { openWindow(id: "tools") })
+        Section {
+            millLargeHolesToggle
+            if params.drillMillLarge {
+                millHolesFromRow
+                LabeledContent("Milled with") {
+                    Button(holeMillSummary) { select(section: .holeMill) }
+                        .buttonStyle(.link)
+                        .help("Open the hole-milling settings: bit, depth, feeds, spindle and dwell.")
+                }
+            }
+        } header: {
+            Label("Hole milling", systemImage: "circle.dashed")
+        } footer: {
+            if params.drillMillLarge {
+                holeSplitText
+            } else {
+                Text("Off: every hole is drilled.")
+            }
+        }
+    }
+
+    private var millLargeHolesToggle: some View {
+        Toggle("Mill large holes", isOn: params.$drillMillLarge)
+            .help("Holes at or above \"Mill holes from\" are not drilled: an end mill cuts them in circles, spiralling down (helical G2 moves), into a separate \"… milled\" program. For holes larger than any drill you own — e.g. 3–4 mm mounting holes with a 2 mm end mill. Smaller holes in the same file are still drilled.")
+    }
+
+    private var millHolesFromRow: some View {
+        ParamRow("Mill holes from", value: params.$drillMillFrom, kind: .length,
+                 help: "Smallest hole diameter that is milled instead of drilled. At least the milling bit's diameter — a hole the bit's own size is simply plunged.")
+    }
+
+    /// This project's hole sizes on either side of "Mill holes from".
+    private var holeSplit: (milled: [Double], drilled: [Double]) {
+        let sizes = Set(model.drillHoleSizes.values.joined()).sorted()
+        guard let from = Double(params.drillMillFrom.trimmingCharacters(in: .whitespaces)) else { return ([], sizes) }
+        return (sizes.filter { $0 >= from - 1e-6 }, sizes.filter { $0 < from - 1e-6 })
+    }
+
+    /// Which of this project's holes are milled and which drilled, and a
+    /// warning only for milled holes the bit is actually too big for.
+    private var holeSplitText: Text {
+        let units = UnitSystem(rawValue: unitRaw) ?? .metric
+        func list(_ sizes: [Double]) -> String {
+            sizes.map { units.length($0, decimals: units.lengthDecimals + 1) }.joined(separator: ", ") + " " + units.lengthSymbol
+        }
+        let split = holeSplit
+        guard !split.milled.isEmpty || !split.drilled.isEmpty else {
+            return Text("Holes from this size up are cut in circles, spiralling down, into their own \"… milled\" program; smaller holes stay drilled.")
+        }
+        var text = Text(split.milled.isEmpty ? "No holes are large enough to mill." : "Milled: \(list(split.milled)).")
+        if !split.drilled.isEmpty { text = text + Text(" Drilled: \(list(split.drilled)).") }
+        if let bit = Double(params.holeMillDiameter.trimmingCharacters(in: .whitespaces)) {
+            let tooSmall = split.milled.filter { $0 < bit - 1e-6 }
+            if !tooSmall.isEmpty {
+                text = text + Text(" The \(units.length(bit)) \(units.lengthSymbol) bit is larger than the \(list(tooSmall)) holes — they would come out too big. Raise \"Mill holes from\" or pick a smaller bit.")
+                    .foregroundStyle(.orange)
+            } else if !split.milled.isEmpty {
+                text = text + Text(" The \(units.length(bit)) \(units.lengthSymbol) bit fits all of them.")
+            }
+        }
+        return text
+    }
+
+    private var holeMillSummary: String {
+        let units = UnitSystem(rawValue: unitRaw) ?? .metric
+        let tool = model.tools.tool(id: params.holeMillToolID)?.name
+        let size = Double(params.holeMillDiameter).map { "\(units.length($0)) \(units.lengthSymbol) bit" } ?? "bit"
+        return tool ?? size
+    }
+
+    /// The "… milled" programs: holes too large to drill, cut in circles.
+    @ViewBuilder
+    private var holeMillSections: some View {
+        Section {
+            millLargeHolesToggle
+            if params.drillMillLarge {
+                millHolesFromRow
+                toolPicker(.holeMill)
+                ParamRow("Bit diameter", value: params.$holeMillDiameter, kind: .length,
+                         help: "Diameter of the end mill (e.g. a 2 mm 2-flute corn bit). The circle is offset inward by half of it, so the hole comes out at its designed size.")
+                ParamRow("Depth", value: params.$holeMillDepth, kind: .length,
+                         help: "Final Z of the milled holes — board thickness plus a little: 1.6 mm stock → −1.8 mm.")
+                ParamRow("Pass depth", value: params.$holeMillInfeed, kind: .length,
+                         help: "Depth added per turn of the spiral. 0.3–0.6 mm for a 2 mm end mill in FR4. pcb2gcode spreads the depth evenly, so the real step may be a little smaller.")
+            }
+        } header: {
+            sectionHeader(.holeMill)
+        } footer: {
+            if params.drillMillLarge {
+                holeSplitText
+            } else {
+                Text("Off: every hole is drilled. Turn this on to mill holes larger than any drill you own.")
+            }
+        }
+        if params.drillMillLarge {
+            Section("Feeds & spindle") {
+                ParamRow("XY feed", value: params.$holeMillFeed, kind: .feed,
+                         help: "Speed around the circle.")
+                ParamRow("Z feed", value: params.$holeMillVertFeed, kind: .feed,
+                         help: "Plunge speed down to the start of each hole.")
+                ParamRow("Spindle", value: params.$holeMillSpeed, kind: .plain("rpm"),
+                         help: "Spindle speed for the hole-milling bit.")
+                ParamRow("Spindle dwell", value: params.$holeMillDwell, kind: .plain("s"),
+                         help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
+            }
         }
     }
 
     @ViewBuilder
     private var cutoutSections: some View {
         Section {
+            toolPicker(.cutout)
             ParamRow("Cutter diameter", value: params.$cutterDiameter, kind: .length,
                      help: "Diameter of the end mill that cuts the board outline. The path is offset outward by half of this so the finished board matches the designed outline.")
             ParamRow("Final depth", value: params.$zCut, kind: .length,
@@ -355,6 +518,8 @@ struct ParameterFormView: View {
                      help: "Plunge speed between outline passes.")
             ParamRow("Spindle", value: params.$cutSpeed, kind: .plain("rpm"),
                      help: "Spindle speed for the cutout end mill.")
+            ParamRow("Spindle dwell", value: params.$cutDwell, kind: .plain("s"),
+                     help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
         } header: {
             sectionHeader(.cutout)
         }
@@ -384,19 +549,31 @@ struct ParameterFormView: View {
             .help("What to do with the solder-mask layers. CNC etch: after painting and curing the mask, mill the openings clear. Laser SVGs: export opening shapes via gerbv for laser ablation. Off: ignore mask layers.")
 
             if params.maskMode == "gcode" {
-                ParamRow("Tool diameter", value: params.$maskTool, kind: .length,
-                         help: "End mill used to clear mask openings. Openings SMALLER than this cannot be pocketed and are skipped — use a bit no larger than your smallest pad opening (check the Log for warnings).")
+                toolPicker(.mask)
+                bitShapePicker(params.$maskShape)
+                if params.maskShape == "vbit" {
+                    ParamRow("V-bit tip", value: params.$maskVTip, kind: .length,
+                             help: "Flat width at the point of the V-bit.")
+                    ParamRow("V-bit angle", value: params.$maskVAngle, kind: .plain("°"),
+                             help: "Included angle of the V-bit's cone.")
+                    effectiveDiameterRow(params.effectiveMaskTool)
+                } else {
+                    ParamRow("Tool diameter", value: params.$maskTool, kind: .length,
+                             help: "End mill used to clear mask openings. Openings SMALLER than this cannot be pocketed and are skipped — use a bit no larger than your smallest pad opening (check the Log for warnings).")
+                }
                 ParamRow("Etch depth", value: params.$maskDepth, kind: .length,
                          help: "How deep to mill the cured mask. It only needs to remove the paint layer, not copper: −0.05…−0.15 mm.")
                 ParamRow("Clear width", value: params.$maskClearWidth, kind: .length,
                          help: "How far inward each opening is pocketed. Must be at least HALF the widest opening on the board. Larger values make G-code generation dramatically slower.")
+                ParamRow("Pass overlap", value: params.$maskOverlap, kind: .plain("%"),
+                         help: "Overlap between the pocketing passes inside each opening. Higher leaves fewer paint ridges; 40% is a good default.")
             }
         } header: {
             sectionHeader(.mask)
         } footer: {
             switch params.maskMode {
             case "gcode":
-                Text("After painting and curing the mask, top-mask-etch.ngc / bottom-mask-etch.ngc mill the pad and via openings clear with 40% overlapping passes.")
+                Text("After painting and curing the mask, top-mask-etch.ngc / bottom-mask-etch.ngc mill the pad and via openings clear with overlapping pocketing passes.")
             case "svg":
                 Text("Mask openings are exported as SVGs (via gerbv) for laser ablation instead of milling.")
             default:
@@ -411,6 +588,8 @@ struct ParameterFormView: View {
                          help: "Plunge speed into the mask.")
                 ParamRow("Spindle", value: params.$maskSpeed, kind: .plain("rpm"),
                          help: "Spindle speed for mask etching.")
+                ParamRow("Spindle dwell", value: params.$maskDwell, kind: .plain("s"),
+                         help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
             }
         }
     }
@@ -426,19 +605,31 @@ struct ParameterFormView: View {
             .help("Off: silkscreen layers are ignored (the default — engraving them costs generation and machining time). Engrave: mill the legend strokes themselves, so component outlines and labels end up cut into the board. Either way the layer can be sent to a laser from the export below once a program exists.")
 
             if params.silkMode == "gcode" {
-                ParamRow("Tool diameter", value: params.$silkTool, kind: .length,
-                         help: "Bit used to engrave the legend. Silkscreen strokes are thin — typically 0.15–0.25 mm — and any stroke NARROWER than this bit cannot be engraved and is skipped, so use a fine V-bit or engraver (check the Log for warnings).")
+                toolPicker(.silk)
+                bitShapePicker(params.$silkShape)
+                if params.silkShape == "vbit" {
+                    ParamRow("V-bit tip", value: params.$silkVTip, kind: .length,
+                             help: "Flat width at the point of the V-bit.")
+                    ParamRow("V-bit angle", value: params.$silkVAngle, kind: .plain("°"),
+                             help: "Included angle of the V-bit's cone.")
+                    effectiveDiameterRow(params.effectiveSilkTool)
+                } else {
+                    ParamRow("Tool diameter", value: params.$silkTool, kind: .length,
+                             help: "Bit used to engrave the legend. Silkscreen strokes are thin — typically 0.15–0.25 mm — and any stroke NARROWER than this bit cannot be engraved and is skipped, so use a fine V-bit or engraver (check the Log for warnings).")
+                }
                 ParamRow("Depth", value: params.$silkDepth, kind: .length,
                          help: "How deep to cut the legend. It only has to be visible, not structural: −0.03…−0.08 mm. On a finished board this cuts into the cured solder mask; on bare laminate it marks the substrate.")
                 ParamRow("Clear width", value: params.$silkClearWidth, kind: .length,
                          help: "How far inward each stroke is cleared. Just over the widest stroke on the layer is enough — larger values make generation dramatically slower, exactly as with the solder mask.")
+                ParamRow("Pass overlap", value: params.$silkOverlap, kind: .plain("%"),
+                         help: "Overlap between the passes that clear each stroke.")
             }
         } header: {
             sectionHeader(.silk)
         } footer: {
             switch params.silkMode {
             case "gcode":
-                Text("top-silkscreen.ngc / bottom-silkscreen.ngc engrave the printed legend — reference designators, outlines and text — with 40% overlapping passes. Run it last, after the mask.")
+                Text("top-silkscreen.ngc / bottom-silkscreen.ngc engrave the printed legend — reference designators, outlines and text — with overlapping passes. Run it last, after the mask.")
             default:
                 Text("Silkscreen layers are ignored.")
             }
@@ -451,12 +642,60 @@ struct ParameterFormView: View {
                          help: "Plunge speed into each stroke. Keep it gentle — fine engraving bits break on the plunge.")
                 ParamRow("Spindle", value: params.$silkSpeed, kind: .plain("rpm"),
                          help: "Spindle speed for legend engraving. Fine bits like high RPM.")
+                ParamRow("Spindle dwell", value: params.$silkDwell, kind: .plain("s"),
+                         help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
             }
         }
     }
 
+    /// One picker for zeroing on/off and where the origin goes.
+    private var originSelection: Binding<String> {
+        Binding(
+            get: { params.zeroStart ? params.originMode : "design" },
+            set: { value in
+                if value == "design" {
+                    params.zeroStart = false
+                } else {
+                    params.zeroStart = true
+                    params.originMode = value
+                }
+            }
+        )
+    }
+
     @ViewBuilder
     private var setupSections: some View {
+        Section {
+            Picker("X0 Y0 at", selection: originSelection) {
+                Text("Lower-left corner").tag("bottomLeft")
+                Text("Lower-right corner").tag("bottomRight")
+                Text("Upper-left corner").tag("topLeft")
+                Text("Upper-right corner").tag("topRight")
+                Text("Centre").tag("center")
+                Divider()
+                Text("Custom point").tag("custom")
+                Text("Design origin (no zeroing)").tag("design")
+            }
+            .help("Where the machine's X0 Y0 is on the board — every program shares it. Corners and Centre are of the whole project (all programs' extent) as the machine sees it on each side, so after flipping you touch off at the same corner of the fixture. Custom point: a point in design coordinates — the same physical spot on both sides, e.g. a registration hole; set it with the Set Origin button in the view. Design origin: the coordinates exactly as EasyEDA exported them.")
+            Button {
+                playback.placingOrigin = true
+            } label: {
+                Label("Set Origin in View", systemImage: "scope")
+            }
+            .disabled(preview.document == nil)
+            .help("Then click in the toolpath view where X0 Y0 should be. You can also drag the origin marker there directly. Both snap to the project's corners, centre and drill holes.")
+            if params.zeroStart, params.originMode == "custom" {
+                ParamRow("Origin X", value: params.$originX, kind: .length,
+                         help: "X of the origin in design coordinates — the Gerber/EasyEDA frame, unaffected by tool sizes. The Set Origin button in the view fills this in from a click.")
+                ParamRow("Origin Y", value: params.$originY, kind: .length,
+                         help: "Y of the origin in design coordinates.")
+            }
+        } header: {
+            Label("Origin", systemImage: "scope")
+                .foregroundStyle(.red)
+        } footer: {
+            Text(originFooter)
+        }
         Section {
             Picker("Board flips", selection: params.$mirrorYAxis) {
                 Text("Left–right").tag(false)
@@ -464,17 +703,15 @@ struct ParameterFormView: View {
             }
             .pickerStyle(.segmented)
             .help("How you physically turn the board over to machine the back — the back-side programs are ALWAYS mirrored to match, this only picks which way. Left–right: X coordinates are mirrored (turn it like a page, around a vertical line). Top–bottom: Y coordinates are mirrored (tip it towards you, around a horizontal line). Get this wrong and the back side machines as a mirror image of itself.")
-            Toggle("Zero project at X0 / Y0", isOn: params.$zeroStart)
-                .help("Shift all programs to a shared origin: the project's corner becomes X0/Y0. Front-side programs share one origin and back-side programs share the mirrored one, so copper, drills and masks stay registered — zero the machine once per side, at the same physical board corner.")
             ParamRow("Mirror axis", value: params.$mirrorAxis, kind: .length,
                      help: params.zeroStart
-                        ? "Inert while 'Zero project at X0/Y0' is on: mirroring about this line moves the back programs by twice its value, and the shared origin then shifts them back by exactly the same amount, so the result is identical whatever you put here. Turn zeroing off to use it."
+                        ? "Inert unless Origin is set to Design origin: mirroring about this line moves the back programs by twice its value, and the shared origin then shifts them back by exactly the same amount, so the result is identical whatever you put here. Pick Design origin to use it."
                         : "The coordinate line the back side is mirrored around; it positions the mirrored programs directly. Set it to match your fixture — e.g. board width ÷ 2 when you flip around the board's centre line.")
                 .disabled(params.zeroStart)
         } header: {
             sectionHeader(.setup)
         } footer: {
-            Text("Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. With zeroing on, every program shares one origin per side — zero the machine once for the front programs and once after flipping, and Mirror axis has no effect (the shared origin absorbs it). Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front.")
+            Text("Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. With an origin set, every program shares one origin per side — zero the machine once for the front programs and once after flipping, and Mirror axis has no effect (the shared origin absorbs it). Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front.")
         }
         Section {
             ParamRow("Safe Z", value: params.$zSafe, kind: .length,
@@ -487,6 +724,71 @@ struct ParameterFormView: View {
             Text("Safety heights")
         } footer: {
             Text("The tool always enters and leaves the material at the programmed Z feed — only air travel becomes rapid.")
+        }
+        Section {
+            Picker("Milling direction", selection: params.$millDirection) {
+                Text("Any").tag("any")
+                Text("Climb").tag("climb")
+                Text("Conventional").tag("conventional")
+            }
+            .pickerStyle(.segmented)
+            .help("Direction the cutter travels relative to its rotation, for isolation, outline, mask and legend milling. Any: pcb2gcode picks whatever gives the shortest path. Climb: cleaner edges on rigid machines with little backlash. Conventional: safer on hobby machines with backlash. Fixing a direction switches off 2-opt path shortening, so programs get a little longer.")
+        } header: {
+            Text("Milling direction")
+        } footer: {
+            Text("Applies to every milling program. Spindle dwell is set per layer, next to its spindle speed.")
+        }
+    }
+
+    private var originFooter: String {
+        guard params.zeroStart else {
+            return "Programs keep the design's own coordinates — X0 Y0 is wherever EasyEDA put it, often far off the board."
+        }
+        if params.originMode == "custom" {
+            return "The origin is the same physical point on both sides — for a two-sided board, pick a hole on the flip axis or re-find it after flipping. The marker in the view shows where X0 Y0 is."
+        }
+        return "Zero the machine at this corner of the board before the front programs, and at the same corner of the fixture after flipping. The marker in the view shows where X0 Y0 is — drag it to move the origin."
+    }
+
+    // MARK: - CNC export (per layer)
+
+    private var originSummary: String {
+        guard params.zeroStart else { return "the design's own origin" }
+        return switch params.originMode {
+        case "bottomRight": "the lower-right corner"
+        case "topLeft": "the upper-left corner"
+        case "topRight": "the upper-right corner"
+        case "center": "the centre"
+        case "custom": "a custom point"
+        default: "the lower-left corner"
+        }
+    }
+
+    @ViewBuilder
+    private var cncExportSection: some View {
+        if let layer = exportableLayer {
+            let stale = preview.isStale || preview.phase == .running
+            Section {
+                Button {
+                    model.exportProgram(layer: layer.id)
+                } label: {
+                    Label("Export \(layer.id.fileSlug).ngc…", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(stale)
+                LabeledContent("X0 Y0 at") {
+                    Button(originSummary) { select(section: .setup) }
+                        .buttonStyle(.link)
+                        .help("Change the origin in Machine setup, or drag the origin marker in the view.")
+                }
+            } header: {
+                Label("CNC export", systemImage: "hammer.fill")
+                    .foregroundStyle(.indigo)
+            } footer: {
+                Text(stale
+                     ? "The preview is being updated — export is available once it shows the current settings."
+                     : "Saves this program exactly as previewed (est. \(formatDuration(layer.totalTime))). Generate writes every program at once.")
+            }
         }
     }
 
@@ -581,6 +883,40 @@ struct ParameterFormView: View {
         }
     }
 
+    private func toolPicker(_ section: SettingsSection) -> some View {
+        ToolPickerRow(section: section, params: params, library: model.tools,
+                      openLibrary: { openWindow(id: "tools") })
+    }
+
+    private func bitShapePicker(_ shape: Binding<String>) -> some View {
+        Picker("Bit", selection: shape) {
+            Text("Straight").tag("flat")
+            Text("V-bit").tag("vbit")
+        }
+        .pickerStyle(.segmented)
+        .help("Straight bits cut their own diameter. V-bits cut wider the deeper they go: enter tip and angle and the width at depth is worked out for you — and follows the depth as you change it.")
+    }
+
+    /// A read-only value worked out from other fields.
+    private func derivedRow(_ label: String, _ value: String?, help: String) -> some View {
+        LabeledContent(label) {
+            Text(value ?? "—")
+                .font(.body.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .help(help)
+    }
+
+    private func effectiveDiameterRow(_ diameter: Double?) -> some View {
+        let units = UnitSystem(rawValue: unitRaw) ?? .metric
+        return LabeledContent("Width at depth") {
+            Text(diameter.map { "\(units.length($0, decimals: units.lengthDecimals + 1)) \(units.lengthSymbol)" } ?? "—")
+                .font(.body.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .help("What the V-bit actually cuts at this depth: tip + 2 × |depth| × tan(angle ÷ 2). This is the diameter pcb2gcode is given.")
+    }
+
     private func sectionHeader(_ section: SettingsSection) -> some View {
         Label(section.title, systemImage: section.icon)
             .foregroundStyle(section.tint)
@@ -630,15 +966,124 @@ struct WarningPill: View {
     }
 }
 
+/// "Tool" row at the top of a settings group: picks a library tool and
+/// copies its cutting data into the group, and says when the fields have
+/// since been edited away from it.
+private struct ToolPickerRow: View {
+    let section: SettingsSection
+    @ObservedObject var params: ParametersStore
+    @ObservedObject var library: ToolLibrary
+    let openLibrary: () -> Void
+
+    @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
+
+    var body: some View {
+        let current = library.tool(id: params.toolID(for: section))
+        let edited = current.map { !params.matches($0, for: section) } ?? false
+        LabeledContent("Tool") {
+            HStack(spacing: 6) {
+                if let current, edited {
+                    Button("Edited") { params.applyTool(current, to: section) }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .help("These values no longer match \"\(current.name)\" in the library. Click to restore the tool's values.")
+                }
+                Menu {
+                    let choices = library.tools(for: section)
+                    if choices.isEmpty {
+                        Text("No \(section.title.lowercased()) tools in the library")
+                    }
+                    ForEach(choices) { tool in
+                        Toggle(isOn: Binding(
+                            get: { current?.id == tool.id },
+                            set: { _ in params.applyTool(tool, to: section) }
+                        )) {
+                            Text("\(tool.name)  ·  \(detail(tool))")
+                        }
+                    }
+                    Divider()
+                    Toggle("Custom", isOn: Binding(
+                        get: { current == nil },
+                        set: { _ in params.clearToolID(for: section) }
+                    ))
+                    Button("Edit Tool Library…", action: openLibrary)
+                } label: {
+                    Text(current?.name ?? "Custom")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .fixedSize()
+            }
+        }
+        .help("Pick a tool from the library to fill in this layer's diameter, depths, feeds and spindle speed. The fields stay editable afterwards; Custom means they were entered by hand.")
+    }
+
+    private func detail(_ tool: MachineTool) -> String {
+        let units = UnitSystem(rawValue: unitRaw) ?? .metric
+        let size = "\(units.length(tool.listDiameter)) \(units.lengthSymbol)"
+        return tool.shape == .vBit ? "V \(ParametersStore.format(tool.tipAngle))° → \(size)" : "Ø \(size)"
+    }
+}
+
+/// The drill bits you own. Checked bits replace exact hole sizes: every hole
+/// within a bit's range is drilled with it, so a job needs only the bits on
+/// hand (pcb2gcode --drills-available).
+private struct DrillBitsSection: View {
+    @ObservedObject var params: ParametersStore
+    @ObservedObject var library: ToolLibrary
+    let openLibrary: () -> Void
+
+    @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
+
+    var body: some View {
+        let units = UnitSystem(rawValue: unitRaw) ?? .metric
+        let tolerance = Double(params.drillBitTolerance.trimmingCharacters(in: .whitespaces)) ?? 0.1
+        let onHand = params.drillBitIDSet
+        Section {
+            if library.drills.isEmpty {
+                Button("Add drill bits in the Tool Library…", action: openLibrary)
+                    .buttonStyle(.link)
+            }
+            ForEach(library.drills) { bit in
+                let range = bit.drillRange(defaultTolerance: tolerance)
+                Toggle(isOn: Binding(
+                    get: { onHand.contains(bit.id.uuidString) },
+                    set: { params.setDrillBit(bit.id, onHand: $0) }
+                )) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(bit.name)
+                        Text("holes \(units.length(range.lowerBound))–\(units.length(range.upperBound)) \(units.lengthSymbol)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if !onHand.isEmpty {
+                ParamRow("Bit tolerance", value: params.$drillBitTolerance, kind: .length,
+                         help: "For bits without a hole range of their own in the library: the bit drills designed holes up to this much smaller or larger than itself.")
+            }
+        } header: {
+            Text("Bits on hand")
+        } footer: {
+            Text(onHand.isEmpty
+                 ? "None checked: every hole is drilled at its designed size, one bit per size."
+                 : "Holes are drilled with the checked bit whose range covers them. Holes no bit covers keep their designed size — the Log names them.")
+        }
+    }
+}
+
 /// One detected-file row inside the Project disclosure.
 private struct FileRow: View {
-    let label: String
+    let slot: LayerSlot
+    let model: AppModel
     let url: URL?
+    var drill: URL? = nil
     var help: String = ""
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(label)
+            Text(slot.title)
                 .foregroundStyle(.secondary)
                 .frame(width: 96, alignment: .leading)
             if let url {
@@ -658,7 +1103,20 @@ private struct FileRow: View {
             Spacer()
         }
         .font(.caption)
-        .help(help)
+        .help(url.flatMap { model.layerOrigins[$0] }.map { help + "\n\nPacked in the project (originally \($0.path))." } ?? help)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button(url == nil ? "Choose File…" : "Replace…") { model.replaceLayer(slot, drill: drill) }
+            if let url {
+                if let origin = model.layerOrigins[url], FileManager.default.fileExists(atPath: origin.path) {
+                    Button("Show Original in Finder") { NSWorkspace.shared.activateFileViewerSelecting([origin]) }
+                } else {
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                }
+                Divider()
+                Button("Remove", role: .destructive) { model.removeLayer(slot, drill: drill) }
+            }
+        }
     }
 }
 
@@ -676,7 +1134,7 @@ enum ParamKind {
 /// is selected this row converts on the way out and back. The field keeps its
 /// own text so typing is never reformatted mid-edit, and commits every value
 /// that parses, so the debounced preview still follows along live.
-private struct ParamRow: View {
+struct ParamRow: View {
     let label: String
     @Binding var value: String
     let kind: ParamKind

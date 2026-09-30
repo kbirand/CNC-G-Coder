@@ -2,41 +2,87 @@ import SwiftUI
 import Combine
 
 /// A plain value copy of all machining parameters, safe to hand to background work.
+/// Diameters are EFFECTIVE: a V-bit's width at its cut depth, already worked out.
 nonisolated struct ParameterSnapshot: Sendable {
     var millDiameter, isolationWidth, zWork, millFeed, millVertFeed, millSpeed: String
-    var zDrill, drillFeed, drillSpeed: String
+    var millOverlap, millInfeed: String
+    var zDrill, drillFeed, drillSpeed, drillPeck: String
+    /// pcb2gcode --drills-available entries ("0.8mm:-0.1mm:+0.1mm"); empty = drill every size as designed.
+    var drillBits: [String]
+    var drillMillLarge: Bool
+    var drillMillFrom: String
+    var holeMillDiameter, holeMillDepth, holeMillInfeed, holeMillFeed, holeMillVertFeed, holeMillSpeed: String
+    /// Seconds to wait after the spindle starts (and stops), per program kind.
+    var millDwell, drillDwell, holeMillDwell, cutDwell, maskDwell, silkDwell: String
     var cutterDiameter, zCut, cutFeed, cutVertFeed, cutSpeed, cutInfeed: String
     var bridgeWidth, bridgeCount, zBridge: String
     var maskMode: String                        // "off" | "gcode" | "svg"
-    var maskTool, maskDepth, maskClearWidth, maskFeed, maskVertFeed, maskSpeed: String
+    var maskTool, maskDepth, maskClearWidth, maskFeed, maskVertFeed, maskSpeed, maskOverlap: String
     var silkMode: String                        // "off" | "gcode"
-    var silkTool, silkDepth, silkClearWidth, silkFeed, silkVertFeed, silkSpeed: String
+    var silkTool, silkDepth, silkClearWidth, silkFeed, silkVertFeed, silkSpeed, silkOverlap: String
     var zSafe, zChange, mirrorAxis, plungeClearance: String
+    var millDirection: String                   // "any" | "climb" | "conventional"
+    var originMode: String                      // see ParametersStore.originMode
+    var originX, originY: String                // custom origin, design coordinates
     var mirrorYAxis, zeroStart: Bool
 }
 
 /// All user-editable machining parameters, persisted across launches.
 @MainActor
 final class ParametersStore: ObservableObject {
+    /// Resolves the drill bits on hand; set by AppModel.
+    weak var library: ToolLibrary?
+
     // Copper isolation
+    @AppStorage("param.millToolID") var millToolID = ""
+    @AppStorage("param.millShape") var millShape = "flat"          // flat | vbit
     @AppStorage("param.millDiameter") var millDiameter = "0.10"
+    @AppStorage("param.millVTip") var millVTip = "0.10"
+    @AppStorage("param.millVAngle") var millVAngle = "30"
     @AppStorage("param.isolationWidth") var isolationWidth = "0.20"
     @AppStorage("param.zWork") var zWork = "-0.06"
+    // Depth per pass; 0 = the whole cut depth in one pass.
+    @AppStorage("param.millInfeed") var millInfeed = "0"
+    @AppStorage("param.millOverlap") var millOverlap = "50"
     @AppStorage("param.millFeed") var millFeed = "240"
     @AppStorage("param.millVertFeed") var millVertFeed = "60"
     @AppStorage("param.millSpeed") var millSpeed = "12000"
+    // Pause after M3 for the spindle to reach speed (and after M5 to stop), seconds.
+    @AppStorage("param.millDwell") var millDwell = "1.0"
 
     // Drilling
+    @AppStorage("param.drillToolID") var drillToolID = ""
     @AppStorage("param.zDrill") var zDrill = "-1.80"
     @AppStorage("param.drillFeed") var drillFeed = "80"
     @AppStorage("param.drillSpeed") var drillSpeed = "12000"
+    // Depth per peck; 0 = straight through.
+    @AppStorage("param.drillPeck") var drillPeck = "0"
+    // Library drill IDs, comma-separated. Empty = one bit per designed size.
+    @AppStorage("param.drillBitIDs") var drillBitIDs = ""
+    // Tolerance for bits whose library entry has no range of its own.
+    @AppStorage("param.drillBitTolerance") var drillBitTolerance = "0.10"
+    @AppStorage("param.drillDwell") var drillDwell = "1.0"
+    // Hole milling: holes from drillMillFrom up are milled as helices with
+    // their own end mill instead of drilled.
+    @AppStorage("param.drillMillLarge") var drillMillLarge = false
+    @AppStorage("param.drillMillFrom") var drillMillFrom = "2.0"
+    @AppStorage("param.holeMillToolID") var holeMillToolID = ""
+    @AppStorage("param.holeMillDiameter") var holeMillDiameter = "1.0"
+    @AppStorage("param.holeMillDepth") var holeMillDepth = "-1.8"
+    @AppStorage("param.holeMillInfeed") var holeMillInfeed = "0.6"
+    @AppStorage("param.holeMillFeed") var holeMillFeed = "120"
+    @AppStorage("param.holeMillVertFeed") var holeMillVertFeed = "60"
+    @AppStorage("param.holeMillSpeed") var holeMillSpeed = "12000"
+    @AppStorage("param.holeMillDwell") var holeMillDwell = "1.0"
 
     // Board cutout
+    @AppStorage("param.cutToolID") var cutToolID = ""
     @AppStorage("param.cutterDiameter") var cutterDiameter = "1.00"
     @AppStorage("param.zCut") var zCut = "-1.80"
     @AppStorage("param.cutFeed") var cutFeed = "120"
     @AppStorage("param.cutVertFeed") var cutVertFeed = "60"
     @AppStorage("param.cutSpeed") var cutSpeed = "12000"
+    @AppStorage("param.cutDwell") var cutDwell = "1.0"
     @AppStorage("param.cutInfeed") var cutInfeed = "0.40"
     @AppStorage("param.bridgeWidth") var bridgeWidth = "2.00"
     @AppStorage("param.bridgeCount") var bridgeCount = "4"
@@ -44,24 +90,36 @@ final class ParametersStore: ObservableObject {
 
     // Solder mask (openings are etched away after painting/curing the mask)
     @AppStorage("param.maskMode") var maskMode = "gcode"   // off | gcode | svg
+    @AppStorage("param.maskToolID") var maskToolID = ""
+    @AppStorage("param.maskShape") var maskShape = "flat"
     @AppStorage("param.maskTool") var maskTool = "0.80"
+    @AppStorage("param.maskVTip") var maskVTip = "0.10"
+    @AppStorage("param.maskVAngle") var maskVAngle = "30"
     @AppStorage("param.maskDepth") var maskDepth = "-0.10"
     // How far inward each opening is cleared. Must be at least half the widest
     // mask opening. Generation time explodes with larger values, so keep small.
     @AppStorage("param.maskClearWidth") var maskClearWidth = "1.2"
+    @AppStorage("param.maskOverlap") var maskOverlap = "40"
     @AppStorage("param.maskFeed") var maskFeed = "120"
     @AppStorage("param.maskVertFeed") var maskVertFeed = "60"
     @AppStorage("param.maskSpeed") var maskSpeed = "12000"
+    @AppStorage("param.maskDwell") var maskDwell = "1.0"
 
     // Silkscreen legend (engraved after the mask, or laser-marked)
     @AppStorage("param.silkMode") var silkMode = "off"     // off | gcode
+    @AppStorage("param.silkToolID") var silkToolID = ""
+    @AppStorage("param.silkShape") var silkShape = "flat"
     @AppStorage("param.silkTool") var silkTool = "0.10"
+    @AppStorage("param.silkVTip") var silkVTip = "0.10"
+    @AppStorage("param.silkVAngle") var silkVAngle = "30"
     @AppStorage("param.silkDepth") var silkDepth = "-0.05"
     // Legend strokes are thin (0.15–0.25 mm), so a little clearing covers them.
     @AppStorage("param.silkClearWidth") var silkClearWidth = "0.30"
+    @AppStorage("param.silkOverlap") var silkOverlap = "40"
     @AppStorage("param.silkFeed") var silkFeed = "180"
     @AppStorage("param.silkVertFeed") var silkVertFeed = "60"
     @AppStorage("param.silkSpeed") var silkSpeed = "12000"
+    @AppStorage("param.silkDwell") var silkDwell = "1.0"
 
     // Alignment / safety
     @AppStorage("param.zSafe") var zSafe = "3.0"
@@ -69,148 +127,377 @@ final class ParametersStore: ObservableObject {
     // Plunges rapid through the air down to this height above the board, then
     // feed; retracts feed up to it, then rapid. 0 disables the optimization.
     @AppStorage("param.plungeClearance") var plungeClearance = "0.30"
+    @AppStorage("param.millDirection") var millDirection = "any"    // any | climb | conventional
     @AppStorage("param.mirrorAxis") var mirrorAxis = "0.0"
     @AppStorage("param.mirrorYAxis") var mirrorYAxis = false
     @AppStorage("param.zeroStart") var zeroStart = true
+    // Where X0/Y0 goes when zeroing: bottomLeft | bottomRight | topLeft |
+    // topRight | center — a corner of the project as the machine sees it, on
+    // each side — or custom: the point originX/originY in design (Gerber)
+    // coordinates, which is the same physical spot on both sides.
+    @AppStorage("param.originMode") var originMode = "bottomLeft"
+    @AppStorage("param.originX") var originX = "0"
+    @AppStorage("param.originY") var originY = "0"
+
+    // MARK: - Key table
+
+    /// Every string parameter under its preset key. Presets, the preview
+    /// signature and tool matching all read this one list, so a new field
+    /// cannot be forgotten in one of them.
+    private static let stringFields: [(String, ReferenceWritableKeyPath<ParametersStore, String>)] = [
+        ("millToolID", \.millToolID), ("millShape", \.millShape), ("millDiameter", \.millDiameter),
+        ("millVTip", \.millVTip), ("millVAngle", \.millVAngle), ("isolationWidth", \.isolationWidth),
+        ("zWork", \.zWork), ("millInfeed", \.millInfeed), ("millOverlap", \.millOverlap),
+        ("millFeed", \.millFeed), ("millVertFeed", \.millVertFeed), ("millSpeed", \.millSpeed),
+        ("drillToolID", \.drillToolID), ("zDrill", \.zDrill), ("drillFeed", \.drillFeed),
+        ("drillSpeed", \.drillSpeed), ("drillPeck", \.drillPeck), ("drillBitIDs", \.drillBitIDs),
+        ("drillBitTolerance", \.drillBitTolerance), ("drillMillFrom", \.drillMillFrom),
+        ("holeMillToolID", \.holeMillToolID), ("holeMillDiameter", \.holeMillDiameter),
+        ("holeMillDepth", \.holeMillDepth), ("holeMillInfeed", \.holeMillInfeed),
+        ("holeMillFeed", \.holeMillFeed), ("holeMillVertFeed", \.holeMillVertFeed),
+        ("holeMillSpeed", \.holeMillSpeed),
+        ("millDwell", \.millDwell), ("drillDwell", \.drillDwell), ("holeMillDwell", \.holeMillDwell),
+        ("cutDwell", \.cutDwell), ("maskDwell", \.maskDwell), ("silkDwell", \.silkDwell),
+        ("cutToolID", \.cutToolID), ("cutterDiameter", \.cutterDiameter), ("zCut", \.zCut),
+        ("cutFeed", \.cutFeed), ("cutVertFeed", \.cutVertFeed), ("cutSpeed", \.cutSpeed),
+        ("cutInfeed", \.cutInfeed), ("bridgeWidth", \.bridgeWidth), ("bridgeCount", \.bridgeCount),
+        ("zBridge", \.zBridge),
+        ("maskMode", \.maskMode), ("maskToolID", \.maskToolID), ("maskShape", \.maskShape),
+        ("maskTool", \.maskTool), ("maskVTip", \.maskVTip), ("maskVAngle", \.maskVAngle),
+        ("maskDepth", \.maskDepth), ("maskClearWidth", \.maskClearWidth), ("maskOverlap", \.maskOverlap),
+        ("maskFeed", \.maskFeed), ("maskVertFeed", \.maskVertFeed), ("maskSpeed", \.maskSpeed),
+        ("silkMode", \.silkMode), ("silkToolID", \.silkToolID), ("silkShape", \.silkShape),
+        ("silkTool", \.silkTool), ("silkVTip", \.silkVTip), ("silkVAngle", \.silkVAngle),
+        ("silkDepth", \.silkDepth), ("silkClearWidth", \.silkClearWidth), ("silkOverlap", \.silkOverlap),
+        ("silkFeed", \.silkFeed), ("silkVertFeed", \.silkVertFeed), ("silkSpeed", \.silkSpeed),
+        ("zSafe", \.zSafe), ("zChange", \.zChange), ("plungeClearance", \.plungeClearance),
+        ("millDirection", \.millDirection), ("mirrorAxis", \.mirrorAxis),
+        ("originMode", \.originMode), ("originX", \.originX), ("originY", \.originY)
+    ]
+
+    private static let boolFields: [(String, ReferenceWritableKeyPath<ParametersStore, Bool>)] = [
+        ("drillMillLarge", \.drillMillLarge), ("mirrorYAxis", \.mirrorYAxis), ("zeroStart", \.zeroStart)
+    ]
+
+    // MARK: - Effective diameters
+
+    /// Width a milling tool cuts at `depth`: as entered for flat bits,
+    /// tip + 2·|depth|·tan(angle/2) for V-bits. Nil when a field does not parse.
+    static func effectiveDiameter(shape: String, diameter: String, tip: String,
+                                  angle: String, depth: String) -> Double? {
+        func v(_ s: String) -> Double? { Double(s.trimmingCharacters(in: .whitespaces)) }
+        guard shape == "vbit" else { return v(diameter) }
+        guard let tip = v(tip), let angle = v(angle), let depth = v(depth) else { return nil }
+        return tip + 2 * abs(depth) * tan(angle / 2 * .pi / 180)
+    }
+
+    var effectiveMillDiameter: Double? {
+        Self.effectiveDiameter(shape: millShape, diameter: millDiameter, tip: millVTip, angle: millVAngle, depth: zWork)
+    }
+    var effectiveMaskTool: Double? {
+        Self.effectiveDiameter(shape: maskShape, diameter: maskTool, tip: maskVTip, angle: maskVAngle, depth: maskDepth)
+    }
+    var effectiveSilkTool: Double? {
+        Self.effectiveDiameter(shape: silkShape, diameter: silkTool, tip: silkVTip, angle: silkVAngle, depth: silkDepth)
+    }
+
+    // MARK: - Isolation passes
+
+    /// pcb2gcode cuts n passes when the isolation width is exactly
+    /// d·(1 + (n−1)·(1 − overlap)); one micron more adds a pass.
+    static func passes(width: Double, diameter: Double, overlapPercent: Double) -> Int {
+        let step = diameter * (1 - overlapPercent / 100)
+        guard width > diameter + 1e-6, step > 0 else { return 1 }
+        return Int(((width - diameter) / step - 1e-6).rounded(.up)) + 1
+    }
+
+    /// How many passes the isolation width takes with this bit and overlap.
+    var effectivePasses: Int? {
+        guard let w = Double(isolationWidth.trimmingCharacters(in: .whitespaces)),
+              let d = effectiveMillDiameter,
+              let ov = Double(millOverlap.trimmingCharacters(in: .whitespaces)) else { return nil }
+        return Self.passes(width: w, diameter: d, overlapPercent: ov)
+    }
+
+    // MARK: - Drill bits on hand
+
+    var drillBitIDSet: Set<String> {
+        Set(drillBitIDs.split(separator: ",").map(String.init))
+    }
+
+    func setDrillBit(_ id: UUID, onHand: Bool) {
+        var ids = drillBitIDSet
+        if onHand { ids.insert(id.uuidString) } else { ids.remove(id.uuidString) }
+        drillBitIDs = ids.sorted().joined(separator: ",")
+    }
+
+    /// The checked library drills that still exist, smallest first.
+    var drillBitsOnHand: [MachineTool] {
+        let ids = drillBitIDSet
+        return (library?.drills ?? []).filter { ids.contains($0.id.uuidString) }
+    }
+
+    /// --drills-available entries. Every bit carries an explicit range:
+    /// without one pcb2gcode rounds EVERY hole to the nearest bit — a 3 mm
+    /// mounting hole silently becomes a 1 mm one. With ranges, a hole no bit
+    /// covers keeps its own size (and shows up in the Log).
+    private var drillBitSpecs: [String] {
+        let tolerance = Double(drillBitTolerance.trimmingCharacters(in: .whitespaces)) ?? 0.1
+        return drillBitsOnHand.map { bit in
+            let range = bit.drillRange(defaultTolerance: tolerance)
+            return String(format: "%@mm:-%@mm:+%@mm",
+                          Self.format(bit.diameter),
+                          Self.format(max(0, bit.diameter - range.lowerBound)),
+                          Self.format(max(0, range.upperBound - bit.diameter)))
+        }
+    }
+
+    // MARK: - Snapshot
 
     func snapshot() -> ParameterSnapshot {
         func t(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces) }
+        func eff(_ d: Double?, _ fallback: String) -> String { d.map(Self.format) ?? t(fallback) }
         return ParameterSnapshot(
-            millDiameter: t(millDiameter), isolationWidth: t(isolationWidth), zWork: t(zWork),
+            millDiameter: eff(effectiveMillDiameter, millDiameter), isolationWidth: t(isolationWidth), zWork: t(zWork),
             millFeed: t(millFeed), millVertFeed: t(millVertFeed), millSpeed: t(millSpeed),
-            zDrill: t(zDrill), drillFeed: t(drillFeed), drillSpeed: t(drillSpeed),
+            millOverlap: t(millOverlap), millInfeed: t(millInfeed),
+            zDrill: t(zDrill), drillFeed: t(drillFeed), drillSpeed: t(drillSpeed), drillPeck: t(drillPeck),
+            drillBits: drillBitSpecs, drillMillLarge: drillMillLarge, drillMillFrom: t(drillMillFrom),
+            holeMillDiameter: t(holeMillDiameter), holeMillDepth: t(holeMillDepth), holeMillInfeed: t(holeMillInfeed),
+            holeMillFeed: t(holeMillFeed), holeMillVertFeed: t(holeMillVertFeed), holeMillSpeed: t(holeMillSpeed),
+            millDwell: t(millDwell), drillDwell: t(drillDwell), holeMillDwell: t(holeMillDwell),
+            cutDwell: t(cutDwell), maskDwell: t(maskDwell), silkDwell: t(silkDwell),
             cutterDiameter: t(cutterDiameter), zCut: t(zCut), cutFeed: t(cutFeed),
             cutVertFeed: t(cutVertFeed), cutSpeed: t(cutSpeed), cutInfeed: t(cutInfeed),
             bridgeWidth: t(bridgeWidth), bridgeCount: t(bridgeCount), zBridge: t(zBridge),
             maskMode: maskMode,
-            maskTool: t(maskTool), maskDepth: t(maskDepth), maskClearWidth: t(maskClearWidth),
-            maskFeed: t(maskFeed), maskVertFeed: t(maskVertFeed), maskSpeed: t(maskSpeed),
+            maskTool: eff(effectiveMaskTool, maskTool), maskDepth: t(maskDepth), maskClearWidth: t(maskClearWidth),
+            maskFeed: t(maskFeed), maskVertFeed: t(maskVertFeed), maskSpeed: t(maskSpeed), maskOverlap: t(maskOverlap),
             silkMode: silkMode,
-            silkTool: t(silkTool), silkDepth: t(silkDepth), silkClearWidth: t(silkClearWidth),
-            silkFeed: t(silkFeed), silkVertFeed: t(silkVertFeed), silkSpeed: t(silkSpeed),
+            silkTool: eff(effectiveSilkTool, silkTool), silkDepth: t(silkDepth), silkClearWidth: t(silkClearWidth),
+            silkFeed: t(silkFeed), silkVertFeed: t(silkVertFeed), silkSpeed: t(silkSpeed), silkOverlap: t(silkOverlap),
             zSafe: t(zSafe), zChange: t(zChange), mirrorAxis: t(mirrorAxis),
-            plungeClearance: t(plungeClearance),
+            plungeClearance: t(plungeClearance), millDirection: millDirection,
+            originMode: originMode, originX: t(originX), originY: t(originY),
             mirrorYAxis: mirrorYAxis, zeroStart: zeroStart
         )
     }
 
     /// Display name of the first field whose value does not parse as a number, or nil if all are valid.
     var validationError: String? {
-        let doubles: [(String, String)] = [
-            ("Tool diameter", millDiameter), ("Isolation width", isolationWidth), ("Cut depth", zWork),
+        func bad(_ fields: [(String, String)]) -> String? {
+            fields.first { Double($0.1.trimmingCharacters(in: .whitespaces)) == nil }?.0
+        }
+        var doubles: [(String, String)] = [
+            ("Isolation width", isolationWidth), ("Cut depth", zWork), ("Isolation depth per pass", millInfeed),
+            ("Isolation overlap", millOverlap),
             ("Isolation XY feed", millFeed), ("Isolation Z feed", millVertFeed), ("Isolation spindle", millSpeed),
             ("Drill depth", zDrill), ("Drill feed", drillFeed), ("Drill spindle", drillSpeed),
+            ("Peck depth", drillPeck), ("Drill bit tolerance", drillBitTolerance),
             ("Cutter diameter", cutterDiameter), ("Cutout depth", zCut), ("Cutout XY feed", cutFeed),
             ("Cutout Z feed", cutVertFeed), ("Cutout spindle", cutSpeed), ("Cutout pass depth", cutInfeed),
             ("Bridge width", bridgeWidth), ("Bridge Z", zBridge),
             ("Safe Z", zSafe), ("Tool-change Z", zChange), ("Mirror axis", mirrorAxis),
-            ("Plunge clearance", plungeClearance)
+            ("Plunge clearance", plungeClearance),
+            ("Isolation dwell", millDwell), ("Drill dwell", drillDwell), ("Cutout dwell", cutDwell)
         ]
-        for (name, value) in doubles where Double(value.trimmingCharacters(in: .whitespaces)) == nil {
-            return name
+        doubles += millShape == "vbit"
+            ? [("V-bit tip", millVTip), ("V-bit angle", millVAngle)]
+            : [("Tool diameter", millDiameter)]
+        if drillMillLarge {
+            doubles += [("Mill holes from", drillMillFrom), ("Hole mill diameter", holeMillDiameter),
+                        ("Hole mill depth", holeMillDepth), ("Hole mill pass depth", holeMillInfeed),
+                        ("Hole mill XY feed", holeMillFeed), ("Hole mill Z feed", holeMillVertFeed),
+                        ("Hole mill spindle", holeMillSpeed), ("Hole mill dwell", holeMillDwell)]
         }
+        if zeroStart, originMode == "custom" { doubles += [("Origin X", originX), ("Origin Y", originY)] }
+        if let name = bad(doubles) { return name }
         if Int(bridgeCount.trimmingCharacters(in: .whitespaces)) == nil { return "Bridge count" }
         if maskMode == "gcode" {
-            let maskFields: [(String, String)] = [
-                ("Mask tool diameter", maskTool), ("Mask etch depth", maskDepth),
-                ("Mask clear width", maskClearWidth),
-                ("Mask XY feed", maskFeed), ("Mask Z feed", maskVertFeed), ("Mask spindle", maskSpeed)
+            var maskFields: [(String, String)] = [
+                ("Mask etch depth", maskDepth), ("Mask clear width", maskClearWidth), ("Mask overlap", maskOverlap),
+                ("Mask XY feed", maskFeed), ("Mask Z feed", maskVertFeed), ("Mask spindle", maskSpeed),
+                ("Mask dwell", maskDwell)
             ]
-            for (name, value) in maskFields where Double(value.trimmingCharacters(in: .whitespaces)) == nil {
-                return name
-            }
+            maskFields += maskShape == "vbit"
+                ? [("Mask V-bit tip", maskVTip), ("Mask V-bit angle", maskVAngle)]
+                : [("Mask tool diameter", maskTool)]
+            if let name = bad(maskFields) { return name }
         }
         if silkMode == "gcode" {
-            let silkFields: [(String, String)] = [
-                ("Silkscreen tool diameter", silkTool), ("Silkscreen depth", silkDepth),
-                ("Silkscreen clear width", silkClearWidth),
+            var silkFields: [(String, String)] = [
+                ("Silkscreen depth", silkDepth), ("Silkscreen clear width", silkClearWidth),
+                ("Silkscreen overlap", silkOverlap),
                 ("Silkscreen XY feed", silkFeed), ("Silkscreen Z feed", silkVertFeed),
-                ("Silkscreen spindle", silkSpeed)
+                ("Silkscreen spindle", silkSpeed), ("Silkscreen dwell", silkDwell)
             ]
-            for (name, value) in silkFields where Double(value.trimmingCharacters(in: .whitespaces)) == nil {
-                return name
-            }
+            silkFields += silkShape == "vbit"
+                ? [("Silkscreen V-bit tip", silkVTip), ("Silkscreen V-bit angle", silkVAngle)]
+                : [("Silkscreen tool diameter", silkTool)]
+            if let name = bad(silkFields) { return name }
         }
         return nil
     }
 
+    // MARK: - Presets
+
     /// All parameter values as a plain dictionary (preset serialization).
     func exportValues() -> [String: String] {
-        [
-            "millDiameter": millDiameter, "isolationWidth": isolationWidth, "zWork": zWork,
-            "millFeed": millFeed, "millVertFeed": millVertFeed, "millSpeed": millSpeed,
-            "zDrill": zDrill, "drillFeed": drillFeed, "drillSpeed": drillSpeed,
-            "cutterDiameter": cutterDiameter, "zCut": zCut, "cutFeed": cutFeed,
-            "cutVertFeed": cutVertFeed, "cutSpeed": cutSpeed, "cutInfeed": cutInfeed,
-            "bridgeWidth": bridgeWidth, "bridgeCount": bridgeCount, "zBridge": zBridge,
-            "maskMode": maskMode, "maskTool": maskTool, "maskDepth": maskDepth,
-            "maskClearWidth": maskClearWidth, "maskFeed": maskFeed,
-            "maskVertFeed": maskVertFeed, "maskSpeed": maskSpeed,
-            "silkMode": silkMode, "silkTool": silkTool, "silkDepth": silkDepth,
-            "silkClearWidth": silkClearWidth, "silkFeed": silkFeed,
-            "silkVertFeed": silkVertFeed, "silkSpeed": silkSpeed,
-            "zSafe": zSafe, "zChange": zChange, "mirrorAxis": mirrorAxis,
-            "plungeClearance": plungeClearance,
-            "mirrorYAxis": String(mirrorYAxis), "zeroStart": String(zeroStart)
-        ]
+        var values: [String: String] = [:]
+        for (key, path) in Self.stringFields { values[key] = self[keyPath: path] }
+        for (key, path) in Self.boolFields { values[key] = String(self[keyPath: path]) }
+        return values
     }
 
     /// Applies a preset dictionary; keys absent from the dictionary keep their
     /// current value, so presets stay compatible across app versions.
     func apply(_ values: [String: String]) {
-        func set(_ key: String, _ assign: (String) -> Void) {
-            if let value = values[key] { assign(value) }
+        for (key, path) in Self.stringFields {
+            if let value = values[key] { self[keyPath: path] = value }
         }
-        set("millDiameter") { millDiameter = $0 }
-        set("isolationWidth") { isolationWidth = $0 }
-        set("zWork") { zWork = $0 }
-        set("millFeed") { millFeed = $0 }
-        set("millVertFeed") { millVertFeed = $0 }
-        set("millSpeed") { millSpeed = $0 }
-        set("zDrill") { zDrill = $0 }
-        set("drillFeed") { drillFeed = $0 }
-        set("drillSpeed") { drillSpeed = $0 }
-        set("cutterDiameter") { cutterDiameter = $0 }
-        set("zCut") { zCut = $0 }
-        set("cutFeed") { cutFeed = $0 }
-        set("cutVertFeed") { cutVertFeed = $0 }
-        set("cutSpeed") { cutSpeed = $0 }
-        set("cutInfeed") { cutInfeed = $0 }
-        set("bridgeWidth") { bridgeWidth = $0 }
-        set("bridgeCount") { bridgeCount = $0 }
-        set("zBridge") { zBridge = $0 }
-        set("maskMode") { maskMode = $0 }
-        set("maskTool") { maskTool = $0 }
-        set("maskDepth") { maskDepth = $0 }
-        set("maskClearWidth") { maskClearWidth = $0 }
-        set("maskFeed") { maskFeed = $0 }
-        set("maskVertFeed") { maskVertFeed = $0 }
-        set("maskSpeed") { maskSpeed = $0 }
-        set("silkMode") { silkMode = $0 }
-        set("silkTool") { silkTool = $0 }
-        set("silkDepth") { silkDepth = $0 }
-        set("silkClearWidth") { silkClearWidth = $0 }
-        set("silkFeed") { silkFeed = $0 }
-        set("silkVertFeed") { silkVertFeed = $0 }
-        set("silkSpeed") { silkSpeed = $0 }
-        set("zSafe") { zSafe = $0 }
-        set("zChange") { zChange = $0 }
-        set("mirrorAxis") { mirrorAxis = $0 }
-        set("plungeClearance") { plungeClearance = $0 }
-        set("mirrorYAxis") { mirrorYAxis = ($0 == "true") }
-        set("zeroStart") { zeroStart = ($0 == "true") }
+        for (key, path) in Self.boolFields {
+            if let value = values[key] { self[keyPath: path] = (value == "true") }
+        }
     }
 
     /// Changes whenever any parameter changes; used for preview staleness checks.
+    /// Includes the resolved drill bits, so editing a bit in the library
+    /// refreshes the preview too.
     var signature: String {
-        [millDiameter, isolationWidth, zWork, millFeed, millVertFeed, millSpeed,
-         zDrill, drillFeed, drillSpeed,
-         cutterDiameter, zCut, cutFeed, cutVertFeed, cutSpeed, cutInfeed,
-         bridgeWidth, bridgeCount, zBridge,
-         maskMode, maskTool, maskDepth, maskClearWidth, maskFeed, maskVertFeed, maskSpeed,
-         silkMode, silkTool, silkDepth, silkClearWidth, silkFeed, silkVertFeed, silkSpeed,
-         zSafe, zChange, mirrorAxis, plungeClearance,
-         String(mirrorYAxis), String(zeroStart)]
+        (Self.stringFields.map { self[keyPath: $0.1] }
+         + Self.boolFields.map { String(self[keyPath: $0.1]) }
+         + drillBitSpecs)
             .joined(separator: "|")
+    }
+
+    // MARK: - Tools
+
+    /// The parameter values picking `tool` for `section` sets (preset keys).
+    /// Zero feeds and speeds mean "not set" in FlatCAM databases and leave
+    /// the layer's own value alone.
+    func toolValues(_ tool: MachineTool, for section: SettingsSection) -> [String: String] {
+        let f = Self.format
+        var v: [String: String] = [:]
+        func positive(_ key: String, _ value: Double) { if value > 0 { v[key] = f(value) } }
+        // FlatCAM's "dwell off" is 0 here; it leaves the layer's own dwell alone.
+        func dwell(_ key: String) { positive(key, tool.dwell) }
+        func shapeKeys(prefix: String, diameterKey: String) {
+            if tool.shape == .vBit {
+                v[prefix + "Shape"] = "vbit"
+                v[prefix + "VTip"] = f(tool.tipDiameter)
+                v[prefix + "VAngle"] = f(tool.tipAngle)
+            } else {
+                v[prefix + "Shape"] = "flat"
+                v[diameterKey] = f(tool.diameter)
+            }
+        }
+        switch section {
+        case .isolation:
+            v["millToolID"] = tool.id.uuidString
+            shapeKeys(prefix: "mill", diameterKey: "millDiameter")
+            v["zWork"] = f(tool.cutDepth)
+            v["millInfeed"] = f(tool.depthPerPass)
+            positive("millOverlap", tool.overlap)
+            positive("millFeed", tool.feedXY)
+            positive("millVertFeed", tool.feedZ)
+            positive("millSpeed", tool.spindle)
+            dwell("millDwell")
+        case .drilling:
+            v["drillToolID"] = tool.id.uuidString
+            v["zDrill"] = f(tool.cutDepth)
+            v["drillPeck"] = f(tool.depthPerPass)
+            positive("drillFeed", tool.feedZ)
+            positive("drillSpeed", tool.spindle)
+            dwell("drillDwell")
+        case .holeMill:
+            v["holeMillToolID"] = tool.id.uuidString
+            v["holeMillDiameter"] = f(tool.diameter)
+            v["holeMillDepth"] = f(tool.cutDepth)
+            v["holeMillInfeed"] = f(tool.depthPerPass > 0 ? tool.depthPerPass : abs(tool.cutDepth))
+            positive("holeMillFeed", tool.feedXY)
+            positive("holeMillVertFeed", tool.feedZ)
+            positive("holeMillSpeed", tool.spindle)
+            dwell("holeMillDwell")
+        case .cutout:
+            v["cutToolID"] = tool.id.uuidString
+            v["cutterDiameter"] = f(tool.shape == .vBit ? tool.listDiameter : tool.diameter)
+            v["zCut"] = f(tool.cutDepth)
+            v["cutInfeed"] = f(tool.depthPerPass > 0 ? tool.depthPerPass : abs(tool.cutDepth))
+            positive("cutFeed", tool.feedXY)
+            positive("cutVertFeed", tool.feedZ)
+            positive("cutSpeed", tool.spindle)
+            dwell("cutDwell")
+        case .mask:
+            v["maskToolID"] = tool.id.uuidString
+            shapeKeys(prefix: "mask", diameterKey: "maskTool")
+            v["maskDepth"] = f(tool.cutDepth)
+            positive("maskOverlap", tool.overlap)
+            positive("maskFeed", tool.feedXY)
+            positive("maskVertFeed", tool.feedZ)
+            positive("maskSpeed", tool.spindle)
+            dwell("maskDwell")
+        case .silk:
+            v["silkToolID"] = tool.id.uuidString
+            shapeKeys(prefix: "silk", diameterKey: "silkTool")
+            v["silkDepth"] = f(tool.cutDepth)
+            positive("silkOverlap", tool.overlap)
+            positive("silkFeed", tool.feedXY)
+            positive("silkVertFeed", tool.feedZ)
+            positive("silkSpeed", tool.spindle)
+            dwell("silkDwell")
+        case .setup:
+            break
+        }
+        return v
+    }
+
+    /// Copies a library tool's cutting data into a settings group.
+    func applyTool(_ tool: MachineTool, to section: SettingsSection) {
+        apply(toolValues(tool, for: section))
+    }
+
+    /// Whether the group's fields still hold exactly what `tool` would set.
+    func matches(_ tool: MachineTool, for section: SettingsSection) -> Bool {
+        let current = exportValues()
+        return toolValues(tool, for: section).allSatisfy { key, value in
+            guard let now = current[key] else { return false }
+            if let a = Double(now.trimmingCharacters(in: .whitespaces)), let b = Double(value) {
+                return abs(a - b) < 1e-9
+            }
+            return now == value
+        }
+    }
+
+    /// The ID field recording which library tool a group was set from.
+    func toolID(for section: SettingsSection) -> String {
+        switch section {
+        case .isolation: millToolID
+        case .drilling: drillToolID
+        case .holeMill: holeMillToolID
+        case .cutout: cutToolID
+        case .mask: maskToolID
+        case .silk: silkToolID
+        case .setup: ""
+        }
+    }
+
+    func clearToolID(for section: SettingsSection) {
+        switch section {
+        case .isolation: millToolID = ""
+        case .drilling: drillToolID = ""
+        case .holeMill: holeMillToolID = ""
+        case .cutout: cutToolID = ""
+        case .mask: maskToolID = ""
+        case .silk: silkToolID = ""
+        case .setup: break
+        }
+    }
+
+    /// Shortest decimal text for a millimetre value (at most 5 places).
+    nonisolated static func format(_ value: Double) -> String {
+        var text = String(format: "%.5f", value)
+        while text.contains("."), text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text == "-0" ? "0" : text
     }
 }

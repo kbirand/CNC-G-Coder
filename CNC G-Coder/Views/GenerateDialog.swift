@@ -97,9 +97,10 @@ struct GenerateDialog: View {
 
     private var statusLine: String {
         if model.isGenerating {
-            let stage = model.generationSteps.count
-            let total = max(model.generationTotal, stage)
-            return "Stage \(stage) of \(total) — \(model.generationSteps.last?.label ?? "starting…")"
+            let done = model.generationSteps.filter(\.isDone).count
+            let total = max(model.generationTotal, model.generationSteps.count)
+            let running = model.generationSteps.filter { !$0.isDone }.map(\.label)
+            return "\(done) of \(total) done — " + (running.isEmpty ? "starting…" : running.joined(separator: " · "))
         }
         if let summary = model.generationSummary { return summary }
         return model.projectFolder?.lastPathComponent ?? "No project"

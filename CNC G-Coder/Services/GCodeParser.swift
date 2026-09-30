@@ -188,7 +188,8 @@ nonisolated enum GCodeParser {
                     cumulativeDistance: dist
                 ))
 
-                if kind == .plunge, layer.isDrill { drillHits.append(end) }
+                // Peck drilling plunges the same hole several times.
+                if kind == .plunge, layer.isDrill, drillHits.last != end { drillHits.append(end) }
 
                 let segment = CGRect(
                     x: min(start.x, end.x), y: min(start.y, end.y),

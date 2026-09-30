@@ -14,6 +14,7 @@ struct PreviewPane: View {
     @AppStorage("previewFlipBackView") private var flipBackView = false
     @AppStorage("previewShowRulers") private var showRulers = true
     @AppStorage("previewShowGuides") private var showGuides = true
+    @AppStorage(SettingsKeys.snapToGrid) private var snapToGrid = false
     @AppStorage("previewGuidesX") private var guidesXRaw = ""
     @AppStorage("previewGuidesY") private var guidesYRaw = ""
 
@@ -22,12 +23,16 @@ struct PreviewPane: View {
         case gcode = "G-code"
         case log = "Log"
     }
+    /// A failure the user closed; its card stays hidden until the next failure.
+    @State private var dismissedFailure: String?
     // Dev hook: launch with `-debugTab gcode|log` to open a specific tab.
-    @State private var tab: Tab = switch UserDefaults.standard.string(forKey: "debugTab") {
-    case "gcode": .gcode
-    case "log": .log
-    default: .toolpath
-    }
+    @State private var tab: Tab = {
+        switch UserDefaults.standard.string(forKey: "debugTab") {
+        case "gcode": .gcode
+        case "log": .log
+        default: .toolpath
+        }
+    }()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -138,6 +143,10 @@ struct PreviewPane: View {
                 Label("Clear Guides", systemImage: "trash")
             }
             .disabled(guidesXRaw.isEmpty && guidesYRaw.isEmpty)
+            Toggle(isOn: $snapToGrid) {
+                Label("Snap to Grid", systemImage: "squareshape.split.3x3")
+            }
+            .help("Moving the origin (dragging the X0 Y0 marker, or Set Origin) lands on the grid lines shown in the view, so it moves in whole grid steps. Project corners, centre and drill holes still take precedence when you are close to one. Zoom in for a finer grid.")
             Toggle(isOn: $showAllLayers) {
                 Label("All Layers Overlay", systemImage: "square.3.layers.3d")
             }
@@ -193,6 +202,12 @@ struct PreviewPane: View {
         VStack(spacing: 0) {
             ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // The last result stays visible while it is being replaced,
+                // dimmed so it reads as "about to change".
+                .opacity(isRegenerating ? 0.45 : 1)
+                .saturation(isRegenerating ? 0.3 : 1)
+                .animation(.easeInOut(duration: 0.25), value: isRegenerating)
+                .overlay { statusCard }
                 .overlay(alignment: .topLeading) {
                     canvasNotes
                         .padding(.leading, showRulers ? ToolpathCanvasView.leftGutter : 0)
@@ -210,6 +225,113 @@ struct PreviewPane: View {
                 SideViewCanvas(model: model, preview: preview, playback: playback)
                     .frame(height: sideViewHeight)
             }
+        }
+    }
+
+    // MARK: - Generation status on the canvas
+
+    /// A run is replacing a preview that is still on screen.
+    private var isRegenerating: Bool {
+        preview.document != nil && preview.phase == .running
+    }
+
+    /// One card in the middle of the canvas for every generation state —
+    /// first load and updates alike. Its content changes in place (waiting →
+    /// progress → gone), so it never jumps around.
+    @ViewBuilder
+    private var statusCard: some View {
+        let hasPreview = preview.document != nil
+        Group {
+            switch preview.phase {
+            case .debouncing:
+                cardBody {
+                    Label(hasPreview ? "Preview updates after your edits…" : "Preview starts after your edits…",
+                          systemImage: "clock")
+                        .font(.headline)
+                    Text("Waiting a moment in case you are still typing.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            case .running:
+                cardBody {
+                    progressBlock(title: hasPreview ? "Updating preview" : "Generating preview")
+                    HStack {
+                        if hasPreview {
+                            Text("The previous result stays visible until the new one is ready.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Stop") { Task { await preview.cancelActiveRun() } }
+                            .controlSize(.small)
+                            .help(hasPreview ? "Stop — keep showing the previous result" : "Stop generating")
+                    }
+                }
+            case .failed(let message) where dismissedFailure != message:
+                cardBody {
+                    failureBlock(message, hasPreview: hasPreview)
+                }
+            default:
+                EmptyView()
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: preview.phase)
+    }
+
+    private func cardBody<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12, content: content)
+            .frame(width: 340, alignment: .leading)
+            .padding(18)
+            .glassEffect(in: .rect(cornerRadius: 16))
+            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+    }
+
+    private func progressBlock(title: String) -> some View {
+        let progress = preview.progress
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                if let progress {
+                    Text("\(min(progress.step + 1, progress.total)) of \(progress.total)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ProgressView(value: progress?.fraction ?? 0)
+                .progressViewStyle(.linear)
+                .animation(.easeOut(duration: 0.3), value: progress?.fraction)
+            Text(progress?.label ?? "Starting pcb2gcode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private func failureBlock(_ message: String, hasPreview: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(hasPreview ? "Update failed" : "Preview failed", systemImage: "xmark.octagon.fill")
+                .font(.headline)
+                .foregroundStyle(.red)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(4)
+            if hasPreview {
+                Text("Showing the last good preview.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Show Log") { tab = .log }
+                Button("Try Again") { preview.refreshNow() }
+                Spacer()
+                if hasPreview {
+                    Button("Close") { dismissedFailure = message }
+                }
+            }
+            .controlSize(.small)
         }
     }
 

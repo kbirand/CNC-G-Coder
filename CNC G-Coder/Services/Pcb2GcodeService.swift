@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CryptoKit
 
 /// Builds pcb2gcode/gerbv command lines and runs generation batches.
 /// The same batch serves both the live preview (temp dir) and the final
@@ -10,9 +11,8 @@ nonisolated enum Pcb2GcodeService {
         var outputs: [GeneratedOutput] = []
         var log = ""
         var succeeded = true
-        /// Project extent (mm) when origins were normalized; the back-side
-        /// frame is the mirror image of the front frame across this rectangle.
-        var projectSize: CGSize?
+        /// Where X0/Y0 was put when origins were normalized.
+        var frame: ProjectFrame?
     }
 
     // MARK: - Argument building (ported from the reference app)
@@ -34,6 +34,7 @@ nonisolated enum Pcb2GcodeService {
             "--path-finding-limit", "0",
             "--mill-diameters", "\(p.millDiameter)mm",
             "--isolation-width", "\(p.isolationWidth)mm",
+            "--milling-overlap", "\(p.millOverlap)%",
             "--zwork", "\(p.zWork)mm",
             "--mill-feed", "\(p.millFeed)mm/minute",
             "--mill-vertfeed", "\(p.millVertFeed)mm/minute",
@@ -42,6 +43,8 @@ nonisolated enum Pcb2GcodeService {
             "--zchange", "\(p.zChange)mm",
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
+        a += infeedArgs(depthPerPass: p.millInfeed, depth: p.zWork)
+        a += commonMillingArgs(p)
 
         // Never pcb2gcode's --zero-start: it zeroes each INVOCATION on its own
         // extents, so copper, drills and masks would get origins differing by
@@ -80,7 +83,35 @@ nonisolated enum Pcb2GcodeService {
         return a
     }
 
-    static func drillArgs(_ p: ParameterSnapshot, drill: URL, output: URL) -> [String] {
+    /// The outline on its own: none of the isolation settings, which do not
+    /// affect it (verified identical to the combined run) — so editing copper
+    /// settings never re-runs the cutout.
+    static func outlineArgs(_ p: ParameterSnapshot, outline: URL, outputDir: URL) -> [String] {
+        var a: [String] = [
+            "--metric",
+            "--metricoutput",
+            "--path-finding-limit", "0",
+            "--zsafe", "\(p.zSafe)mm",
+            "--zchange", "\(p.zChange)mm",
+            "--mirror-axis", "\(p.mirrorAxis)mm",
+            "--outline", outline.path,
+            "--cutter-diameter", "\(p.cutterDiameter)mm",
+            "--zcut", "\(p.zCut)mm",
+            "--cut-feed", "\(p.cutFeed)mm/minute",
+            "--cut-vertfeed", "\(p.cutVertFeed)mm/minute",
+            "--cut-speed", p.cutSpeed,
+            "--cut-infeed", "\(p.cutInfeed)mm",
+            "--bridges", "\(p.bridgeWidth)mm",
+            "--bridgesnum", p.bridgeCount,
+            "--zbridges", "\(p.zBridge)mm",
+            "--outline-output", outputURL(for: .outline, in: outputDir).path
+        ]
+        a += commonMillingArgs(p)
+        if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
+        return a
+    }
+
+    static func drillArgs(_ p: ParameterSnapshot, drill: URL, output: URL, millOutput: URL) -> [String] {
         var a: [String] = [
             "--metric",
             "--metricoutput",
@@ -93,15 +124,66 @@ nonisolated enum Pcb2GcodeService {
             "--drill-output", output.path,
             "--zsafe", "\(p.zSafe)mm",
             "--zchange", "\(p.zChange)mm",
-            "--mirror-axis", "\(p.mirrorAxis)mm"
+            "--mirror-axis", "\(p.mirrorAxis)mm",
+            "--spinup-time", spinupPlaceholder
         ]
+        if !p.drillBits.isEmpty {
+            a += ["--drills-available", p.drillBits.joined(separator: ",")]
+        }
+        if p.drillMillLarge {
+            // Holes from this size up are milled as helices with the hole-
+            // milling end mill. pcb2gcode reads the milling feeds, speed and
+            // pass depth from the --cut-* options (which it insists on even
+            // without --outline); this invocation has no outline, so they
+            // carry the hole mill's own values.
+            a += [
+                "--min-milldrill-hole-diameter", "\(p.drillMillFrom)mm",
+                "--milldrill-diameter", "\(p.holeMillDiameter)mm",
+                "--zmilldrill", "\(p.holeMillDepth)mm",
+                "--milldrill-output", millOutput.path,
+                "--cutter-diameter", "\(p.holeMillDiameter)mm",
+                "--zcut", "\(p.holeMillDepth)mm",
+                "--cut-feed", "\(p.holeMillFeed)mm/minute",
+                "--cut-vertfeed", "\(p.holeMillVertFeed)mm/minute",
+                "--cut-speed", p.holeMillSpeed,
+                "--cut-infeed", "\(p.holeMillInfeed)mm"
+            ]
+        }
         if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
     }
 
+    /// Options every milling invocation shares: feed direction and spin-up.
+    private static func commonMillingArgs(_ p: ParameterSnapshot) -> [String] {
+        var a = ["--spinup-time", spinupPlaceholder]
+        if p.millDirection == "climb" || p.millDirection == "conventional" {
+            // pcb2gcode refuses a fixed direction while its 2-opt path
+            // shortening may reverse paths.
+            a += ["--mill-feed-direction", p.millDirection, "--tsp-2opt=0"]
+        }
+        return a
+    }
+
+    /// --mill-infeed only when it really splits the cut into several passes.
+    private static func infeedArgs(depthPerPass: String, depth: String) -> [String] {
+        guard let step = Double(depthPerPass), step > 0,
+              let total = Double(depth), step < abs(total) else { return [] }
+        return ["--mill-infeed", "\(depthPerPass)mm"]
+    }
+
+    /// pcb2gcode's spin-up time is per invocation (isolation and outline
+    /// share one), so it only marks where the dwells go; setDwells() writes
+    /// each program's own value there.
+    private static let spinupPlaceholder = "1s"
+
     static func drillOutputURL(for drill: URL, index: Int, outputDir: URL) -> URL {
         let stem = drill.deletingPathExtension().lastPathComponent
         return outputURL(for: .drill(index: index, name: stem), in: outputDir)
+    }
+
+    static func millDrillOutputURL(for drill: URL, index: Int, outputDir: URL) -> URL {
+        let stem = drill.deletingPathExtension().lastPathComponent
+        return outputURL(for: .millDrill(index: index, name: stem), in: outputDir)
     }
 
     /// Solder-mask etch: the mask Gerbers describe the OPENINGS (pads/vias to
@@ -123,7 +205,7 @@ nonisolated enum Pcb2GcodeService {
             "--invert-gerbers",
             "--path-finding-limit", "0",   // never drag the tool through cured mask between openings
             "--mill-diameters", "\(p.maskTool)mm",
-            "--milling-overlap", "40%",
+            "--milling-overlap", "\(p.maskOverlap)%",
             // Clearing is bounded by each opening's own geometry, but pcb2gcode's
             // generation time explodes with this width — keep it just above half
             // the widest opening (user-tunable), never a blanket large value.
@@ -136,6 +218,7 @@ nonisolated enum Pcb2GcodeService {
             "--zchange", "\(p.zChange)mm",
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
+        a += commonMillingArgs(p)
 
         if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
@@ -161,7 +244,7 @@ nonisolated enum Pcb2GcodeService {
             "--invert-gerbers",
             "--path-finding-limit", "0",   // never drag the tool between glyphs
             "--mill-diameters", "\(p.silkTool)mm",
-            "--milling-overlap", "40%",
+            "--milling-overlap", "\(p.silkOverlap)%",
             // Legend strokes are thin, so this stays small — generation time
             // climbs steeply with it, exactly as for the mask.
             "--isolation-width", "\(p.silkClearWidth)mm",
@@ -173,6 +256,7 @@ nonisolated enum Pcb2GcodeService {
             "--zchange", "\(p.zChange)mm",
             "--mirror-axis", "\(p.mirrorAxis)mm"
         ]
+        a += commonMillingArgs(p)
 
         if p.mirrorYAxis { a.append("--mirror-yaxis=1") }   // needs its value; zeroing: see normalizeOrigins()
         return a
@@ -187,139 +271,425 @@ nonisolated enum Pcb2GcodeService {
 
     // MARK: - Batch execution
 
-    /// Reports which step a batch is starting, so the Generate sheet can show
-    /// real progress instead of an indeterminate spinner.
-    typealias StepReporter = @Sendable (_ index: Int, _ total: Int, _ label: String) -> Void
+    /// Progress of a batch: every unit of work reports when it starts and
+    /// when it finishes. Jobs run in parallel, so several can be in flight.
+    enum StepEvent: Sendable {
+        case started(id: Int, label: String)
+        case finished(id: Int)
+    }
+    typealias StepReporter = @Sendable (_ event: StepEvent, _ total: Int) -> Void
 
-    /// How many reported steps `runBatch` will take with these inputs.
+    /// One program's worth of pcb2gcode: a single invocation and the files
+    /// it produces. Jobs are independent, so they run in parallel and each is
+    /// cached on its own — editing one layer's settings only re-runs the jobs
+    /// whose command line (or input file) actually changed.
+    struct Job: Sendable {
+        struct Product: Sendable {
+            let layer: LayerKind
+            let url: URL
+            let tool: String?
+        }
+        let label: String
+        let args: [String]
+        let products: [Product]
+        /// Drill programs: the file to check against the bits on hand.
+        var bitCheck: URL?
+    }
+
+    /// Replaces the value following `flag` (used to send a by-product to scratch).
+    private static func replacing(_ flag: String, with value: String, in args: [String]) -> [String] {
+        var args = args
+        if let i = args.firstIndex(of: flag), i + 1 < args.count { args[i + 1] = value }
+        return args
+    }
+
+    static func jobs(_ p: ParameterSnapshot, files: DetectedFiles, outputDir: URL) -> [Job] {
+        var jobs: [Job] = []
+        func product(_ layer: LayerKind, _ tool: String?) -> Job.Product {
+            Job.Product(layer: layer, url: outputURL(for: layer, in: outputDir), tool: tool)
+        }
+
+        // Copper: one job per side. The outline goes along as INPUT — with an
+        // outline present pcb2gcode clips the isolation to the board, and the
+        // output must match what one combined run produced — but its program
+        // is discarded (relative path: lands in the job's scratch folder).
+        for (slot, layer) in [(LayerSlot.front, LayerKind.front), (.back, .back)] {
+            guard let file = files[slot] else { continue }
+            var only = DetectedFiles()
+            only[slot] = file
+            only.outline = files.outline
+            let args = replacing("--outline-output", with: "unused-outline.ngc",
+                                 in: isolationArgs(p, files: only, outputDir: outputDir))
+            jobs.append(Job(label: layer.displayName, args: args, products: [product(layer, p.millDiameter)]))
+        }
+        if let outline = files.outline {
+            jobs.append(Job(label: "Board outline", args: outlineArgs(p, outline: outline, outputDir: outputDir),
+                            products: [product(.outline, p.cutterDiameter)]))
+        }
+
+        for (index, drill) in files.drills.enumerated() {
+            let stem = drill.deletingPathExtension().lastPathComponent
+            let out = drillOutputURL(for: drill, index: index, outputDir: outputDir)
+            let milled = millDrillOutputURL(for: drill, index: index, outputDir: outputDir)
+            var products = [Job.Product(layer: .drill(index: index, name: stem), url: out, tool: nil)]
+            if p.drillMillLarge {
+                products.append(Job.Product(layer: .millDrill(index: index, name: stem), url: milled, tool: p.holeMillDiameter))
+            }
+            jobs.append(Job(label: "Drilling — \(stem)",
+                            args: drillArgs(p, drill: drill, output: out, millOutput: milled),
+                            products: products,
+                            bitCheck: p.drillBits.isEmpty ? nil : out))
+        }
+
+        // Mask and legend keep top and bottom in ONE run each: pcb2gcode
+        // rasterises all layers of a run on a shared grid, and splitting the
+        // sides moved some legend points by ~0.005 mm. (Copper can split
+        // because the outline, passed to every copper run, sets the grid.)
+        if p.maskMode == "gcode", files.topMask != nil || files.bottomMask != nil {
+            var products: [Job.Product] = []
+            if files.topMask != nil { products.append(product(.maskTop, p.maskTool)) }
+            if files.bottomMask != nil { products.append(product(.maskBottom, p.maskTool)) }
+            jobs.append(Job(label: "Solder-mask etch", args: maskArgs(p, files: files, outputDir: outputDir),
+                            products: products))
+        }
+        if p.silkMode == "gcode", files.topSilk != nil || files.bottomSilk != nil {
+            var products: [Job.Product] = []
+            if files.topSilk != nil { products.append(product(.silkTop, p.silkTool)) }
+            if files.bottomSilk != nil { products.append(product(.silkBottom, p.silkTool)) }
+            jobs.append(Job(label: "Silkscreen engraving", args: silkArgs(p, files: files, outputDir: outputDir),
+                            products: products))
+        }
+        return jobs
+    }
+
+    /// How many progress steps `runBatch` reports with these inputs.
     static func stepCount(_ p: ParameterSnapshot, files: DetectedFiles) -> Int {
-        var steps = 0
-        if files.front != nil || files.back != nil || files.outline != nil { steps += 1 }
-        steps += files.drills.count
-        if p.maskMode == "gcode", files.topMask != nil || files.bottomMask != nil { steps += 1 }
-        if p.silkMode == "gcode", files.topSilk != nil || files.bottomSilk != nil { steps += 1 }
+        var steps = jobs(p, files: files, outputDir: URL(fileURLWithPath: "/")).count
         if let clearance = Double(p.plungeClearance), clearance > 0 { steps += 1 }
         if p.zeroStart { steps += 1 }
         return steps
     }
 
-    /// Runs one pcb2gcode invocation, timing it and appending output to the log.
-    private static func runStep(_ label: String, pcb2gcode: URL, args: [String],
-                                outputDir: URL, result: inout BatchResult) async {
-        let clock = ContinuousClock()
-        let start = clock.now
-        do {
-            let r = try await ProcessRunner.run(executable: pcb2gcode, arguments: args, currentDirectory: outputDir)
-            let elapsed = start.duration(to: clock.now)
-            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
-            result.log += "$ \(r.commandLine)\n\(r.output)\n"
-            result.log += String(format: "%@ finished in %.1fs\n", label, seconds)
-            if r.exitCode != 0 {
-                result.log += "\(label) failed with exit code \(r.exitCode)\n"
-                result.succeeded = false
+    /// Where the preview keeps pcb2gcode results between runs.
+    static var previewCache: URL { PreviewPaths.root.appendingPathComponent("cache", isDirectory: true) }
+
+    /// Identity of a job's result: its command line with the run folder
+    /// masked out, plus the contents of every input file it names. Same key,
+    /// same pcb2gcode output.
+    private static func cacheKey(_ job: Job, outputDir: URL, pcb2gcode: URL) -> String {
+        var hasher = SHA256()
+        let prefix = outputDir.path
+        hasher.update(data: Data(pcb2gcode.path.utf8))
+        for arg in job.args {
+            hasher.update(data: Data((arg.hasPrefix(prefix) ? "<OUT>" + arg.dropFirst(prefix.count) : arg).utf8))
+            hasher.update(data: Data([0]))
+            if arg.hasPrefix("/"), !arg.hasPrefix(prefix), let data = FileManager.default.contents(atPath: arg) {
+                hasher.update(data: SHA256.hash(data: data).withUnsafeBytes { Data($0) })
             }
-        } catch {
-            result.log += "ERROR launching pcb2gcode: \(error.localizedDescription)\n"
-            result.succeeded = false
         }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Runs one full pcb2gcode batch: copper + outline first (one invocation),
-    /// then one invocation per drill file (pcb2gcode accepts a single --drill each),
-    /// then the solder-mask etch (separate invocation: inversion must not apply
-    /// to the copper layers).
-    static func runBatch(pcb2gcode: URL, params p: ParameterSnapshot, files: DetectedFiles, outputDir: URL,
-                         onStep: StepReporter? = nil) async -> BatchResult {
-        var result = BatchResult()
+    /// Runs (or, from the cache, re-uses) one job. Returns its log text and
+    /// whether it succeeded.
+    private static func runJob(_ job: Job, pcb2gcode: URL, outputDir: URL, scratchRoot: URL,
+                               cache: URL?) async -> (log: String, succeeded: Bool) {
         let fm = FileManager.default
-        try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let key = cache.map { _ in cacheKey(job, outputDir: outputDir, pcb2gcode: pcb2gcode) }
+        if let cache, let key {
+            let entry = cache.appendingPathComponent(key, isDirectory: true)
+            if fm.fileExists(atPath: entry.path) {
+                for product in job.products {
+                    let cached = entry.appendingPathComponent(product.url.lastPathComponent)
+                    try? fm.removeItem(at: product.url)
+                    if fm.fileExists(atPath: cached.path) { try? fm.copyItem(at: cached, to: product.url) }
+                }
+                // Touch it so pruning keeps recently used results.
+                try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: entry.path)
+                return ("\(job.label): unchanged — reused the previous result\n", true)
+            }
+        }
 
-        // pcb2gcode dumps its debug renders (traced_*.svg, processed_*.svg,
-        // outp*_*.svg) into the CURRENT DIRECTORY, and offers no option to
-        // suppress them. Programs go to their absolute --*-output paths, so
-        // running in a scratch folder keeps the user's output folder to just
-        // the .ngc files.
-        let scratch = outputDir.appendingPathComponent(".pcb2gcode-scratch-\(UUID().uuidString)", isDirectory: true)
+        // pcb2gcode dumps debug renders into its working directory; each job
+        // gets its own, so parallel runs never write over each other.
+        let scratch = scratchRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: scratch) }
 
+        var log = ""
+        let clock = ContinuousClock()
+        let start = clock.now
+        do {
+            let r = try await ProcessRunner.run(executable: pcb2gcode, arguments: job.args, currentDirectory: scratch)
+            log += "$ \(r.commandLine)\n\(r.output)\n"
+            log += String(format: "%@ finished in %.1fs\n", job.label, start.duration(to: clock.now).seconds)
+            guard r.exitCode == 0 else {
+                log += "\(job.label) failed with exit code \(r.exitCode)\n"
+                return (log, false)
+            }
+        } catch {
+            return (log + "ERROR launching pcb2gcode: \(error.localizedDescription)\n", false)
+        }
+
+        // Store the raw result (before any post-processing). Written under a
+        // temporary name and renamed, so a half-written entry is never a hit.
+        if let cache, let key, !Task.isCancelled {
+            let staging = cache.appendingPathComponent(".\(key)-\(UUID().uuidString)", isDirectory: true)
+            do {
+                try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+                for product in job.products where fm.fileExists(atPath: product.url.path) {
+                    try fm.copyItem(at: product.url, to: staging.appendingPathComponent(product.url.lastPathComponent))
+                }
+                try fm.moveItem(at: staging, to: cache.appendingPathComponent(key, isDirectory: true))
+            } catch {
+                try? fm.removeItem(at: staging)
+            }
+        }
+        return (log, true)
+    }
+
+    /// Keeps the most recently used cache entries only.
+    private static func pruneCache(_ cache: URL, keep: Int = 80) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: cache, includingPropertiesForKeys: [.contentModificationDateKey],
+                                                        options: [.skipsHiddenFiles]),
+              entries.count > keep else { return }
+        let sorted = entries.sorted {
+            let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return a > b
+        }
+        for entry in sorted.dropFirst(keep) { try? fm.removeItem(at: entry) }
+    }
+
+    /// Runs every job — in parallel, re-using cached results when `cache` is
+    /// given (the live preview; Generate always runs fresh) — then the local
+    /// post-processing passes over all programs together.
+    static func runBatch(pcb2gcode: URL, params p: ParameterSnapshot, files: DetectedFiles, outputDir: URL,
+                         cache: URL? = nil, onStep: StepReporter? = nil) async -> BatchResult {
+        var result = BatchResult()
+        let fm = FileManager.default
+        try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        if let cache { try? fm.createDirectory(at: cache, withIntermediateDirectories: true) }
+
+        let scratchRoot = outputDir.appendingPathComponent(".pcb2gcode-scratch-\(UUID().uuidString)", isDirectory: true)
+        try? fm.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: scratchRoot) }
+
+        let jobs = jobs(p, files: files, outputDir: outputDir)
         let total = stepCount(p, files: files)
-        var step = 0
-        func report(_ label: String) {
+        // pcb2gcode is partly multi-threaded itself; half the cores each is plenty.
+        let width = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+
+        var logs = [String](repeating: "", count: jobs.count)
+        await withTaskGroup(of: (Int, String, Bool).self) { group in
+            var next = 0
+            func launch() {
+                guard next < jobs.count else { return }
+                let index = next
+                next += 1
+                let job = jobs[index]
+                onStep?(.started(id: index, label: job.label), total)
+                group.addTask {
+                    let r = await runJob(job, pcb2gcode: pcb2gcode, outputDir: outputDir,
+                                         scratchRoot: scratchRoot, cache: cache)
+                    return (index, r.log, r.succeeded)
+                }
+            }
+            for _ in 0..<min(width, jobs.count) { launch() }
+            for await (index, log, succeeded) in group {
+                logs[index] = log
+                if !succeeded { result.succeeded = false }
+                onStep?(.finished(id: index), total)
+                if !Task.isCancelled { launch() }
+            }
+        }
+        result.log += logs.joined()
+        if Task.isCancelled { result.succeeded = false }
+        if let cache { pruneCache(cache) }
+
+        for job in jobs {
+            if let check = job.bitCheck { warnAboutMissingBits(in: check, bits: p.drillBits, log: &result.log) }
+            for product in job.products where fm.fileExists(atPath: product.url.path) {
+                result.outputs.append(GeneratedOutput(layer: product.layer, url: product.url,
+                                                      toolDiameter: product.tool.flatMap(Double.init)))
+            }
+        }
+
+        var step = jobs.count
+        func post(_ label: String, _ work: () -> Void) {
+            let id = step
             step += 1
-            onStep?(step, total, label)
+            onStep?(.started(id: id, label: label), total)
+            work()
+            onStep?(.finished(id: id), total)
         }
 
-        if files.front != nil || files.back != nil || files.outline != nil {
-            report("Copper isolation and board outline")
-            await runStep("Isolation/outline generation", pcb2gcode: pcb2gcode,
-                          args: isolationArgs(p, files: files, outputDir: outputDir),
-                          outputDir: scratch, result: &result)
-        }
-
-        for (index, drill) in files.drills.enumerated() {
-            if Task.isCancelled {
-                result.succeeded = false
-                return result
-            }
-            let out = drillOutputURL(for: drill, index: index, outputDir: outputDir)
-            report("Drilling — \(drill.deletingPathExtension().lastPathComponent)")
-            await runStep("Drill generation (\(drill.lastPathComponent))", pcb2gcode: pcb2gcode,
-                          args: drillArgs(p, drill: drill, output: out),
-                          outputDir: scratch, result: &result)
-        }
-
-        if p.maskMode == "gcode", files.topMask != nil || files.bottomMask != nil, !Task.isCancelled {
-            report("Solder-mask etch")
-            await runStep("Solder-mask etch generation", pcb2gcode: pcb2gcode,
-                          args: maskArgs(p, files: files, outputDir: outputDir),
-                          outputDir: scratch, result: &result)
-        }
-
-        if p.silkMode == "gcode", files.topSilk != nil || files.bottomSilk != nil, !Task.isCancelled {
-            report("Silkscreen engraving")
-            await runStep("Silkscreen engraving generation", pcb2gcode: pcb2gcode,
-                          args: silkArgs(p, files: files, outputDir: outputDir),
-                          outputDir: scratch, result: &result)
-        }
-
-        // Collect the outputs that actually exist.
-        func addIfExists(_ layer: LayerKind, _ url: URL, tool: String?) {
-            if fm.fileExists(atPath: url.path) {
-                result.outputs.append(GeneratedOutput(layer: layer, url: url,
-                                                      toolDiameter: tool.flatMap(Double.init)))
-            }
-        }
-        if files.front != nil { addIfExists(.front, outputURL(for: .front, in: outputDir), tool: p.millDiameter) }
-        if files.back != nil { addIfExists(.back, outputURL(for: .back, in: outputDir), tool: p.millDiameter) }
-        if files.outline != nil { addIfExists(.outline, outputURL(for: .outline, in: outputDir), tool: p.cutterDiameter) }
-        for (index, drill) in files.drills.enumerated() {
-            let stem = drill.deletingPathExtension().lastPathComponent
-            addIfExists(.drill(index: index, name: stem),
-                        drillOutputURL(for: drill, index: index, outputDir: outputDir),
-                        tool: nil)   // bit sizes vary per hole; not modeled
-        }
-        if p.maskMode == "gcode" {
-            if files.topMask != nil { addIfExists(.maskTop, outputURL(for: .maskTop, in: outputDir), tool: p.maskTool) }
-            if files.bottomMask != nil { addIfExists(.maskBottom, outputURL(for: .maskBottom, in: outputDir), tool: p.maskTool) }
-        }
-        if p.silkMode == "gcode" {
-            if files.topSilk != nil { addIfExists(.silkTop, outputURL(for: .silkTop, in: outputDir), tool: p.silkTool) }
-            if files.bottomSilk != nil { addIfExists(.silkBottom, outputURL(for: .silkBottom, in: outputDir), tool: p.silkTool) }
+        // Local rewrites, before the plunge pass (pecks produce plunges it splits).
+        setDwells(p, outputs: result.outputs, log: &result.log)
+        if let peck = Double(p.drillPeck), peck > 0 {
+            peckDrill(peck: peck, clearance: Double(p.plungeClearance) ?? 0,
+                      outputs: result.outputs.filter { $0.layer.isDrill }, log: &result.log)
         }
 
         if let clearance = Double(p.plungeClearance), clearance > 0,
            result.succeeded, !result.outputs.isEmpty {
-            report("Optimizing plunges")
-            optimizePlunges(clearance: clearance, outputs: result.outputs, log: &result.log)
+            post("Optimizing plunges") {
+                optimizePlunges(clearance: clearance, outputs: result.outputs, log: &result.log)
+            }
         }
 
         if p.zeroStart, result.succeeded, !result.outputs.isEmpty {
-            report("Normalizing origins")
-            result.projectSize = normalizeOrigins(p, outputs: result.outputs, log: &result.log)
+            post("Normalizing origins") {
+                result.frame = normalizeOrigins(p, outputs: result.outputs, log: &result.log)
+            }
         }
 
         return result
+    }
+
+    // MARK: - Drill bit check
+
+    /// pcb2gcode lists the bits a drill program needs in a header comment
+    /// ("( Bit sizes: [1mm] [3.032mm] )"). Holes no bit on hand covers keep
+    /// their designed size, so flag every listed size that is not on hand.
+    private static func warnAboutMissingBits(in file: URL, bits: [String], log: inout String) {
+        guard let text = try? String(contentsOf: file, encoding: .utf8),
+              let header = text.split(separator: "\n").first(where: { $0.contains("Bit sizes:") }) else { return }
+        let onHand = bits.compactMap { Double($0.prefix { $0 != "m" }) }
+        let needed = header.split(separator: "[").dropFirst().compactMap { Double($0.prefix { $0 != "m" }) }
+        let missing = needed.filter { size in !onHand.contains { abs($0 - size) < 1e-6 } }
+        guard !missing.isEmpty else { return }
+        let list = missing.map { ParametersStore.format($0) + " mm" }.joined(separator: ", ")
+        log += "WARNING: \(file.lastPathComponent) needs bit\(missing.count == 1 ? "" : "s") not on hand: \(list). "
+            + "No bit's range covers these holes — add a bit, widen a range, or mill large holes.\n"
+    }
+
+    // MARK: - Dwells
+
+    /// Seconds a program waits after starting (and stopping) the spindle.
+    static func dwellSeconds(for kind: LayerKind, _ p: ParameterSnapshot) -> Double? {
+        let value: String? = switch kind {
+        case .front, .back: p.millDwell
+        case .outline: p.cutDwell
+        case .drill: p.drillDwell
+        case .millDrill: p.holeMillDwell
+        case .maskTop, .maskBottom: p.maskDwell
+        case .silkTop, .silkBottom: p.silkDwell
+        case .test: nil
+        }
+        return value.flatMap(Double.init)
+    }
+
+    /// pcb2gcode writes one spindle dwell per invocation, and in
+    /// MILLISECONDS ("G04 P2000") whatever --software says — GRBL and LinuxCNC
+    /// read G4 P as SECONDS, so that would pause for 33 minutes. Each program
+    /// gets its own layer's dwell instead: the G4 right after every M3
+    /// (spin-up) and M5 (spin-down) is rewritten in seconds, or dropped for 0.
+    /// Any other non-zero dwell is converted from milliseconds.
+    private static func setDwells(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) {
+        var summary: [String] = []
+        for output in outputs {
+            guard let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
+            let seconds = dwellSeconds(for: output.layer, p)
+            var out: [String] = []
+            // Code lines since the last M3/M5: pcb2gcode's drill programs put a
+            // move between M3 and its dwell, so "right after" allows a little gap.
+            var sinceSpindle = Int.max
+            var changed = false
+            for lineSub in text.split(separator: "\n", omittingEmptySubsequences: false) {
+                let line = String(lineSub)
+                let code = strippedOfComments(line).uppercased().trimmingCharacters(in: .whitespaces)
+                if ["M3", "M03", "M5", "M05"].contains(where: { code.hasPrefix($0) }) {
+                    sinceSpindle = 0
+                    out.append(line)
+                    continue
+                }
+                if !code.isEmpty, sinceSpindle < Int.max { sinceSpindle += 1 }
+                guard code.hasPrefix("G04") || code.hasPrefix("G4 ") || code.hasPrefix("G4P"),
+                      let pRange = line.range(of: "P", options: .caseInsensitive) else {
+                    out.append(line)
+                    continue
+                }
+                let digits = line[pRange.upperBound...].prefix { $0.isNumber || $0 == "." }
+                guard let ms = Double(digits), ms > 0 else {
+                    out.append(line)   // "G04 P0" path markers stay as they are
+                    continue
+                }
+                changed = true
+                let spindle = sinceSpindle <= 2
+                if spindle, let seconds {
+                    if seconds > 0 {
+                        out.append(line.replacingCharacters(in: pRange.upperBound..<digits.endIndex,
+                                                            with: String(format: "%.3f", seconds)))
+                    }
+                } else {
+                    out.append(line.replacingCharacters(in: pRange.upperBound..<digits.endIndex,
+                                                        with: String(format: "%.3f", ms / 1000)))
+                }
+            }
+            if changed {
+                try? out.joined(separator: "\n").write(to: output.url, atomically: true, encoding: .utf8)
+            }
+            if let seconds { summary.append("\(output.layer.displayName) \(ParametersStore.format(seconds)) s") }
+        }
+        if !summary.isEmpty {
+            log += "Spindle dwell (G4 P, seconds): " + summary.joined(separator: ", ") + ".\n"
+        }
+    }
+
+    // MARK: - Peck drilling
+
+    /// pcb2gcode drills each hole in one stroke (G1 down, G1 up). Split every
+    /// stroke that enters the board into pecks of `peck` depth: after each
+    /// peck the bit rapids up out of the hole to clear chips, rapids back to
+    /// just above the previous bottom, and feeds on. The final stroke and the
+    /// retract are pcb2gcode's own.
+    private static func peckDrill(peck: Double, clearance: Double, outputs: [GeneratedOutput], log: inout String) {
+        let retract = max(clearance, 0.2)
+        let reentry = 0.1   // stop this far above the previous bottom before feeding again
+        var holes = 0
+        for output in outputs {
+            guard let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
+            var out: [String] = []
+            var modalG: Int?
+            var currentZ: Double?
+            var changed = false
+            for lineSub in text.split(separator: "\n", omittingEmptySubsequences: false) {
+                let line = String(lineSub)
+                let words = motionWords(strippedOfComments(line))
+                if let g = words.g { modalG = g }
+                let g = words.g ?? modalG
+                if g == 1, let z = words.z, !words.hasXY, let startZ = currentZ,
+                   startZ >= 0, z < -peck - 1e-6 {
+                    var depth = -peck
+                    var previous = 0.0
+                    while depth > z + 1e-6 {
+                        if previous < 0 {
+                            out.append(String(format: "G00 Z%.5f ( back into the hole )", previous + reentry))
+                        }
+                        out.append(String(format: "G01 Z%.5f ( peck )", depth))
+                        out.append(String(format: "G00 Z%.5f ( clear chips )", retract))
+                        previous = depth
+                        depth -= peck
+                    }
+                    out.append(String(format: "G00 Z%.5f ( back into the hole )", previous + reentry))
+                    out.append(words.g == nil ? "G01 " + line : line)
+                    holes += 1
+                    changed = true
+                    currentZ = z
+                    continue
+                }
+                if let z = words.z { currentZ = z }
+                out.append(line)
+            }
+            if changed {
+                try? out.joined(separator: "\n").write(to: output.url, atomically: true, encoding: .utf8)
+            }
+        }
+        if holes > 0 {
+            log += String(format: "Peck drilling: %d holes drilled in %.2f mm pecks.\n", holes, peck)
+        }
     }
 
     // MARK: - Plunge optimization
@@ -485,11 +855,31 @@ nonisolated enum Pcb2GcodeService {
     /// program lines up; the back frame is the exact mirror image of the front
     /// frame across the project rectangle (which is what the preview's
     /// "Un-mirror Back Side" uses to overlay them).
-    private static func isBackSide(_ kind: LayerKind) -> Bool {
-        kind == .back || kind == .maskBottom || kind == .silkBottom
+    private static func isBackSide(_ kind: LayerKind) -> Bool { kind.isBackSide }
+
+    /// X0/Y0 for each side, from the lower-left corner of the project as the
+    /// machine sees that side. Corners and centre are the same corner on both
+    /// sides — the one you touch off at after flipping; a custom point is the
+    /// same physical spot on the board, e.g. a registration hole.
+    static func origins(_ p: ParameterSnapshot, rect: CGRect) -> (front: CGPoint, back: CGPoint) {
+        let w = rect.width, h = rect.height
+        let corner: CGPoint
+        switch p.originMode {
+        case "custom":
+            let x = (Double(p.originX) ?? 0) - rect.minX
+            let y = (Double(p.originY) ?? 0) - rect.minY
+            let front = CGPoint(x: x, y: y)
+            return (front, p.mirrorYAxis ? CGPoint(x: x, y: h - y) : CGPoint(x: w - x, y: y))
+        case "bottomRight": corner = CGPoint(x: w, y: 0)
+        case "topLeft": corner = CGPoint(x: 0, y: h)
+        case "topRight": corner = CGPoint(x: w, y: h)
+        case "center": corner = CGPoint(x: w / 2, y: h / 2)
+        default: corner = .zero
+        }
+        return (corner, corner)
     }
 
-    private static func normalizeOrigins(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) -> CGSize? {
+    private static func normalizeOrigins(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) -> ProjectFrame? {
         let axis = Double(p.mirrorAxis) ?? 0
 
         // Union of all program extents, unmirrored into the Gerber frame.
@@ -504,10 +894,13 @@ nonisolated enum Pcb2GcodeService {
         }
         guard !union.isNull, union.width > 0 || union.height > 0 else { return nil }
 
-        let frontShift: (dx: Double, dy: Double) = (-union.minX, -union.minY)
-        let backShift: (dx: Double, dy: Double) = p.mirrorYAxis
-            ? (-union.minX, -(2 * axis - union.maxY))
-            : (-(2 * axis - union.maxX), -union.minY)
+        let origin = origins(p, rect: union)
+        // The back programs' lower-left corner, in their mirrored frame.
+        let backMin = p.mirrorYAxis
+            ? CGPoint(x: union.minX, y: 2 * axis - union.maxY)
+            : CGPoint(x: 2 * axis - union.maxX, y: union.minY)
+        let frontShift: (dx: Double, dy: Double) = (-(union.minX + origin.front.x), -(union.minY + origin.front.y))
+        let backShift: (dx: Double, dy: Double) = (-(backMin.x + origin.back.x), -(backMin.y + origin.back.y))
 
         for (index, output) in outputs.enumerated() where measured.contains(index) {
             let shift = isBackSide(output.layer) ? backShift : frontShift
@@ -518,9 +911,22 @@ nonisolated enum Pcb2GcodeService {
             }
         }
 
-        log += String(format: "Origins normalized: project %.2f × %.2f mm — all programs share one origin per side (zero the machine once per side).\n",
-                      union.width, union.height)
-        return CGSize(width: union.width, height: union.height)
+        log += String(format: "Origins normalized: project %.2f × %.2f mm, X0 Y0 at %@ — all programs share one origin per side (zero the machine once per side).\n",
+                      union.width, union.height, originDescription(p, front: origin.front))
+        return ProjectFrame(rect: union, frontOrigin: origin.front, backOrigin: origin.back,
+                            mirrorYAxis: p.mirrorYAxis)
+    }
+
+    private static func originDescription(_ p: ParameterSnapshot, front: CGPoint) -> String {
+        switch p.originMode {
+        case "custom": String(format: "design point X%@ Y%@ (%.2f, %.2f mm from the project's lower-left corner)",
+                              p.originX, p.originY, front.x, front.y)
+        case "bottomRight": "the lower-right corner"
+        case "topLeft": "the upper-left corner"
+        case "topRight": "the upper-right corner"
+        case "center": "the centre"
+        default: "the lower-left corner"
+        }
     }
 
     private static func mirrored(_ rect: CGRect, axis: Double, yAxis: Bool) -> CGRect {

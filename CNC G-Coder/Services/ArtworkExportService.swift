@@ -185,16 +185,15 @@ nonisolated enum ArtworkExport {
                 page = board
             } else {
                 note = "no cutout program with a known cutter diameter to measure the board from — framed from the origin instead."
-                page = union()
-                page = CGRect(x: 0, y: 0, width: max(page.maxX, 0), height: max(page.maxY, 0))
+                page = union().union(CGRect.zero)
             }
         case .origin:
             // Pinned to the machine origin: cropping to the toolpath throws
             // away its offset from X0/Y0 (5 mm of it on a typical board), and
             // the laser would burn the artwork in the wrong place. The page
-            // corner IS X0/Y0, so the file only ever has to be placed at 0,0.
-            page = union()
-            page = CGRect(x: 0, y: 0, width: max(page.maxX, 0), height: max(page.maxY, 0))
+            // spans X0/Y0 and every program; with the origin at the lower-left
+            // corner (the default) the page corner IS X0/Y0.
+            page = union().union(CGRect.zero)
         case .project:
             page = union()
         case .layer:
@@ -262,7 +261,10 @@ nonisolated enum ArtworkExport {
             result.log += String(format: "Page is the finished board, %.2f × %.2f mm — align it to the board edges.\n",
                                  page.width, page.height)
         case .origin:
-            result.log += "Page corner is X0 Y0 — place the file at 0,0 and it sits where the mill would cut.\n"
+            result.log += page.minX == 0 && page.minY == 0
+                ? "Page corner is X0 Y0 — place the file at 0,0 and it sits where the mill would cut.\n"
+                : String(format: "Page corner is X%.3f Y%.3f — place the file there and it sits where the mill would cut.\n",
+                         page.minX, page.minY)
         case .project, .layer:
             break
         }

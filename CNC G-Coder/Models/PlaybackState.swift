@@ -24,6 +24,9 @@ final class PlaybackState: ObservableObject {
             }
         }
     }
+    /// "Set Origin" mode: the next click in the toolpath view places X0/Y0.
+    /// App-wide so the sidebar can start it too.
+    @Published var placingOrigin = false
     @Published var currentTime: Double = 0        // simulated seconds into the program
     @Published var speedMultiplier: Double = 1    // 1 = real machining speed
     @Published var isPlaying = false {
