@@ -13,22 +13,44 @@ struct ToolLibraryView: View {
 
     var body: some View {
         ToolLibraryContent(library: model.tools, selection: $selection, importMessage: $importMessage,
-                           importAction: importFlatCAM)
+                           importAction: importTools, exportAction: exportTools)
             .frame(minWidth: 760, minHeight: 520)
+            .onAppear {
+                // Dev hook: `-debugSelectTool "name"` opens with that tool selected.
+                if let name = UserDefaults.standard.string(forKey: "debugSelectTool") {
+                    selection = library.tools.first { $0.name == name }?.id
+                }
+            }
     }
 
-    private func importFlatCAM() {
+    private func importTools() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .json]
+        panel.allowedContentTypes = [.json, .plainText]
         panel.allowsOtherFileTypes = true
-        panel.message = "Choose a FlatCAM Tools Database export (Tools Database → Export, a JSON .TXT file)."
+        panel.message = "Choose a tool library exported from CNC G-Coder (.json) or a FlatCAM Tools Database export (.TXT)."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let count = try library.importFlatCAM(from: url)
-            importMessage = "Imported \(count) tool\(count == 1 ? "" : "s") from \(url.lastPathComponent)."
-            model.appendLog("\nImported \(count) tools from FlatCAM database \(url.path)\n")
+            let r = try library.importTools(from: url)
+            importMessage = "\(r.source): \(r.added) added, \(r.updated) updated from \(url.lastPathComponent)."
+            model.appendLog("\nImported tools from \(url.path) (\(r.source)): \(r.added) added, \(r.updated) updated.\n")
         } catch {
-            importMessage = "Could not import \(url.lastPathComponent): \(error.localizedDescription)"
+            importMessage = "Could not import \(url.lastPathComponent): it is neither a CNC G-Coder tool library nor a FlatCAM Tools Database (\(error.localizedDescription))."
+        }
+    }
+
+    private func exportTools() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "CNC G-Coder Tools.json"
+        panel.message = "Export the whole tool library, to import on another computer."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try library.exportLibrary(to: url)
+            let count = library.tools.count
+            importMessage = "Exported \(count) tool\(count == 1 ? "" : "s") to \(url.lastPathComponent)."
+        } catch {
+            importMessage = "Could not export: \(error.localizedDescription)"
         }
     }
 }
@@ -38,6 +60,7 @@ private struct ToolLibraryContent: View {
     @Binding var selection: MachineTool.ID?
     @Binding var importMessage: String?
     let importAction: () -> Void
+    let exportAction: () -> Void
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
     private var units: UnitSystem { UnitSystem(rawValue: unitRaw) ?? .metric }
@@ -70,8 +93,11 @@ private struct ToolLibraryContent: View {
                         .help("Delete the selected tool. Layers set from it keep their values.")
                         .disabled(selection == nil)
                     Spacer()
-                    Button("Import FlatCAM…", action: importAction)
-                        .help("Merge a FlatCAM Tools Database export. Tools with an existing name are updated, the rest added.")
+                    Button("Import…", action: importAction)
+                        .help("Merge tools from a library exported by CNC G-Coder on another computer, or from a FlatCAM Tools Database export. Tools already here (same tool, or same name) are updated; the rest are added.")
+                    Button("Export…", action: exportAction)
+                        .help("Save the whole library as a .json file to import on another computer.")
+                        .disabled(library.tools.isEmpty)
                 }
                 .buttonStyle(.borderless)
                 .padding(8)
@@ -105,12 +131,15 @@ private struct ToolLibraryContent: View {
     }
 
     private func row(_ tool: MachineTool) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(tool.name).lineLimit(1)
-            Text(summary(tool))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        HStack(spacing: 8) {
+            ToolSilhouette(geometry: ToolGeometry(tool: tool))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tool.name).lineLimit(1)
+                Text(summary(tool))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 
@@ -168,6 +197,16 @@ private struct ToolEditor: View {
 
     var body: some View {
         Form {
+            Section {
+                VStack(spacing: 4) {
+                    ToolPreview3D(geometry: ToolGeometry(tool: tool))
+                        .frame(height: 150)
+                    Text(ToolGeometry(tool: tool).summary)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .help("The bit at its real proportions (1/8″ shank, 38 mm). Drag to turn it. The same model follows the toolpath in the 3D preview.")
+            }
             Section {
                 TextField("Name", text: $tool.name)
                 Picker("Used for", selection: $tool.use) {

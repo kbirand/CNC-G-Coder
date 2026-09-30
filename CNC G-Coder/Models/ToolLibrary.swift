@@ -224,6 +224,62 @@ final class ToolLibrary: ObservableObject {
         return [vbit, drill(0.8), drill(1.0), cutter, mask]
     }
 
+    // MARK: - Exchange with other installs
+
+    /// A tool library export (.json) for other computers. Tools keep their
+    /// IDs, so a project's "bits on hand" still match after importing it.
+    nonisolated struct ExchangeFile: Codable, Sendable {
+        var format = "cnc-gcoder-tool-library"
+        var version = 1
+        var exported = Date()
+        var tools: [MachineTool]
+    }
+
+    func exportLibrary(to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(ExchangeFile(tools: tools)).write(to: url, options: .atomic)
+    }
+
+    /// Imports a tool library export, the library file itself, or a FlatCAM
+    /// Tools Database — whichever the file turns out to be. Tools already in
+    /// the library (same ID, else same name) are updated, the rest added.
+    func importTools(from url: URL) throws -> (added: Int, updated: Int, source: String) {
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let incoming: [MachineTool]
+        let source: String
+        if let file = try? decoder.decode(ExchangeFile.self, from: data), file.format == "cnc-gcoder-tool-library" {
+            incoming = file.tools
+            source = "CNC G-Coder tool library"
+        } else if let list = try? decoder.decode([MachineTool].self, from: data), !list.isEmpty {
+            incoming = list
+            source = "CNC G-Coder tool library"
+        } else {
+            incoming = try Self.parseFlatCAM(data)
+            source = "FlatCAM Tools Database"
+        }
+        guard !incoming.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+
+        var merged = tools
+        var added = 0, updated = 0
+        for var tool in incoming {
+            if let index = merged.firstIndex(where: { $0.id == tool.id })
+                ?? merged.firstIndex(where: { $0.name == tool.name }) {
+                tool.id = merged[index].id
+                merged[index] = tool
+                updated += 1
+            } else {
+                merged.append(tool)
+                added += 1
+            }
+        }
+        tools = merged
+        return (added, updated, source)
+    }
+
     // MARK: - FlatCAM import
 
     /// Merges a FlatCAM Tools Database export (the JSON .TXT from

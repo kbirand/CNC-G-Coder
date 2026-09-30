@@ -25,6 +25,12 @@ struct SideViewCanvas: View {
     private let padBottom: CGFloat = 16
 
     var body: some View {
+        PlaybackTimeReader(clock: playback.clock) { playbackContent }
+    }
+
+    /// Everything here moves with playback, so it re-renders on each tick.
+    @ViewBuilder
+    private var playbackContent: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Side view")

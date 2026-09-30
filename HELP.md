@@ -63,6 +63,8 @@ With a layer selected, **CNC export → Export <name>.ngc…** in the sidebar sa
 **File → Tool Library…** (⇧⌘L) holds every bit you own with the cutting data that goes with it: shape (straight / ball / V-bit), what it is used for, diameter or tip + angle, depth, depth per pass (drills: peck depth), feeds, spindle, pass overlap, and for drills the range of hole sizes it may drill.
 
 - **Import FlatCAM…** reads a FlatCAM Tools Database export (Tools Database → Export, the JSON `.TXT`). Tool Target maps to *Used for* (Isolation, Drilling, Milling/Cutout → Cutout, others → General); V shape keeps tip and angle; FlatCAM's drill tolerance becomes the hole range. Re-importing updates tools with the same name instead of duplicating them.
+- Every tool is drawn at its real proportions: a profile icon in the list, and a slowly turning 3D model (drag to turn it) with its key dimensions at the top of the editor — the same model the 3D preview uses.
+- **Import…** / **Export…** move the library between computers: Export writes the whole library as a `.json` file; Import reads either such a file or a FlatCAM Tools Database. Tools already in the library (same tool, or same name) are updated, the rest added — so a project's "bits on hand" still match on the other machine.
 - Each settings group has a **Tool** menu at its top. Picking a tool **copies** its values into the group — as FlatCAM copies database data into an object — so you can still tune the layer. **Edited** appears when the fields no longer match the tool; click it to restore the tool's values. **Custom** means values entered by hand.
 - Feeds or spindle of 0 (FlatCAM's "not set") leave the layer's own value unchanged.
 
@@ -97,6 +99,14 @@ The `.GTS`/`.GBS` layers describe the *openings* (pads/vias that stay exposed). 
 - Etch depth only needs to remove cured paint, not copper.
 
 ## Preview
+
+### 3D view
+
+The **2D / 3D** switch above the preview shows the programs in 3D: cuts as lines in each layer's colour, head travel in faint yellow above the board, and a translucent 1.6 mm FR4 slab sized from the cutout. Drag to orbit, right-drag or middle-drag (mouse wheel button) to pan, and scroll (mouse wheel or two-finger trackpad scroll) or pinch to zoom.
+
+- **Gizmo** (top right): the X/Y/Z balls turn with the view; click one to look along that axis — Z = top, −Z = bottom, −Y = front, Y = back, X = right, −X = left. Below it: a menu of all standard views, **Iso**, **Fit**, perspective/orthographic, and travel moves on/off.
+- With **All Layers Overlay** on, every program sits on the physical board: back-side programs appear un-mirrored on the underside, so you can orbit round to inspect the back. A single program is shown as it is machined.
+- Playback works as in 2D: the finished part of the program is highlighted, and the **bit that cuts the program** follows the tool at real size — the V-bit's cone at its angle and tip, the end mill's or hole mill's diameter, a drill with its 118° point, all on a 1/8″ (3.175 mm), 38 mm shank with the coloured depth ring PCB bits carry (yellow V-bit, blue end mill, red drill, purple ball nose). It spins clockwise while the program plays.
 
 - One program is shown at a time (layer menu at the top of the sidebar). All programs share one origin per side, so the "All Layers Overlay" registers copper, drills and masks exactly; enable "Un-mirror Back Side" to overlay the mirrored back side aligned with the front.
 - **Colors**: per-layer colors for cuts; **yellow dashed = head travel** (no cutting); **white = holding bridges**; the translucent band under cuts is the real cutter width ("Tool Width" in the View Options menu).

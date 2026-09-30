@@ -27,7 +27,16 @@ final class PlaybackState: ObservableObject {
     /// "Set Origin" mode: the next click in the toolpath view places X0/Y0.
     /// App-wide so the sidebar can start it too.
     @Published var placingOrigin = false
-    @Published var currentTime: Double = 0        // simulated seconds into the program
+    /// Simulated seconds into the program. Lives on `clock`, NOT published
+    /// here: it changes 30× a second while playing, and publishing it on this
+    /// object re-rendered every view that merely reads the layer selection —
+    /// the whole settings sidebar included. Views that move with playback
+    /// observe `clock` (see PlaybackTimeReader).
+    let clock = PlaybackClock()
+    var currentTime: Double {
+        get { clock.currentTime }
+        set { clock.currentTime = newValue }
+    }
     @Published var speedMultiplier: Double = 1    // 1 = real machining speed
     @Published var isPlaying = false {
         didSet {
@@ -148,4 +157,20 @@ final class PlaybackState: ObservableObject {
             }
         }
     }
+}
+
+/// The playback position alone, so only the views that animate with it
+/// re-render on every tick.
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published var currentTime: Double = 0
+}
+
+/// Re-evaluates `content` on every playback tick, without invalidating the
+/// view that contains it.
+struct PlaybackTimeReader<Content: View>: View {
+    @ObservedObject var clock: PlaybackClock
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
 }

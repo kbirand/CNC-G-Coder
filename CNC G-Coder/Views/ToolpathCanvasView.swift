@@ -72,6 +72,12 @@ struct ToolpathCanvasView: View {
     @State private var cacheBox = CacheBox()
 
     var body: some View {
+        PlaybackTimeReader(clock: playback.clock) { playbackContent }
+    }
+
+    /// Everything here moves with playback, so it re-renders on each tick.
+    @ViewBuilder
+    private var playbackContent: some View {
         Canvas { context, size in
             draw(context: context, size: size)
         }

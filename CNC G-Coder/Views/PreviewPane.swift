@@ -14,6 +14,7 @@ struct PreviewPane: View {
     @AppStorage("previewFlipBackView") private var flipBackView = false
     @AppStorage("previewShowRulers") private var showRulers = true
     @AppStorage("previewShowGuides") private var showGuides = true
+    @AppStorage("preview3D") private var show3D = false
     @AppStorage(SettingsKeys.snapToGrid) private var snapToGrid = false
     @AppStorage("previewGuidesX") private var guidesXRaw = ""
     @AppStorage("previewGuidesY") private var guidesYRaw = ""
@@ -74,6 +75,8 @@ struct PreviewPane: View {
         if fraction > 0 {
             playback.currentTime = playback.totalTime * min(fraction, 1)
         }
+        // `-debugPlay 1` also starts playback (e.g. to profile it).
+        if UserDefaults.standard.bool(forKey: "debugPlay") { playback.isPlaying = true }
     }
 
     // MARK: - Header
@@ -98,6 +101,15 @@ struct PreviewPane: View {
             }
 
             if tab == .toolpath {
+                Picker("", selection: $show3D) {
+                    Text("2D").tag(false)
+                    Text("3D").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("2D: the flat toolpath view with rulers and guides. 3D: orbit around the board — drag to orbit, right- or middle-drag to pan, scroll or pinch to zoom; the gizmo at the top right jumps to top, front, side or isometric views.")
+
                 viewOptionsMenu
 
                 Toggle(isOn: $showSideView) {
@@ -200,7 +212,14 @@ struct PreviewPane: View {
 
     private var toolpathTab: some View {
         VStack(spacing: 0) {
-            ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters)
+            Group {
+                if show3D {
+                    Toolpath3DView(preview: preview, playback: playback,
+                                   tool: playback.selectedLayer.flatMap { model.toolGeometry(for: $0) })
+                } else {
+                    ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters)
+                }
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // The last result stays visible while it is being replaced,
                 // dimmed so it reads as "about to change".
@@ -209,9 +228,11 @@ struct PreviewPane: View {
                 .animation(.easeInOut(duration: 0.25), value: isRegenerating)
                 .overlay { statusCard }
                 .overlay(alignment: .topLeading) {
-                    canvasNotes
-                        .padding(.leading, showRulers ? ToolpathCanvasView.leftGutter : 0)
-                        .padding(.top, showRulers ? ToolpathCanvasView.topGutter : 0)
+                    if !show3D {
+                        canvasNotes
+                            .padding(.leading, showRulers ? ToolpathCanvasView.leftGutter : 0)
+                            .padding(.top, showRulers ? ToolpathCanvasView.topGutter : 0)
+                    }
                 }
                 .overlay(alignment: .bottom) {
                     PlaybackControls(preview: preview, playback: playback)

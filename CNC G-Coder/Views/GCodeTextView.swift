@@ -103,9 +103,11 @@ struct GCodeTextTab: View {
                                        systemImage: "doc.text.magnifyingglass",
                                        description: Text("Choose a project folder and refresh the preview."))
             } else {
-                MonoTextView(text: textModel.text,
-                             contentVersion: textModel.version,
-                             highlightRange: highlightRange)
+                PlaybackTimeReader(clock: playback.clock) {
+                    MonoTextView(text: textModel.text,
+                                 contentVersion: textModel.version,
+                                 highlightRange: highlightRange)
+                }
             }
         }
         .onAppear {
