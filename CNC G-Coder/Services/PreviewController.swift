@@ -84,6 +84,12 @@ final class PreviewController: ObservableObject {
         document != nil && lastRenderedSignature != currentSignature
     }
 
+    /// The preview shows a file loaded from disk (a test board), not the
+    /// project's programs — staleness against the settings does not apply.
+    var showsExternalFile: Bool {
+        document?.layers.contains { $0.id == .test } == true
+    }
+
     var canPreview: Bool {
         guard let app else { return false }
         let gerbers = app.projectFolder != nil && app.detectedFiles.hasAnyToolpathInput

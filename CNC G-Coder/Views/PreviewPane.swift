@@ -103,7 +103,10 @@ struct PreviewPane: View {
 
             Spacer()
 
-            if preview.isStale, case .ready = preview.phase {
+            if preview.showsExternalFile, case .ready = preview.phase {
+                WarningPill(text: "Test file", color: .blue, icon: "doc.text",
+                            help: "Showing a test file exactly as it was written to disk — it is not built from the project settings. Open or refresh a project to preview its programs again.")
+            } else if preview.isStale, case .ready = preview.phase {
                 WarningPill(text: "Out of date", color: .orange, icon: "clock.arrow.circlepath",
                             help: "Parameters changed since this preview was generated")
             }

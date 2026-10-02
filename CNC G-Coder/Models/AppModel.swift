@@ -283,6 +283,24 @@ final class AppModel: ObservableObject {
             print(report)
             exit(0)
         }
+        // Dev hook: `-debugHoleTest /path/out.ngc` writes a hole fit test
+        // (2/3/4 mm, six variants, a 2 mm corn bit) and shows it in the preview.
+        if let holePath = UserDefaults.standard.string(forKey: "debugHoleTest") {
+            var corn = MachineTool(name: "Corn 2 mm")
+            corn.diameter = 2; corn.cutDepth = -1.8; corn.depthPerPass = 0.6
+            corn.feedXY = 300; corn.feedZ = 100
+            let spec = TestBoardGenerator.HoleFitSpec(diameters: [2, 3, 4], offsets: [-0.05, 0, 0.05, 0.10, 0.15, 0.20],
+                                                      tool: corn, zsafe: 3)
+            if let result = TestBoardGenerator.holeFitTest(spec) {
+                let url = URL(fileURLWithPath: holePath)
+                try? result.gcode.write(to: url, atomically: true, encoding: .utf8)
+                try? result.legend.write(to: url.deletingPathExtension().appendingPathExtension("legend.txt"),
+                                         atomically: true, encoding: .utf8)
+                preview.loadExternal(url: url, toolDiameter: spec.cut)
+            }
+        }
+        // Dev hook: `-debugTestDialog 1` opens Generate Test Board… at launch.
+        if UserDefaults.standard.bool(forKey: "debugTestDialog") { showTestBoardDialog = true }
         // Dev hook: `-debugOpenProject /path/x.cncproj` opens a saved project.
         if let path = UserDefaults.standard.string(forKey: "debugOpenProject") {
             openProject(at: URL(fileURLWithPath: path), confirmed: true)
@@ -290,17 +308,19 @@ final class AppModel: ObservableObject {
         // Dev hook: `-debugTestBoard /path/out.ngc` generates a default test
         // board there and shows it in the preview.
         if let testPath = UserDefaults.standard.string(forKey: "debugTestBoard") {
+            var bit = MachineTool(name: "V-bit 30° · 0.1 mm tip")
+            bit.shape = .vBit; bit.tipDiameter = 0.1; bit.tipAngle = 30; bit.feedZ = 60
             let spec = TestBoardGenerator.Spec(
                 width: 60, height: 45, rows: 4, cols: 5,
                 depthFrom: -0.04, depthTo: -0.12,
-                feedFrom: 120, feedTo: 360, tool: 0.1, isolationWidth: 0.2,
-                spindle: "12000", zsafe: 3, plungeFeed: 60
+                feedFrom: 120, feedTo: 360, tool: bit,
+                isolationWidth: Double(parameters.isolationWidth.trimmingCharacters(in: .whitespaces)) ?? 0.2, zsafe: 3
             )
             if let result = TestBoardGenerator.generate(spec) {
                 let url = URL(fileURLWithPath: testPath)
                 try? result.gcode.write(to: url, atomically: true, encoding: .utf8)
                 appendLog("\n[debug] test board written to \(testPath)\n")
-                preview.loadExternal(url: url, toolDiameter: spec.tool)
+                preview.loadExternal(url: url, toolDiameter: spec.widestCut)
             }
         }
     }
@@ -460,6 +480,8 @@ final class AppModel: ObservableObject {
 
             switch target {
             case .cnc:
+                // Last of all, so it sees every move the other passes wrote.
+                self.appendLog(BacklashCompensation.apply(.current, files: batch.outputs.map(\.url)))
                 if snapshot.maskMode == "svg", files.topMask != nil || files.bottomMask != nil {
                     let maskResult = Pcb2GcodeService.exportMaskSVGs(files: files, outputDir: destination)
                     self.appendLog(maskResult.log)
@@ -556,8 +578,46 @@ final class AppModel: ObservableObject {
             if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
             try fm.copyItem(at: parsed.fileURL, to: url)
             appendLog("\nExported \(layer.displayName) → \(url.path)\n")
+            appendLog(BacklashCompensation.apply(.current, files: [url]))
         } catch {
             appendLog("\nERROR exporting \(layer.displayName): \(error.localizedDescription)\n")
+        }
+    }
+
+    // MARK: - Backlash compensation (Machine setup)
+
+    /// Opens the test dialog on the backlash test.
+    func openBacklashTest() {
+        UserDefaults.standard.set(TestKind.backlash.rawValue, forKey: TestKind.storageKey)
+        showTestBoardDialog = true
+    }
+
+    /// Writes a compensated copy of any G-code file — for programs made
+    /// outside the app.
+    func compensateGCodeFile() {
+        let settings = BacklashCompensation.Settings.current
+        guard settings.isActive else { return }
+        let open = NSOpenPanel()
+        open.allowsMultipleSelection = false
+        open.canChooseDirectories = false
+        open.message = "Choose a G-code file to compensate (\(settings.summary))."
+        guard open.runModal() == .OK, let source = open.url else { return }
+
+        let save = NSSavePanel()
+        let ext = source.pathExtension.isEmpty ? "ngc" : source.pathExtension
+        save.nameFieldStringValue = source.deletingPathExtension().lastPathComponent + "-compensated." + ext
+        save.directoryURL = source.deletingLastPathComponent()
+        save.allowsOtherFileTypes = true
+        save.canCreateDirectories = true
+        guard save.runModal() == .OK, let url = save.url else { return }
+
+        do {
+            let text = try String(contentsOf: source, encoding: .utf8)
+            let result = try BacklashCompensation.apply(settings, to: text)
+            try result.text.write(to: url, atomically: true, encoding: .utf8)
+            appendLog("\nBacklash compensation (\(settings.summary)): \(source.lastPathComponent) → \(url.path), \(result.takeUps) take-up moves.\n")
+        } catch {
+            appendLog("\nERROR: could not compensate \(source.lastPathComponent): \(error.localizedDescription)\n")
         }
     }
 

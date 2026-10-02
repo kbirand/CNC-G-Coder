@@ -97,6 +97,7 @@ final class Viewport3D: ObservableObject {
     func fit() { snap(lastView, animated: true) }
 
     func snap(_ direction: ViewDirection, animated: Bool = true) {
+        reclaimPointOfView()
         lastView = direction
         let fov = Double(cameraNode.camera?.fieldOfView ?? 40) * .pi / 180
         let distance = radius / sin(fov / 2) * 1.05
@@ -114,7 +115,20 @@ final class Viewport3D: ObservableObject {
         view?.defaultCameraController.target = SCNVector3(target)
     }
 
+    /// SceneKit's camera control renders through its own copy of the camera
+    /// once the user orbits, so moving `cameraNode` alone changes nothing on
+    /// screen. Take the view back, starting from where the user left it.
+    private func reclaimPointOfView() {
+        guard let view else { return }
+        view.defaultCameraController.stopInertia()
+        guard let live = view.pointOfView, live !== cameraNode else { return }
+        cameraNode.simdWorldTransform = live.presentation.simdWorldTransform
+        if let lens = live.camera { cameraNode.camera?.orthographicScale = lens.orthographicScale }
+        view.pointOfView = cameraNode
+    }
+
     private func applyProjection() {
+        reclaimPointOfView()
         cameraNode.camera?.usesOrthographicProjection = orthographic
         cameraNode.camera?.orthographicScale = radius * 1.05
     }

@@ -86,6 +86,9 @@ struct ParameterFormView: View {
     @AppStorage("export.frame") private var exportFrame = ArtworkExport.FrameMode.board.rawValue
     /// Shared with the canvas: the export sweeps the path exactly as drawn.
     @AppStorage("previewShowToolWidth") private var showToolWidth = true
+    /// Machine properties: app-wide, never saved into projects.
+    @AppStorage(BacklashCompensation.Settings.xKey) private var backlashX = "0"
+    @AppStorage(BacklashCompensation.Settings.yKey) private var backlashY = "0"
 
     var body: some View {
         Form {
@@ -890,6 +893,39 @@ struct ParameterFormView: View {
         } footer: {
             Text("The default for every milling program; each layer can pick its own under Heights & direction. Spindle dwell is set per layer, next to its spindle speed.")
         }
+        Section {
+            ParamRow("X backlash", value: $backlashX, kind: .length,
+                     help: "Travel the X axis loses each time it reverses — the step the test cut's vertical line shows. 0 = off.")
+            ParamRow("Y backlash", value: $backlashY, kind: .length,
+                     help: "Travel the Y axis loses each time it reverses — the step the test cut's horizontal line shows. 0 = off.")
+            Button {
+                model.openBacklashTest()
+            } label: {
+                Label("Backlash Test…", systemImage: "ruler")
+                    .frame(maxWidth: .infinity)
+            }
+            .help("Opens Generate Test on the backlash test: per axis, one line cut in two halves reached from opposite directions, plus a 50 mm square and a Ø30 circle, with the bit of your choice. It is compensated with the values above: adjust them until both lines come out straight.")
+            Button {
+                model.compensateGCodeFile()
+            } label: {
+                Label("Compensate a G-code File…", systemImage: "doc.badge.gearshape")
+                    .frame(maxWidth: .infinity)
+            }
+            .disabled(!BacklashCompensation.Settings.current.isActive)
+            .help("Writes a compensated copy of a program made outside this app.")
+        } header: {
+            Text("Backlash compensation")
+        } footer: {
+            Text(backlashFooter)
+        }
+    }
+
+    private var backlashFooter: String {
+        let settings = BacklashCompensation.Settings.current
+        guard settings.isActive else {
+            return "For axes with play: a value here is added to every program the app writes — Generate, Export, test boards — not to the preview. Belongs to this machine, not the project. Fixing the play mechanically is always better."
+        }
+        return "On (\(settings.summary)): every program the app writes gets a short take-up move wherever that axis reverses; the preview and G-code tab show the uncompensated program. Set back to 0 once the machine is repaired."
     }
 
     private var originFooter: String {

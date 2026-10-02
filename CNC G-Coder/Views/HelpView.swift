@@ -31,7 +31,7 @@ struct HelpView: View {
 
                 V-bits (the usual choice for isolation — 0.1 mm straight bits snap easily): the tip is narrow but the cone widens with depth. Effective ≈ tip + 2 × |cut depth| × tan(half-angle). Examples for a 0.1 mm tip at −0.06 mm: 30° V ≈ 0.13 mm · 60° V ≈ 0.17 mm · 90° V ≈ 0.22 mm. Entering the tip size instead makes every trace thinner than designed and the isolation narrower than requested — silently.
 
-                Verification: mill a test board (File → Generate Test Board…) and measure the 0.2 mm test trace. If it comes out ~0.13 mm with a 60° V-bit entered as 0.1, your effective diameter is ~0.07 mm larger than entered — fix the parameter, not the design.
+                Verification: mill a test board (File → Generate Test Board… → Parameter test board, cut with the bit you pick) and measure the 0.2 mm test trace. Every test trace runs between two probe pads inside a closed moat, so a multimeter in continuity mode checks it: pad to pad must beep (the trace survived), a pad to the surrounding copper or to the next trace must not (the isolation is complete). If it comes out ~0.13 mm with a 60° V-bit entered as 0.1, your effective diameter is ~0.07 mm larger than entered — fix the parameter, not the design.
                 """)
 
                 section("Custom layers — drawing your own shapes", """
@@ -74,6 +74,16 @@ struct HelpView: View {
                 Safe Z is the travel height between cuts — it must clear clamps and board warp. Plunge clearance makes vertical moves cross the air at rapid speed: descents rapid down to it and plunge at the Z feed only from there; retracts feed up to it and rapid the rest. This often halves a program's time — pcb2gcode alone feeds the entire descent from Safe Z, and drill retracts come up at feed too. 0.2–0.5 mm is typical; it must clear board warp; 0 disables. The bit always enters and leaves the material at the programmed feed.
 
                 Machine setup also holds Milling direction (Any / Climb / Conventional, for every milling program). Spindle dwell is set per layer, next to its spindle speed: the pause after the spindle starts and stops, written as G4 P in seconds as GRBL and LinuxCNC expect (pcb2gcode itself writes milliseconds; the app converts). 0 = no pause.
+                """)
+
+                section("Hole fit test", """
+                File → Generate Test Board… → Hole fit test mills holes to find the size that fits a pin. List the nominal sizes (rows, e.g. 2 3 4) and the variants added to each (columns, e.g. -0.05 0 0.05 0.10 0.15 0.20); every hole is milled like production — a spiral down in the bit's pass depth, then a clean-up circle — with the hole-milling settings or a flat bit from the Tool Library (each test remembers its own bit). A legend .txt lists every hole's diameter; the single hole at the top-left marks the orientation. Push the pin into each hole of its row, keep the variant that fits the way you want, and design the hole at nominal + variant.
+                """)
+
+                section("Machine setup — backlash compensation", """
+                For an axis that loses travel every time it reverses (a screw bearing with end play, a worn nut): squares come out short in one direction, milled holes oval, diagonal traces thinned. File → Generate Test Board… → Backlash test (or Backlash Test… in Machine setup) writes a 75 × 75 mm test with the bit you pick — per axis one line cut in two halves reached from opposite directions; the step between the halves is that axis's play. Enter it as X / Y backlash and cut the test again: straight lines mean the value is right.
+
+                With a value set, every program the app writes (Generate, Export, test boards) gets a short take-up move of that axis wherever it reverses, and the coordinates reached moving − are shifted by the play; arcs are split where they reverse. The program's first rapid comes in from 1 mm below so the play starts in a known state. The preview and the G-code tab show the uncompensated program. The values belong to the machine, not the project. Compensate a G-code File… writes a compensated copy of a program made elsewhere. Heavy cuts can still push an axis through its play — repairing the machine is always better; set 0 when it is fixed.
                 """)
 
                 section("Parameters — solder mask etch", """

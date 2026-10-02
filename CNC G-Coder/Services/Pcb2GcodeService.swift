@@ -125,7 +125,8 @@ nonisolated enum Pcb2GcodeService {
             "--zsafe", "\(p.zSafe(.drill))mm",
             "--zchange", "\(p.zChange(.drill))mm",
             "--mirror-axis", "\(p.mirrorAxis)mm",
-            "--spinup-time", spinupPlaceholder
+            "--spinup-time", spinupPlaceholder,
+            noG64
         ]
         if !p.drillBits.isEmpty {
             a += ["--drills-available", p.drillBits.joined(separator: ",")]
@@ -155,7 +156,7 @@ nonisolated enum Pcb2GcodeService {
 
     /// Options every milling invocation shares: feed direction and spin-up.
     private static func commonMillingArgs(_ p: ParameterSnapshot, _ group: ParametersStore.MotionGroup) -> [String] {
-        var a = ["--spinup-time", spinupPlaceholder]
+        var a = ["--spinup-time", spinupPlaceholder, noG64]
         let direction = p.millDirection(group)
         if direction == "climb" || direction == "conventional" {
             // pcb2gcode refuses a fixed direction while its 2-opt path
@@ -171,6 +172,11 @@ nonisolated enum Pcb2GcodeService {
               let total = Double(depth), step < abs(total) else { return [] }
         return ["--mill-infeed", "\(depthPerPass)mm"]
     }
+
+    /// pcb2gcode otherwise emits `G64 P…` (LinuxCNC path blending), which
+    /// Grbl/FluidNC reject with error:20 — and senders like Candle abort the
+    /// job on it.
+    private static let noG64 = "--nog64"
 
     /// pcb2gcode's spin-up time is per invocation (isolation and outline
     /// share one), so it only marks where the dwells go; setDwells() writes
