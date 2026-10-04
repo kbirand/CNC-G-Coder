@@ -48,10 +48,16 @@ struct CustomLayerSections: View {
             }
             .pickerStyle(.segmented)
             .help("Front: machined with the front copper. Back: machined after flipping the board — the program is mirrored like back copper, and you draw it as seen from the front (un-mirror the back side in View Options to check).")
+            Picker("Type", selection: field(\.type, action: "Change Layer Type")) {
+                ForEach(CustomLayer.LayerType.allCases) { type in Text(type.title).tag(type) }
+            }
+            .help("Milling: cut along, outside or inside the shapes. Engraving: the tool follows the lines (labels, marks). Silkscreen: a legend engraved with a fine V-bit. Drill: every circle — e.g. placed with the Hole tool — is drilled at its centre. The type also picks which library tools are offered.")
+            if layer.type == .milling {
             Picker("Operation", selection: field(\.operation, action: "Change Operation")) {
                 ForEach(CustomLayer.Operation.allCases) { op in Text(op.title).tag(op) }
             }
             .help("Engrave: the tool follows the drawn line itself. Cut outside / inside: closed shapes are offset by half the tool so what you drew is the size that comes out — outside for a part you keep, inside for a hole. Open lines are always engraved.")
+            }
             HStack {
                 Button {
                     model.duplicateCustomLayer(id: layer.id)
@@ -81,6 +87,14 @@ struct CustomLayerSections: View {
     }
 
     private func operationFooter(_ layer: CustomLayer) -> String {
+        switch layer.type {
+        case .drill:
+            return "Every circle is drilled at its centre with the drill below, pecking by Depth per pass. Other shapes are ignored. Place holes with the Hole tool."
+        case .engraving, .silkscreen:
+            return "The tool centre runs along every drawn line. A stroke width wider than the tool is cleared with overlapping passes; filled shapes are pocketed."
+        case .milling:
+            break
+        }
         switch layer.operation {
         case .engrave:
             return "The tool centre runs along every drawn line. A shape's stroke width wider than the tool is cleared with overlapping passes; filled shapes are pocketed."
@@ -98,8 +112,8 @@ struct CustomLayerSections: View {
         return Section {
             LabeledContent("Tool") {
                 Menu {
-                    let choices = model.tools.tools(for: .custom)
-                    if choices.isEmpty { Text("No milling tools in the library") }
+                    let choices = model.tools.tools(for: layer.type.toolSection)
+                    if choices.isEmpty { Text("No \(layer.type == .drill ? "drills" : "matching tools") in the library") }
                     ForEach(choices) { tool in
                         Toggle(isOn: Binding(
                             get: { current?.id == tool.id },
@@ -124,13 +138,22 @@ struct CustomLayerSections: View {
             .help("Pick a tool from the library to fill in diameter, depth, feeds and spindle; the fields stay editable afterwards.")
             valueRow("Tool diameter", \.toolDiameter, .length, minimum: 0.01,
                      help: "Effective cutting diameter at depth — for a V-bit, tip + 2 × |depth| × tan(angle ÷ 2). Everything is offset and cleared by this width.")
+            if layer.effectiveOperation == .inside {
+                valueRow("Hole tolerance", \.holeTolerance, .length,
+                         help: "Added to every circle's diameter before it is cut: a 3 mm hole is milled at 3.125 mm with 0.125. Drilled and milled FR4 closes up a little, so pins and screws still fit. 0 = exactly as drawn. Other shapes keep their size.")
+            }
             valueRow("Cut depth", \.cutDepth, .length,
                      help: "Final Z of the cut, negative. Engraving labels: −0.05…−0.1 mm. Cutting through 1.6 mm stock: −1.8 mm.")
-            valueRow("Depth per pass", \.depthPerPass, .length, minimum: 0,
-                     help: "Reach the cut depth in several passes of at most this depth; 0 = one pass. Closed shapes stay down and go round again deeper; open lines run back and forth.")
-            valueRow("Pass overlap", \.overlap, .plain("%"), minimum: 0,
-                     help: "Overlap between neighbouring passes when a stroke width or a filled shape needs more than one. 40–50 % leaves no ridges.")
-            valueRow("XY feed", \.feedXY, .feed, minimum: 1, help: "Horizontal cutting speed.")
+            if layer.type == .drill {
+                valueRow("Peck depth", \.depthPerPass, .length, minimum: 0,
+                         help: "Drill in steps of this depth, rising out of the hole between them to clear chips. 0 = one stroke.")
+            } else {
+                valueRow("Depth per pass", \.depthPerPass, .length, minimum: 0,
+                         help: "Reach the cut depth in several passes of at most this depth; 0 = one pass. Closed shapes stay down and go round again deeper; open lines run back and forth.")
+                valueRow("Pass overlap", \.overlap, .plain("%"), minimum: 0,
+                         help: "Overlap between neighbouring passes when a stroke width or a filled shape needs more than one. 40–50 % leaves no ridges.")
+                valueRow("XY feed", \.feedXY, .feed, minimum: 1, help: "Horizontal cutting speed.")
+            }
             valueRow("Z feed", \.feedZ, .feed, minimum: 1, help: "Plunge speed into the material.")
             valueRow("Spindle", \.spindle, .plain("rpm"), minimum: 0, help: "Spindle speed written as the S-word.")
             valueRow("Spindle dwell", \.dwell, .plain("s"), minimum: 0,
@@ -144,8 +167,10 @@ struct CustomLayerSections: View {
                      help: "Height between cuts. 0 = Machine setup's Safe Z.")
             valueRow("End Z", \.endZ, .length, minimum: 0,
                      help: "Height the program ends at. 0 = Machine setup's Tool-change Z.")
-            valueRow("Extra cut", \.extraCut, .length, minimum: 0,
-                     help: "Closed shapes run on this far past their start at the final depth, so no sliver is left where the loop closes. 0 = off.")
+            if layer.type != .drill {
+                valueRow("Extra cut", \.extraCut, .length, minimum: 0,
+                         help: "Closed shapes run on this far past their start at the final depth, so no sliver is left where the loop closes. 0 = off.")
+            }
         } header: {
             Text("Tool")
         } footer: {

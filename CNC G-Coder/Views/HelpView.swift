@@ -19,7 +19,7 @@ struct HelpView: View {
                 """)
 
                 section("Project folder & detection", """
-                The app expects an EasyEDA export: Gerber_TopLayer.GTL, Gerber_BottomLayer.GBL, Gerber_BoardOutlineLayer.GKO, solder masks .GTS/.GBS, and .DRL drill files. EasyEDA splits drills into PTH / PTH-via / NPTH files; each becomes a separate program because pcb2gcode accepts one drill file per run.
+                The app expects an EasyEDA export: Gerber_TopLayer.GTL, Gerber_BottomLayer.GBL, Gerber_BoardOutlineLayer.GKO, solder masks .GTS/.GBS, and .DRL drill files. EasyEDA splits drills into PTH / PTH-via / NPTH files; each becomes a separate program.
 
                 Generate asks where to write the programs each project (the dialog's New Folder button creates a fresh destination); the choice is remembered until you switch projects. The live preview uses a temporary folder and never touches your files until you press Generate.
                 """)
@@ -71,9 +71,9 @@ struct HelpView: View {
                 """)
 
                 section("Parameters — safety heights & plunge clearance", """
-                Safe Z is the travel height between cuts — it must clear clamps and board warp. Plunge clearance makes vertical moves cross the air at rapid speed: descents rapid down to it and plunge at the Z feed only from there; retracts feed up to it and rapid the rest. This often halves a program's time — pcb2gcode alone feeds the entire descent from Safe Z, and drill retracts come up at feed too. 0.2–0.5 mm is typical; it must clear board warp; 0 disables. The bit always enters and leaves the material at the programmed feed.
+                Safe Z is the travel height between cuts — it must clear clamps and board warp. Plunge clearance makes vertical moves cross the air at rapid speed: descents rapid down to it and plunge at the Z feed only from there; retracts feed up to it and rapid the rest. This often halves a program's time — otherwise the entire descent from Safe Z would be fed, and drill retracts would come up at feed too. 0.2–0.5 mm is typical; it must clear board warp; 0 disables. The bit always enters and leaves the material at the programmed feed.
 
-                Machine setup also holds Milling direction (Any / Climb / Conventional, for every milling program). Spindle dwell is set per layer, next to its spindle speed: the pause after the spindle starts and stops, written as G4 P in seconds as GRBL and LinuxCNC expect (pcb2gcode itself writes milliseconds; the app converts). 0 = no pause.
+                Machine setup also holds Milling direction (Any / Climb / Conventional, for every milling program). Spindle dwell is set per layer, next to its spindle speed: the pause after the spindle starts and stops, written as G4 P in seconds as GRBL and LinuxCNC expect. 0 = no pause.
                 """)
 
                 section("Parameters — solder mask etch", """
@@ -123,9 +123,9 @@ struct HelpView: View {
                 """)
 
                 section("Troubleshooting", """
-                • pcb2gcode is built into the app — nothing to install. The native engine (Machine setup → Toolpath engine) does not need it at all.
-                • Preview failed: the Log tab holds the full pcb2gcode output with per-step timings — the error is at the bottom.
-                • Uncut gaps between close traces: the tool is too wide to fit between them; pcb2gcode warns in the Log. Use a smaller effective tool diameter or increase design clearance.
+                • \(ToolLocator.isAppStoreBuild ? "Toolpaths are computed in the app — nothing to install." : "pcb2gcode is built into the app — nothing to install. The native engine (Machine setup → Toolpath engine) does not need it at all.")
+                • Preview failed: the Log tab holds the full output with per-step timings — the error is at the bottom.
+                • Uncut gaps between close traces: the tool is too wide to fit between them. Use a smaller effective tool diameter or increase design clearance.
                 • Mask openings not cleared: opening smaller than the mask tool, or Clear width less than half the opening.
                 • Long generation times: mask Clear width too large, or very wide isolation width.
                 """)

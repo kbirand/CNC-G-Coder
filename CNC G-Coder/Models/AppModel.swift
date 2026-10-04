@@ -142,7 +142,7 @@ final class AppModel: ObservableObject {
                 let version = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
                 appendLog("pcb2gcode \(version) — \(ToolLocator.pcb2gcodeIsBundled ? "built into the app" : pcb2gcodeURL.path)\n")
             }
-        } else {
+        } else if !ToolLocator.isAppStoreBuild {
             appendLog("Note: pcb2gcode is not available; the native toolpath engine is used.\n")
         }
         // Dev hooks: `-debugProjectFolder /path/to/gerbers` skips the open panel;
@@ -388,7 +388,14 @@ final class AppModel: ObservableObject {
             return
         }
 
-        try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        guard FileAccess.canWrite(into: destination) else {
+            let problem = "No permission to write to \(destination.path) — use Choose… to pick the folder."
+            appendLog("\nERROR: \(problem)\n")
+            generationSteps = []
+            generationSummary = problem
+            generationFailed = true
+            return
+        }
         chosenOutputDir = destination
         isGenerating = true
         generationSteps = []
@@ -408,18 +415,17 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             await self.preview.cancelActiveRun()   // never two pcb2gcode batches at once
 
-            // The laser target generates into a temp folder and writes only
-            // the rendered artwork; the CNC target keeps the .ngc files.
-            let workDir = target == .cnc ? destination : PreviewPaths.newRunDir()
-            if target == .laser {
-                do {
-                    try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
-                } catch {
-                    self.finishGeneration(summary: "Could not create the working folder: \(error.localizedDescription)", failed: true)
-                    return
-                }
+            // Both targets generate into a temp folder: pcb2gcode may only
+            // write inside the app's sandbox. The CNC target then copies the
+            // .ngc files over; the laser target writes only the artwork.
+            let workDir = PreviewPaths.newRunDir()
+            do {
+                try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+            } catch {
+                self.finishGeneration(summary: "Could not create the working folder: \(error.localizedDescription)", failed: true)
+                return
             }
-            defer { if target == .laser { try? FileManager.default.removeItem(at: workDir) } }
+            defer { try? FileManager.default.removeItem(at: workDir) }
 
             var batch = Pcb2GcodeService.BatchResult()
             if files.hasAnything {
@@ -464,8 +470,19 @@ final class AppModel: ObservableObject {
                     let maskResult = Pcb2GcodeService.exportMaskSVGs(files: files, outputDir: destination)
                     self.appendLog(maskResult.log)
                 }
-                let count = batch.outputs.count
-                self.finishGeneration(summary: "\(count) program\(count == 1 ? "" : "s") written.", failed: false)
+                var count = 0
+                for output in batch.outputs {
+                    let target = destination.appendingPathComponent(output.url.lastPathComponent)
+                    do {
+                        if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+                        try FileManager.default.copyItem(at: output.url, to: target)
+                        count += 1
+                    } catch {
+                        self.appendLog("ERROR writing \(target.path): \(error.localizedDescription)\n")
+                    }
+                }
+                self.finishGeneration(summary: "\(count) program\(count == 1 ? "" : "s") written.",
+                                      failed: count < batch.outputs.count)
 
             case .laser:
                 self.reportStep(.started(id: self.generationTotal, label: "Rendering \(options.format.title) artwork"),

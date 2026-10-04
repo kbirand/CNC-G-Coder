@@ -38,6 +38,9 @@ private final class ProjectOpenPanelFilter: NSObject, NSOpenSavePanelDelegate {
 extension AppModel {
 
     private static let recentKey = "recentProjects"
+    /// Security-scoped bookmarks, in the same order (the sandbox only lets
+    /// the app reopen what it holds a bookmark for).
+    private static let recentBookmarksKey = "recentProjectBookmarks"
     private static let recentLimit = 10
 
     // MARK: - State
@@ -155,6 +158,8 @@ extension AppModel {
 
     func openProject(at url: URL, confirmed: Bool = false) {
         if !confirmed, !confirmDiscardChanges() { return }
+        // A recent project resolved from its bookmark: access lasts the session.
+        _ = url.startAccessingSecurityScopedResource()
         let document: ProjectDocument
         do {
             document = try ProjectDocument.read(url)
@@ -195,7 +200,7 @@ extension AppModel {
         if let y = document.guidesY { UserDefaults.standard.set(y, forKey: "previewGuidesY") }
         projectURL = url
         projectFolder = url.deletingLastPathComponent()
-        chosenOutputDir = document.outputFolder.map { URL(fileURLWithPath: $0.path) }
+        chosenOutputDir = document.outputFolder.map(\.linkedURL)
             .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
         layerOrigins = origins
         customLayers = document.customLayers ?? []
@@ -300,27 +305,46 @@ extension AppModel {
     // MARK: - Recent projects
 
     func loadRecentProjects() {
-        let paths = UserDefaults.standard.stringArray(forKey: Self.recentKey) ?? []
-        recentProjects = paths.map { URL(fileURLWithPath: $0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        let defaults = UserDefaults.standard
+        if let bookmarks = defaults.array(forKey: Self.recentBookmarksKey) as? [Data] {
+            recentProjects = bookmarks.compactMap(FileAccess.resolve)
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+        } else {
+            // Saved before bookmarks: plain paths (usable outside the sandbox).
+            recentProjects = (defaults.stringArray(forKey: Self.recentKey) ?? []).map { URL(fileURLWithPath: $0) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+        }
+    }
+
+    private func storeRecent() {
+        let defaults = UserDefaults.standard
+        // Keep the bookmarks already held: a new one can only be made for an
+        // item the app has access to right now.
+        var known: [String: Data] = [:]
+        for data in defaults.array(forKey: Self.recentBookmarksKey) as? [Data] ?? [] {
+            if let url = FileAccess.resolve(data) { known[url.standardizedFileURL.path] = data }
+        }
+        defaults.set(recentProjects.map(\.path), forKey: Self.recentKey)
+        defaults.set(recentProjects.compactMap { known[$0.standardizedFileURL.path] ?? FileAccess.bookmark($0) },
+                     forKey: Self.recentBookmarksKey)
     }
 
     private func noteRecent(_ url: URL) {
         var list = recentProjects.filter { $0.standardizedFileURL != url.standardizedFileURL }
         list.insert(url, at: 0)
         recentProjects = Array(list.prefix(Self.recentLimit))
-        UserDefaults.standard.set(recentProjects.map(\.path), forKey: Self.recentKey)
+        storeRecent()
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
     }
 
     private func removeRecent(_ url: URL) {
         recentProjects.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
-        UserDefaults.standard.set(recentProjects.map(\.path), forKey: Self.recentKey)
+        storeRecent()
     }
 
     func clearRecentProjects() {
         recentProjects = []
-        UserDefaults.standard.set([String](), forKey: Self.recentKey)
+        storeRecent()
     }
 
     // MARK: - Layers

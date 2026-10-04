@@ -31,6 +31,14 @@ nonisolated struct ProjectDocument: Codable, Sendable {
         var path: String
         /// Version 1 only: the link relative to the project file.
         var relativePath: String?
+        /// Links: a security-scoped bookmark, so the app may use the item
+        /// again after a relaunch in the sandbox.
+        var bookmark: Data?
+
+        /// The linked item, through its bookmark when there is one.
+        var linkedURL: URL {
+            bookmark.flatMap(FileAccess.resolve) ?? URL(fileURLWithPath: path)
+        }
     }
 
     var format = "cnc-gcoder-project"
@@ -48,7 +56,7 @@ nonisolated struct ProjectDocument: Codable, Sendable {
     var customLayers: [CustomLayer]?
 
     static func link(_ url: URL) -> StoredFile {
-        StoredFile(name: url.lastPathComponent, path: url.path)
+        StoredFile(name: url.lastPathComponent, path: url.path, bookmark: FileAccess.bookmark(url))
     }
 
     /// `name`, or "name 2", "name 3"… if already taken (case-insensitive).
@@ -107,15 +115,19 @@ nonisolated struct ProjectDocument: Codable, Sendable {
 
     // MARK: - Writing
 
-    /// Builds the package in a staging folder next to `url`, then swaps it in,
-    /// so a failed save never leaves a half-written project behind.
+    /// Builds the package in a staging folder, then swaps it in, so a failed
+    /// save never leaves a half-written project behind. The staging folder is
+    /// the system's replacement folder for `url` (same volume, and inside the
+    /// app's container when sandboxed — the folder holding the project is
+    /// usually not writable there).
     /// `layers`/`drills` are the files to pack, with their original locations.
     static func writePackage(_ document: ProjectDocument, to url: URL,
                              layers: [(slot: String, file: URL, origin: URL?)],
                              drills: [(file: URL, origin: URL?)]) throws -> ProjectDocument {
         let fm = FileManager.default
-        let staging = url.deletingLastPathComponent()
-            .appendingPathComponent(".\(url.lastPathComponent).saving-\(UUID().uuidString)", isDirectory: true)
+        let scratch = (try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true))
+            ?? fm.temporaryDirectory
+        let staging = scratch.appendingPathComponent("\(url.lastPathComponent).saving-\(UUID().uuidString)", isDirectory: true)
         defer { try? fm.removeItem(at: staging) }
         let layerDir = staging.appendingPathComponent(layersFolder, isDirectory: true)
         try fm.createDirectory(at: layerDir, withIntermediateDirectories: true)

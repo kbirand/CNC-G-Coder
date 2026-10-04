@@ -49,6 +49,15 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         return false
     }
 
+    /// The same drill file's other program: drilled ↔ milled holes.
+    var drillSibling: LayerKind? {
+        switch self {
+        case .drill(let index, let name): .millDrill(index: index, name: name)
+        case .millDrill(let index, let name): .drill(index: index, name: name)
+        default: nil
+        }
+    }
+
     var isMask: Bool {
         self == .maskTop || self == .maskBottom
     }

@@ -514,6 +514,7 @@ struct ParameterFormView: View {
             toolPicker(.drilling)
             ParamRow("Drill depth", value: params.$zDrill, kind: .length,
                      help: "Final Z for every hole. Board thickness plus a small margin into the spoilboard: 1.6 mm stock → −1.8 mm.")
+            holeToleranceRow
             ParamRow("Peck depth", value: params.$drillPeck, kind: .length,
                      help: "Drill in steps of this depth instead of one plunge: after each step the bit rapids up out of the hole to clear chips, rapids back to just above where it stopped, and feeds on (0.6 on −1.8 mm: −0.6, −1.2, −1.8). Stops chips packing the flutes and snapping small drills in FR4. 0 = one stroke. Drilled holes only — milled holes use their own pass depth.")
             ParamRow("Drill feed", value: params.$drillFeed, kind: .feed,
@@ -554,6 +555,11 @@ struct ParameterFormView: View {
             .help("Holes at or above \"Mill holes from\" are not drilled: an end mill cuts them in circles, spiralling down (helical G2 moves), into a separate \"… milled\" program. For holes larger than any drill you own — e.g. 3–4 mm mounting holes with a 2 mm end mill. Smaller holes in the same file are still drilled.")
     }
 
+    private var holeToleranceRow: some View {
+        ParamRow("Hole tolerance", value: params.$drillHoleAllowance, kind: .length,
+                 help: "Added to every hole's designed diameter before bits are picked and large holes are milled: 0.125 on a 0.8 mm hole drills 0.925 mm. Drilled FR4 closes up a little, so leads and pins still fit. 0 = holes exactly as designed.")
+    }
+
     private var millHolesFromRow: some View {
         ParamRow("Mill holes from", value: params.$drillMillFrom, kind: .length,
                  help: "Smallest hole diameter that is milled instead of drilled. At least the milling bit's diameter — a hole the bit's own size is simply plunged.")
@@ -561,7 +567,8 @@ struct ParameterFormView: View {
 
     /// This project's hole sizes on either side of "Mill holes from".
     private var holeSplit: (milled: [Double], drilled: [Double]) {
-        let sizes = Set(model.drillHoleSizes.values.joined()).sorted()
+        let allowance = Double(params.drillHoleAllowance.trimmingCharacters(in: .whitespaces)) ?? 0
+        let sizes = Set(model.drillHoleSizes.values.joined().map { (($0 + allowance) * 1000).rounded() / 1000 }).sorted()
         guard let from = Double(params.drillMillFrom.trimmingCharacters(in: .whitespaces)) else { return ([], sizes) }
         return (sizes.filter { $0 >= from - 1e-6 }, sizes.filter { $0 < from - 1e-6 })
     }
@@ -606,13 +613,14 @@ struct ParameterFormView: View {
             millLargeHolesToggle
             if params.drillMillLarge {
                 millHolesFromRow
+                holeToleranceRow
                 toolPicker(.holeMill)
                 ParamRow("Bit diameter", value: params.$holeMillDiameter, kind: .length,
                          help: "Diameter of the end mill (e.g. a 2 mm 2-flute corn bit). The circle is offset inward by half of it, so the hole comes out at its designed size.")
                 ParamRow("Depth", value: params.$holeMillDepth, kind: .length,
                          help: "Final Z of the milled holes — board thickness plus a little: 1.6 mm stock → −1.8 mm.")
                 ParamRow("Pass depth", value: params.$holeMillInfeed, kind: .length,
-                         help: "Depth added per turn of the spiral. 0.3–0.6 mm for a 2 mm end mill in FR4. pcb2gcode spreads the depth evenly, so the real step may be a little smaller.")
+                         help: "Depth added per turn of the spiral. 0.3–0.6 mm for a 2 mm end mill in FR4. The depth is spread evenly, so the real step may be a little smaller.")
             }
         } header: {
             sectionHeader(.holeMill)
@@ -848,20 +856,22 @@ struct ParameterFormView: View {
         } footer: {
             Text("Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. With an origin set, every program shares one origin per side — zero the machine once for the front programs and once after flipping, and Mirror axis has no effect (the shared origin absorbs it). Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front.")
         }
-        Section {
-            Picker("Engine", selection: params.$engine) {
-                Text("pcb2gcode").tag("pcb2gcode")
-                Text("Native").tag("native")
+        if !ToolLocator.isAppStoreBuild {
+            Section {
+                Picker("Engine", selection: params.$engine) {
+                    Text("pcb2gcode").tag("pcb2gcode")
+                    Text("Native").tag("native")
+                }
+                .pickerStyle(.segmented)
+                .help("pcb2gcode: the proven open-source generator, built into the app. Native: the app's own toolpath engine (Clipper2 geometry) — faster, no external program. Both write programs the same way, so every setting applies to either.")
+            } header: {
+                Text("Toolpath engine")
+            } footer: {
+                Text(params.engine == "native"
+                     ? "Native: isolation, outline, drilling, hole milling, mask and silkscreen are computed in the app."
+                     : (model.pcb2gcodeURL == nil ? "pcb2gcode is not available in this build — the native engine is used."
+                        : "pcb2gcode \(ToolLocator.pcb2gcodeIsBundled ? "(built into the app)" : "(Homebrew)") turns the Gerbers into programs."))
             }
-            .pickerStyle(.segmented)
-            .help("pcb2gcode: the proven open-source generator, built into the app. Native: the app's own toolpath engine (Clipper2 geometry) — faster, no external program. Both write programs the same way, so every setting applies to either.")
-        } header: {
-            Text("Toolpath engine")
-        } footer: {
-            Text(params.engine == "native"
-                 ? "Native: isolation, outline, drilling, hole milling, mask and silkscreen are computed in the app."
-                 : (model.pcb2gcodeURL == nil ? "pcb2gcode is not available in this build — the native engine is used."
-                    : "pcb2gcode \(ToolLocator.pcb2gcodeIsBundled ? "(built into the app)" : "(Homebrew)") turns the Gerbers into programs."))
         }
         Section {
             ParamRow("Safe Z", value: params.$zSafe, kind: .length,
@@ -884,7 +894,7 @@ struct ParameterFormView: View {
                 Text("Conventional").tag("conventional")
             }
             .pickerStyle(.segmented)
-            .help("Direction the cutter travels relative to its rotation, for isolation, outline, mask and legend milling. Any: pcb2gcode picks whatever gives the shortest path. Climb: cleaner edges on rigid machines with little backlash. Conventional: safer on hobby machines with backlash. Fixing a direction switches off 2-opt path shortening, so programs get a little longer.")
+            .help("Direction the cutter travels relative to its rotation, for isolation, outline, mask and legend milling. Any: whichever gives the shortest path. Climb: cleaner edges on rigid machines with little backlash. Conventional: safer on hobby machines with backlash. Fixing a direction switches off 2-opt path shortening, so programs get a little longer.")
         } header: {
             Text("Milling direction")
         } footer: {
@@ -1061,7 +1071,7 @@ struct ParameterFormView: View {
             ParamReadout(value: diameter.map { units.length($0, decimals: units.lengthDecimals + 1) } ?? "—",
                          unit: units.lengthSymbol)
         }
-        .help("What the V-bit actually cuts at this depth: tip + 2 × |depth| × tan(angle ÷ 2). This is the diameter pcb2gcode is given.")
+        .help("What the V-bit actually cuts at this depth: tip + 2 × |depth| × tan(angle ÷ 2). This is the diameter the toolpaths are computed with.")
     }
 
     private func sectionHeader(_ section: SettingsSection) -> some View {
@@ -1073,9 +1083,10 @@ struct ParameterFormView: View {
 
     @ViewBuilder
     private var warningsFooter: some View {
-        if (model.pcb2gcodeURL == nil && params.engine != "native") || params.validationError != nil {
+        let missingEngine = model.pcb2gcodeURL == nil && params.engine != "native" && !ToolLocator.isAppStoreBuild
+        if missingEngine || params.validationError != nil {
             VStack(alignment: .leading, spacing: 6) {
-                if model.pcb2gcodeURL == nil && params.engine != "native" {
+                if missingEngine {
                     WarningPill(text: "pcb2gcode missing — using the native engine", color: .orange,
                                 icon: "exclamationmark.triangle.fill",
                                 help: "This copy of the app has no pcb2gcode inside (it was built on a Mac without it), so the native toolpath engine is used. Machine setup → Toolpath engine.")

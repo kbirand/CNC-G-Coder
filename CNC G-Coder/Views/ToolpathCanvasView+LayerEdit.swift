@@ -106,10 +106,15 @@ extension ToolpathCanvasView {
     }
 
     private func layerSnapContext(map: Mapping) -> ShapeEditor.SnapContext {
+        let t = layerEditTransform()
+        let inverse = t.inverted()
         var context = ShapeEditor.SnapContext(tolerance: 6 / map.scale)
+        if showGuides {
+            // World guides → design: axis-aligned, so one coordinate each.
+            context.guidesX = guidesX.map { Double(CGPoint(x: $0, y: 0).applying(inverse).x) }
+            context.guidesY = guidesY.map { Double(CGPoint(x: 0, y: $0).applying(inverse).y) }
+        }
         if snapToGrid {
-            let t = layerEditTransform()
-            let inverse = t.inverted()
             let step = tickStep(scale: map.scale).mm / 2
             context.gridSnap = { (p: CGPoint) -> CGPoint in
                 let w = p.applying(t)
@@ -126,7 +131,7 @@ extension ToolpathCanvasView {
     func layerEditClick(at location: CGPoint) {
         guard let map = mapping(in: canvasSize), map.plot.contains(location) else { return }
         layerEditor.click(at: layerDesignPoint(fromView: location, map: map), shift: layerEditShift,
-                          tolerance: 6 / map.scale)
+                          tolerance: 6 / map.scale, context: layerSnapContext(map: map))
         canvasFocused = true
     }
 
@@ -151,7 +156,7 @@ extension ToolpathCanvasView {
                                   context: layerSnapContext(map: map))
         } else {
             layerEditor.click(at: layerDesignPoint(fromView: drag.start, map: map), shift: layerEditShift,
-                              tolerance: 6 / map.scale)
+                              tolerance: 6 / map.scale, context: layerSnapContext(map: map))
         }
         canvasFocused = true
     }
@@ -185,6 +190,7 @@ extension ToolpathCanvasView {
         guard layerEditActive, map.plot.contains(hover) else { return nil }
         if NSEvent.modifierFlags.contains(.option) { return .grabIdle }
         if layerEditor.isDragging { return .grabActive }
+        if layerEditor.addingHoles { return .rectSelection }   // a crosshair: click places a hole
         return layerEditor.isOverSelection(layerDesignPoint(fromView: hover, map: map), tolerance: 6 / map.scale)
             ? .grabIdle : nil
     }
@@ -210,6 +216,7 @@ extension ToolpathCanvasView {
     func drawLayerEdit(_ context: GraphicsContext, map: Mapping, world: CGAffineTransform) {
         guard layerEditActive, let artwork = layerEditor.displayed else { return }
         let t = layerEditTransform()
+        layerEditor.designToWorld = t   // for guides placed from the toolbar
         let hairline = 1.2 / map.scale
         let color = artworkColor
         let selection = layerEditor.selection

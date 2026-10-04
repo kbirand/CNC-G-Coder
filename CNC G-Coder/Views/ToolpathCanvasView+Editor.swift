@@ -207,7 +207,7 @@ extension ToolpathCanvasView {
             case .handle, .shape: return .grabIdle
             case .nothing: return nil
             }
-        case .line, .rectangle, .circle, .text:
+        case .line, .rectangle, .circle, .hole, .text:
             return .rectSelection
         }
     }
@@ -221,6 +221,7 @@ extension ToolpathCanvasView {
     func drawEditor(_ context: GraphicsContext, map: Mapping, world: CGAffineTransform) {
         guard editorActive, let layer = editor.activeLayer, let kind = editorLayerKind else { return }
         let t = editorTransform()
+        editor.designToWorld = t   // for guides placed and mirrored from the toolbar
         let toView = t.concatenating(world)
         let scale = map.scale
         let color = kind.color
@@ -348,6 +349,11 @@ extension ToolpathCanvasView {
             spoke.addLine(to: cursor.applying(toView))
             ctx.stroke(spoke, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
             drawSizeLabel(&ctx, "⌀ \(units.length(2 * r)) \(units.lengthSymbol)", near: cursor.applying(toView))
+        case .hole:
+            guard let cursor = draft.cursor, editor.holeDiameter > 0 else { return }
+            strokeOutlines(&ctx, [ShapeMath.circle(center: cursor, radius: editor.holeDiameter / 2)],
+                           toView: toView, color: color.opacity(0.7), style: ghost)
+            drawSizeLabel(&ctx, "⌀ \(units.length(editor.holeDiameter)) \(units.lengthSymbol)", near: cursor.applying(toView))
         case .text:
             guard let cursor = draft.cursor, !editor.textString.isEmpty else { return }
             let outlines = TextOutlines.outlines(editor.textString, style: editor.textStyle, height: editor.textHeight,

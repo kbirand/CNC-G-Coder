@@ -396,9 +396,11 @@ nonisolated enum NativeToolpathEngine {
         var drilled: [Double: [CGPoint]] = [:]
         var milled: [(CGPoint, Double)] = []
         let t = toProgram(.drill(index: 0, name: ""), p)
+        let allowance = num(p.drillHoleAllowance)
         for hole in image.holes {
-            let size = image.diameter(hole.tool)
-            guard size >= 0.01 else { continue }
+            let designed = image.diameter(hole.tool)
+            guard designed >= 0.01 else { continue }
+            let size = designed + allowance
             let at = hole.at.applying(t)
             if size >= millFrom - 1e-6 { milled.append((at, size)); continue }
             let bit = bits.filter { size >= $0.low - 1e-6 && size <= $0.high + 1e-6 }

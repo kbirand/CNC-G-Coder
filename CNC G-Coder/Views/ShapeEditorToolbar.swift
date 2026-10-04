@@ -58,6 +58,10 @@ struct ShapeEditorToolbar: View {
                 .disabled(editor.selection.count < 3)
                 .help("Space the selected shapes with equal gaps between them; the outermost two stay put.")
                 divider
+                GuideToolbarItems(hasSelection: !editor.selection.isEmpty,
+                                  addGuide: { editor.addGuideAtSelectionCentre(vertical: $0) },
+                                  mirror: { editor.mirrorSelection(across: $0, copy: $1) })
+                divider
                 Button { editor.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }
                     .disabled(editor.selection.isEmpty)
                     .help("Duplicate the selection (⌘D)")
@@ -77,7 +81,8 @@ struct ShapeEditorToolbar: View {
             .controlSize(.small)
 
             if editor.tool == .text { textRow }
-            if editor.tool != .select { strokeRow }
+            if editor.tool == .hole { holeRow }
+            if editor.tool != .select, editor.tool != .hole { strokeRow }
 
             if let message = editor.message {
                 Text(message)
@@ -144,6 +149,17 @@ struct ShapeEditorToolbar: View {
         }
         .controlSize(.small)
         .toggleStyle(.button)
+        .font(.caption)
+    }
+
+    private var holeRow: some View {
+        HStack(spacing: 8) {
+            LabeledContent("Hole diameter") {
+                MeasureField(value: $editor.holeDiameter, kind: .length, minimum: 0.05)
+            }
+            .help("Diameter of the holes you place. Change one later in the sidebar like any circle.")
+        }
+        .controlSize(.small)
         .font(.caption)
     }
 

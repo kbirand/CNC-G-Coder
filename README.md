@@ -56,7 +56,9 @@ not. Built without it, the app still works on the native engine.
 The native engine uses [Clipper2](https://github.com/AngusJohnson/Clipper2)
 (vendored in `CNC G-Coder/ThirdParty`, Boost licence) for polygon offsetting.
 
-> Note: the app runs pcb2gcode as a subprocess via `Process`, so App Sandbox is intentionally disabled in the project settings.
+> The app is sandboxed. pcb2gcode runs as a subprocess that inherits the app's sandbox (signed with `Scripts/pcb2gcode-helper.entitlements`), working on copies of the input files in the app's temporary folder.
+>
+> Two schemes: **CNC G-Coder** bundles pcb2gcode (direct distribution); **CNC G-Coder (App Store)** builds the AppStore configuration without it — native engine only, no engine picker. Listing details for App Store Connect: [appconnect.md](appconnect.md).
 
 ## Quick start
 

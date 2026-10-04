@@ -24,6 +24,10 @@ struct GenerateDialog: View {
     /// does not silently fall back to the default beside the project.
     @AppStorage("generate.destination.cnc") private var cncDestination = ""
     @AppStorage("generate.destination.laser") private var laserDestination = ""
+    /// Their security-scoped bookmarks: the sandbox only lets the app write
+    /// there again after a relaunch through one.
+    @AppStorage("generate.destination.cnc.bookmark") private var cncBookmark = Data()
+    @AppStorage("generate.destination.laser.bookmark") private var laserBookmark = Data()
 
     private var target: AppModel.GenerateTarget {
         AppModel.GenerateTarget(rawValue: targetRaw) ?? .cnc
@@ -36,10 +40,23 @@ struct GenerateDialog: View {
         }
     }
 
-    /// Where the run will write, defaulting to a folder beside the project.
+    private var storedBookmark: Data {
+        get { target == .cnc ? cncBookmark : laserBookmark }
+        nonmutating set {
+            if target == .cnc { cncBookmark = newValue } else { laserBookmark = newValue }
+        }
+    }
+
+    /// Where the run will write, defaulting to a folder beside the project —
+    /// when the app may write there (in the sandbox only if that folder was
+    /// itself opened, e.g. with Open Gerber Folder).
     private var resolvedDestination: URL? {
-        if !storedDestination.isEmpty { return URL(fileURLWithPath: storedDestination, isDirectory: true) }
-        return model.projectFolder?.appendingPathComponent(target.folderName, isDirectory: true)
+        if !storedBookmark.isEmpty, let url = FileAccess.resolve(storedBookmark) { return url }
+        if !storedDestination.isEmpty, !FileAccess.isSandboxed {
+            return URL(fileURLWithPath: storedDestination, isDirectory: true)
+        }
+        guard let folder = model.projectFolder, FileManager.default.isWritableFile(atPath: folder.path) else { return nil }
+        return folder.appendingPathComponent(target.folderName, isDirectory: true)
     }
 
     private var blocker: String? { model.generationBlocker(for: target) }
@@ -163,7 +180,7 @@ struct GenerateDialog: View {
         } footer: {
             switch target {
             case .cnc:
-                Text("Runs pcb2gcode with the current parameters and writes the .ngc programs — the files the preview is showing.")
+                Text("Generates the toolpaths with the current parameters and writes the .ngc programs — the files the preview is showing.")
             case .laser:
                 Text("Generates the same programs, then writes each one as 1:1 artwork for a laser engraver instead of G-code. The .ngc files are not kept.")
             }
@@ -231,6 +248,8 @@ struct GenerateDialog: View {
             if let blocker {
                 Label(blocker, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
+            } else if resolvedDestination == nil {
+                Text("Choose a folder for the generated files.")
             } else {
                 Text("Created if it does not exist. Existing files with the same names are replaced.")
             }
@@ -255,7 +274,7 @@ struct GenerateDialog: View {
         } header: {
             Text(model.isGenerating ? "Running" : "Result")
         } footer: {
-            Text("Full pcb2gcode output, with per-stage timings, is in the Log tab.")
+            Text("The full output, with per-stage timings, is in the Log tab.")
         }
     }
 
@@ -270,6 +289,9 @@ struct GenerateDialog: View {
         panel.prompt = "Choose"
         panel.message = "Choose the folder for the generated files — use New Folder to create one."
         panel.directoryURL = resolvedDestination?.deletingLastPathComponent() ?? model.projectFolder
-        if panel.runModal() == .OK, let url = panel.url { storedDestination = url.path }
+        if panel.runModal() == .OK, let url = panel.url {
+            storedDestination = url.path
+            storedBookmark = FileAccess.bookmark(url) ?? Data()
+        }
     }
 }
