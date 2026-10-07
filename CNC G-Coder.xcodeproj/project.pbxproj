@@ -56,6 +56,7 @@
 				2BB98F8C302D137300D8699F /* Frameworks */,
 				2BB98F8D302D137300D8699F /* Resources */,
 				2BB98FA0302D137400D8699F /* Bundle pcb2gcode */,
+				2BB98FA1302D137400D8699F /* Bundle simulator */,
 			);
 			buildRules = (
 			);
@@ -134,6 +135,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "# Copies pcb2gcode and its libraries into Contents/Helpers (see the script).\n\"$SRCROOT/Scripts/bundle-pcb2gcode.sh\" \"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\" \"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\n";
+		};
+		2BB98FA1302D137400D8699F /* Bundle simulator */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Scripts/fake-grbl.py",
+			);
+			name = "Bundle simulator";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/fake-grbl.py",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Copies the FluidNC simulator into Contents/Resources (Machine panel -> Simulator transport, SimulatorLauncher).\nset -e\nmkdir -p \"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\ncp \"$SRCROOT/Scripts/fake-grbl.py\" \"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/fake-grbl.py\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -295,6 +316,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "CNC G-Coder";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CNC G-Coder connects to your CNC controller (GRBL or FluidNC) over the local network to jog the machine and send programs.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -336,6 +358,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "CNC G-Coder";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CNC G-Coder connects to your CNC controller (GRBL or FluidNC) over the local network to jog the machine and send programs.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

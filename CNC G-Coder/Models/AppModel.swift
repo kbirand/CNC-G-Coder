@@ -23,8 +23,28 @@ final class AppModel: ObservableObject {
     /// taken from the window — SwiftUI does not hand this window's undo
     /// manager to the model — and driven by Edit → Undo / Redo.
     let history = UndoManager()
+    /// The GRBL/FluidNC session behind the Machine panel (connection, jog,
+    /// probe, job streaming). One per app: the link outlives projects.
+    let machine = MachineController()
 
-    @Published var projectFolder: URL?
+    @Published var projectFolder: URL? {
+        didSet {
+            // Height maps are keyed by the project; a different folder means
+            // a different board.
+            if projectFolder != oldValue { loadHeightMaps() }
+        }
+    }
+    /// Probed height maps of the current project, per board side (see
+    /// HeightMap). Kept in Application Support, never beside the user's files.
+    @Published var heightMaps: [BoardSide: HeightMap] = [:]
+    /// Set by the sidebar's "Send … to Machine…" before the Machine panel
+    /// opens; the Program controls consume it.
+    @Published var requestedMachineLayer: LayerKind?
+    /// The Machine inspector in the main window (toolbar toggle, View →
+    /// Machine Panel ⇧⌘M, "Send … to Machine…"). Remembered across launches.
+    @Published var showMachineInspector = UserDefaults.standard.bool(forKey: "ui.machineInspector") {
+        didSet { UserDefaults.standard.set(showMachineInspector, forKey: "ui.machineInspector") }
+    }
     @Published var detectedFiles = DetectedFiles() {
         didSet {
             guard detectedFiles != oldValue else { return }
@@ -71,7 +91,15 @@ final class AppModel: ObservableObject {
     // MARK: Project file (see AppModel+Project.swift)
 
     /// The .cncproj this session was opened from or saved to; nil = untitled.
-    @Published var projectURL: URL?
+    @Published var projectURL: URL? {
+        didSet {
+            guard projectURL != oldValue else { return }
+            // An untitled project being saved keeps its maps in memory (the
+            // folder stays the same); opening another project replaces them
+            // once its folder lands (projectFolder's didSet).
+            loadHeightMaps(carryOver: oldValue == nil && projectURL != nil)
+        }
+    }
     /// Project state at the last open/save, for the "Edited" mark.
     @Published var savedProjectState: String?
     @Published var recentProjects: [URL] = []
@@ -107,6 +135,7 @@ final class AppModel: ObservableObject {
         editor.app = self
         editor.undoManager = history
         layerEditor.app = self
+        machine.app = self
         parameters.library = tools
         // objectWillChange fires before the new value lands; defer one runloop
         // turn so the preview controller reads the updated signature.
@@ -134,9 +163,60 @@ final class AppModel: ObservableObject {
         log += text
     }
 
+    // MARK: - Height maps (machine autolevel)
+
+    /// What a project's height maps are filed under: the project file, or the
+    /// Gerber folder of an untitled one. Nil for an untitled drawing-only
+    /// project (maps stay in memory).
+    var heightMapKey: String? { projectURL?.path ?? projectFolder?.path }
+
+    /// Design (Gerber) → program frame of `side` (`ProjectFrame.designToFront`
+    /// / `designToBack`); identity when the preview has no frame (zeroing
+    /// off, no document, an external program). Height maps live in design
+    /// coordinates and go through this at the edges.
+    func heightMapFrame(side: BoardSide) -> CGAffineTransform {
+        guard let frame = preview.document?.frame else { return .identity }
+        return side == .back ? frame.designToBack : frame.designToFront
+    }
+
+    /// Bumped by View Options → "Fit Machine Travel": the canvas frames the
+    /// machine's travel area once (never by default — the board stays the
+    /// default framing).
+    @Published var travelFitRequest = 0
+
+    /// Keeps a probed map for its side and writes it to Application Support.
+    func saveHeightMap(_ map: HeightMap) {
+        heightMaps[map.side] = map
+        guard let key = heightMapKey else { return }
+        let url = HeightMap.storageURL(projectKey: key, side: map.side)
+        do {
+            try map.write(to: url)
+            appendLog("[machine] Height map (\(map.side.title)) saved: \(url.path)\n")
+        } catch {
+            appendLog("[machine] ERROR saving the height map: \(error.localizedDescription)\n")
+        }
+    }
+
+    /// Reads the current project's maps from disk. With `carryOver`, maps
+    /// already in memory survive when the new key has none on disk (an
+    /// untitled project being saved for the first time).
+    func loadHeightMaps(carryOver: Bool = false) {
+        var loaded: [BoardSide: HeightMap] = [:]
+        if let key = heightMapKey {
+            for side in BoardSide.allCases {
+                let url = HeightMap.storageURL(projectKey: key, side: side)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                if let map = try? HeightMap.read(from: url) { loaded[side] = map }
+            }
+        }
+        if loaded.isEmpty, carryOver { return }
+        heightMaps = loaded
+    }
+
     private func startup() async {
         PreviewPaths.cleanRoot()
         try? FileManager.default.removeItem(at: ProjectDocument.workingRoot)
+        TempRoots.cleanStale(named: ProjectDocument.workingRootName)
         if let pcb2gcodeURL {
             if let r = try? await ProcessRunner.run(executable: pcb2gcodeURL, arguments: ["--version"]) {
                 let version = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -323,6 +403,333 @@ final class AppModel: ObservableObject {
                 preview.loadExternal(url: url, toolDiameter: spec.widestCut)
             }
         }
+        await runMachineDevHooks()
+    }
+
+    // MARK: - Machine dev hooks
+
+    /// Logs a machine hook event to the Log tab and stdout.
+    private func machineLog(_ text: String) {
+        appendLog("[machine] \(text)\n")
+        print("[machine] \(text)")
+    }
+
+    /// Headless machine control against the fake controller (Scripts/fake-grbl.py):
+    /// `-debugMachineConnect host:port` (or `sim` for the built-in simulator)
+    /// or `-debugMachineSerial /dev/cu.…` connects and identifies; `-debugMachineSend <front|back|outline|drill0|…|/path.ngc>`
+    /// streams a program; `-debugMachineAutoContinue 1` continues every
+    /// tool-change suspension after a second; `-debugMachineScript "a;b;c"` runs
+    /// steps (jog:x,1 | zero:xy | setx:5 | gozero | safez | send:front |
+    /// wait:suspended | continue | hold | resume | fromLine:120 | stop |
+    /// estop | savezero[:name] | usezero:name | verify:front | probez |
+    /// wait:done | sleep:2 | home | unlock);
+    /// `-debugMachineProbeMap 3x3` probes a map over the first program;
+    /// `-debugMachineClampZ 1` prepares with "Clamp Z to top";
+    /// `-debugMachineExitWhenDone 1` prints the job summary and quits.
+    private func runMachineDevHooks() async {
+        let defaults = UserDefaults.standard
+        let tcp = defaults.string(forKey: "debugMachineConnect")
+        let serial = defaults.string(forKey: "debugMachineSerial")
+        guard tcp != nil || serial != nil else { return }
+        setvbuf(stdout, nil, _IOLBF, 0)   // hook output reaches a redirected file line by line
+        let exitWhenDone = defaults.bool(forKey: "debugMachineExitWhenDone")
+
+        if let tcp, ["sim", "simulator"].contains(tcp.lowercased()) {
+            await machine.connectSimulator()
+        } else if let tcp {
+            let parts = tcp.split(separator: ":", maxSplits: 1).map(String.init)
+            let host = parts.first ?? tcp
+            let port = parts.count > 1 ? UInt16(parts[1]) ?? 23 : 23
+            await machine.connect(tcpHost: host, port: port)
+        } else if let serial {
+            await machine.connect(serialPath: serial, baud: 115200)
+        }
+        guard machine.isConnected else {
+            machineLog("connect failed: \(machine.lastError ?? "unknown error")")
+            if exitWhenDone { exit(1) }
+            return
+        }
+        // The first report decides homed/alarm; wait for it before anything else.
+        _ = await machine.waitForStatus(timeout: 5) { _ in true }
+        machineLog("connected: \(machine.firmware.description) (\(machine.statusSummary), homed \(machine.homed), trusted \(machine.positionTrusted))")
+
+        if defaults.bool(forKey: "debugMachineAutoContinue") {
+            Task { [weak self] in
+                var continued = 0
+                while let self, self.machine.isConnected {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard self.machine.streamer.isSuspended else { continue }
+                    try? await Task.sleep(for: .seconds(1))
+                    guard self.machine.streamer.isSuspended else { continue }
+                    continued += 1
+                    self.machineLog("auto-continue #\(continued) from line \(self.machine.streamer.resumeLine ?? 0)")
+                    await self.machine.continueJob()
+                    if self.machine.streamer.isSuspended {
+                        self.machineLog("continue refused: \(self.machine.streamer.lastMessage ?? "?")")
+                        try? await Task.sleep(for: .seconds(2))
+                    }
+                }
+            }
+        }
+
+        if let script = defaults.string(forKey: "debugMachineScript") {
+            await runMachineScript(script)
+        } else if let target = defaults.string(forKey: "debugMachineSend") {
+            if await machineSend(target) {
+                await machine.streamer.start()
+                machineLog("start: \(machine.streamer.state)" + (machine.streamer.lastMessage.map { " — \($0)" } ?? ""))
+            }
+        }
+
+        if let grid = defaults.string(forKey: "debugMachineProbeMap") {
+            await machineProbeMap(grid)
+        }
+
+        if exitWhenDone {
+            await machine.streamer.waitUntilFinished()
+            let s = machine.streamer
+            let name = s.program?.name ?? "none"
+            let summary = "JOB \(name): sent \(s.sentLine), acked \(s.ackedLine), errors \(s.lineErrors.count), final \(s.state)"
+            machineLog(summary)
+            print(summary)
+            exit(0)
+        }
+    }
+
+    /// Resolves a hook's layer name (or .ngc path) against the preview
+    /// document, waiting for it to exist.
+    private func machineResolveLayer(_ target: String) async -> ParsedLayer? {
+        if target.hasPrefix("/") {
+            let url = URL(fileURLWithPath: target)
+            preview.loadExternal(url: url, toolDiameter: nil)
+            for _ in 0..<60 where preview.document?.layers.first?.id != .test { try? await Task.sleep(for: .milliseconds(500)) }
+            return preview.document?.layers.first { $0.id == .test }
+        }
+        for _ in 0..<120 where preview.document == nil { try? await Task.sleep(for: .milliseconds(500)) }
+        // Let a running regeneration land so the program matches the settings.
+        for _ in 0..<60 where preview.isStale && !preview.showsExternalFile { try? await Task.sleep(for: .milliseconds(500)) }
+        guard let layers = preview.document?.layers else { return nil }
+        let key = target.lowercased()
+        let kind: LayerKind?
+        switch key {
+        case "front": kind = .front
+        case "back": kind = .back
+        case "outline": kind = .outline
+        case "masktop", "mask_top", "mask-top": kind = .maskTop
+        case "maskbottom", "mask_bottom", "mask-bottom": kind = .maskBottom
+        case "silktop", "silk_top", "silk-top": kind = .silkTop
+        case "silkbottom", "silk_bottom", "silk-bottom": kind = .silkBottom
+        case "test": kind = .test
+        default:
+            if key.hasPrefix("drill"), let index = Int(key.dropFirst(5)) {
+                kind = layers.map(\.id).first { if case .drill(let i, _) = $0 { return i == index } else { return false } }
+            } else {
+                kind = layers.map(\.id).first { $0.fileSlug == key || $0.displayName.lowercased() == key }
+            }
+        }
+        guard let kind, let layer = layers.first(where: { $0.id == kind }) else {
+            machineLog("no layer named “\(target)” — have: " + layers.map { $0.id.fileSlug }.joined(separator: ", "))
+            return nil
+        }
+        return layer
+    }
+
+    /// Prepares and loads a program for the hooks. True when loaded.
+    private func machineSend(_ target: String) async -> Bool {
+        guard let layer = await machineResolveLayer(target) else { return false }
+        // `-debugMachineClampZ 1`: prepare with "Clamp Z to top" (air tests).
+        let options = ProgramOptions(applyBacklash: MachineSettings.applyBacklash,
+                                     heightMap: UserDefaults.standard.bool(forKey: "debugMachineApplyMap") ? heightMaps[layer.id.boardSide] : nil,
+                                     applyBelowZ: MachineSettings.heightMapApplyBelowZ,
+                                     frame: heightMapFrame(side: layer.id.boardSide),
+                                     clampZAboveWork: UserDefaults.standard.bool(forKey: "debugMachineClampZ") ? machine.clampZWork() : nil)
+        do {
+            let program = try await machine.prepareProgram(layer: layer, name: layer.id.fileSlug + ".ngc", options: options)
+            requestedMachineLayer = layer.id   // the Machine window's Program tab adopts this program instead of preparing its own
+            machineLog("loaded \(program.name): \(program.lines.count) lines, \(program.segments.count) segments, "
+                       + "tool changes at \(program.toolChangeLines.sorted()), est. \(Int(program.parsed.totalTime)) s → \(program.url.path)")
+            if let clamp = program.options.clampZAboveWork {
+                machineLog("clamp Z above work \(GRBLCommand.number(clamp)): " + (program.notes.first { $0.hasPrefix("Z clamped") } ?? "no note"))
+            } else if UserDefaults.standard.bool(forKey: "debugMachineClampZ") {
+                machineLog("clamp Z requested but unavailable (Z travel \(machine.axisRanges[.z].map { "\($0)" } ?? "unknown"), WCO \(machine.status.workOffset?.summary ?? "unknown"))")
+            }
+            _ = await machine.waitForStatus(timeout: 10) { $0.state == .idle }
+            return true
+        } catch {
+            machineLog("prepare failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Probes an `AxB` map over the first program's cut bounds and saves it.
+    private func machineProbeMap(_ grid: String) async {
+        for _ in 0..<120 where preview.document == nil { try? await Task.sleep(for: .milliseconds(500)) }
+        guard let layer = preview.document?.layers.first else { machineLog("probe map: no program"); return }
+        let counts = grid.lowercased().split(separator: "x").compactMap { Int($0) }
+        // The map is anchored to the board: the program's bounds in design coordinates.
+        let frame = heightMapFrame(side: layer.id.boardSide)
+        let bounds = (layer.cutBounds ?? layer.allBounds ?? .zero).applying(frame.inverted())
+        var map = HeightMap.auto(for: bounds, side: layer.id.boardSide)
+        if counts.count == 2 {
+            map.nx = max(2, counts[0])
+            map.ny = max(2, counts[1])
+            map.clear()
+        }
+        machineLog("probe map \(map.nx)×\(map.ny) over design \(map.rect) (\(map.side.title)), frame tx \(frame.tx) ty \(frame.ty), work rect \(map.rect.applying(frame))")
+        _ = await machine.waitForStatus(timeout: 10) { $0.state == .idle }
+        await machine.probeHeightMap(map)
+        guard let result = heightMaps[map.side], result.isComplete else {
+            machineLog("probe map failed: \(machine.streamer.lastMessage ?? "?")")
+            return
+        }
+        let path: String
+        if let key = heightMapKey {
+            path = HeightMap.storageURL(projectKey: key, side: map.side).path
+        } else {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("cnc-heightmap-\(map.side.rawValue).json")
+            try? result.write(to: url)
+            path = url.path
+        }
+        let deviation = result.maxDeviation.map { String(format: "%.3f", $0) } ?? "?"
+        machineLog("probe map done: \(result.probedCount)/\(result.totalCount) points, reference Z \(result.referenceZ.map(GRBLCommand.number) ?? "?"), max deviation \(deviation) mm, design origin \(result.probedDesignOrigin?.summary ?? "?") → \(path)")
+    }
+
+    /// Runs `step;step;…` against the machine, logging each.
+    private func runMachineScript(_ script: String) async {
+        var lastSeenError = machine.lastError
+        for raw in script.split(separator: ";") {
+            let step = raw.trimmingCharacters(in: .whitespaces)
+            guard !step.isEmpty else { continue }
+            let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+            let verb = parts[0].lowercased()
+            let argument = parts.count > 1 ? parts[1] : ""
+            machineLog("step: \(step)")
+            let m = machine
+            switch verb {
+            case "sleep":
+                try? await Task.sleep(for: .seconds(Double(argument) ?? 1))
+            case "jog":
+                let args = argument.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                guard let axis = args.first.flatMap({ Axis(rawValue: $0.uppercased()) }) else { machineLog("jog: bad axis"); continue }
+                let distance = args.count > 1 ? Double(args[1]) ?? 1 : 1
+                await m.jog(axis: axis, direction: distance < 0 ? .negative : .positive, distance: abs(distance), feed: MachineSettings.jogFeed)
+                _ = await m.waitForStatus(timeout: 30) { $0.state == .idle }
+            case "zero":
+                let axes = argument.uppercased().compactMap { Axis(rawValue: String($0)) }
+                await m.zero(axes: axes.isEmpty ? Axis.allCases : axes)
+            case "setx", "sety", "setz":
+                let axis = Axis(rawValue: String(verb.last!).uppercased()) ?? .x
+                let before = m.status.workOffset
+                await m.setAxis(axis, workValue: Double(argument) ?? 0)
+                // G10 is acknowledged before the controller reports the new
+                // WCO:; a following step (send with Clamp Z) needs the fresh one.
+                _ = await m.waitForStatus(timeout: 3) { $0.workOffset != nil && $0.workOffset != before }
+            case "gozero":
+                await m.goToWorkZero()
+                _ = await m.waitForStatus(timeout: 60) { $0.state == .idle }
+            case "safez":
+                await m.safePosition()
+                _ = await m.waitForStatus(timeout: 60) { $0.state == .idle }
+            case "home":
+                await m.home()
+            case "unlock":
+                await m.unlock()
+            case "send":
+                if await machineSend(argument) {
+                    await m.streamer.start()
+                    machineLog("start: \(m.streamer.state)" + (m.streamer.lastMessage.map { " — \($0)" } ?? ""))
+                }
+            case "verify":
+                if m.streamer.program == nil || !argument.isEmpty {
+                    guard await machineSend(argument.isEmpty ? "front" : argument) else { continue }
+                }
+                await m.streamer.verify()
+                machineLog("verify: \(m.streamer.state)" + (m.streamer.lastMessage.map { " — \($0)" } ?? ""))
+            case "wait":
+                switch argument.lowercased() {
+                case "suspended":
+                    for _ in 0..<1200 where !m.streamer.isSuspended && m.streamer.isActive { try? await Task.sleep(for: .milliseconds(500)) }
+                    machineLog("wait:suspended → \(m.streamer.state), resume line \(m.streamer.resumeLine ?? 0)")
+                case "idle":
+                    _ = await m.waitForStatus(timeout: 600) { $0.state == .idle }
+                default:
+                    await m.streamer.waitUntilFinished()
+                    machineLog("wait:done → \(m.streamer.state), acked \(m.streamer.ackedLine)/\(m.streamer.program?.lines.count ?? 0), errors \(m.streamer.lineErrors.count), elapsed \(Int(m.streamer.elapsed)) s")
+                }
+            case "continue":
+                await m.continueJob()
+                machineLog("continue: \(m.streamer.state)" + (m.streamer.lastMessage.map { " — \($0)" } ?? "")
+                           + (m.streamer.validityPrompt.map { " — height map prompt: \($0)" } ?? ""))
+            case "hold":
+                m.streamer.pause()
+                _ = await m.waitForStatus(timeout: 5) { $0.state.isHoldComplete }
+                machineLog("hold: \(m.status.state.name)")
+            case "resume":
+                m.streamer.resume()
+            case "fromline":
+                if m.streamer.isActive { await m.streamer.stop() }
+                await m.sendFromLine(Int(argument) ?? 1)
+                machineLog("fromLine: \(m.streamer.state)" + (m.streamer.lastMessage.map { " — \($0)" } ?? ""))
+            case "stop":
+                // The script's stop ends the job whatever its state (a
+                // suspended job included — the controller's stop leaves a
+                // parked job alone on purpose, as ⌘. does during a tool change).
+                if m.streamer.isActive { await m.streamer.stop() } else { await m.stop() }
+                machineLog("stop: \(m.streamer.state), machine \(m.status.state.name), trusted \(m.positionTrusted)")
+            case "estop":
+                let before = m.status.state.name
+                m.emergencyStop()
+                _ = await m.waitForStatus(timeout: 5) { _ in true }
+                machineLog("estop: was \(before) → job \(m.streamer.state), machine \(m.status.state.name), trusted \(m.positionTrusted)")
+            case "savezero":
+                // The work origin as a machine position, like the Positions tab's "Save work zero".
+                if let wco = m.status.workOffset {
+                    m.positions.add(name: argument.isEmpty ? "Work zero" : argument, position: wco)
+                    machineLog("savezero: \(m.positions.positions.last?.name ?? "?") = \(wco.summary)")
+                } else {
+                    machineLog("savezero: work offset unknown")
+                }
+            case "usezero":
+                if let saved = m.positions.positions.first(where: { $0.name.caseInsensitiveCompare(argument) == .orderedSame }) {
+                    await m.setWorkOrigin(machine: saved.position)
+                    machineLog("usezero: \(saved.name) → WCO \(m.status.workOffset?.summary ?? "?"), work \(m.status.workPosition?.summary ?? "?")")
+                } else {
+                    machineLog("usezero: no saved position named “\(argument)”")
+                }
+            case "steps":
+                // steps:x — read the axis' steps/mm (FluidNC).
+                if let axis = Axis(rawValue: argument.uppercased()) {
+                    do { machineLog("steps \(axis.rawValue): \(GRBLCommand.number(try await m.readStepsPerMM(axis))), config \(try await m.readConfigFilename())") }
+                    catch { machineLog("steps: \(error.localizedDescription)") }
+                }
+            case "calibrate":
+                // calibrate:x,commanded,measured[,file] — correct the axis' steps/mm and save.
+                let parts = argument.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                if parts.count >= 3, let axis = Axis(rawValue: parts[0].uppercased()),
+                   let commanded = Double(parts[1]), let measured = Double(parts[2]) {
+                    do {
+                        let current = try await m.readStepsPerMM(axis)
+                        guard let corrected = MachineController.correctedSteps(current: current, commanded: commanded, measured: measured) else { machineLog("calibrate: bad numbers"); break }
+                        let file = parts.count > 3 ? parts[3] : try await m.readConfigFilename()
+                        let change = try await m.writeStepsPerMM(axis, corrected, saveTo: file)
+                        machineLog("calibrate \(axis.rawValue): \(GRBLCommand.number(change.previous)) → \(GRBLCommand.number(change.current)) (saved to \(change.savedTo ?? "nothing"))")
+                    } catch { machineLog("calibrate: \(error.localizedDescription)") }
+                }
+            case "probez":
+                // A height-mapped program: the bit is measured at the work
+                // origin, where the map's reference was probed.
+                let atOrigin = m.streamer.program?.options.heightMap != nil
+                let failure = atOrigin ? await m.probeZAtWorkOrigin() : await m.probeZ()
+                machineLog("probeZ\(atOrigin ? " at origin" : ""): " + (failure ?? "ok — PRB \(m.lastProbe?.position.summary ?? "?"), work Z now \(m.status.workPosition.map { GRBLCommand.number($0.z) } ?? "?")"))
+            default:
+                machineLog("unknown step “\(step)”")
+            }
+            if let error = m.lastError, error != lastSeenError {
+                lastSeenError = error
+                machineLog("lastError: \(error)")
+            }
+        }
+        machineLog("script done — \(machine.statusSummary), work \(machine.status.workPosition?.summary ?? "?")")
     }
 
     // MARK: - Project folder

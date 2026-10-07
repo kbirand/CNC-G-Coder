@@ -283,6 +283,20 @@ extension AppModel {
 
     /// Asks before unsaved changes are thrown away. True = go ahead.
     func confirmDiscardChanges() -> Bool {
+        // A program being streamed comes first: switching projects underneath
+        // it would pull the preview away from a moving machine.
+        if machine.isStreaming {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "A program is being sent to the machine"
+            alert.informativeText = "Stop the job before changing the project. Stopping holds the machine, resets the controller and leaves the spindle off."
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Stop Job")
+            if alert.runModal() == .alertSecondButtonReturn {
+                Task { await machine.streamer.stop() }
+            }
+            return false
+        }
         guard isProjectEdited else { return true }
         let alert = NSAlert()
         alert.messageText = "Save changes to \(projectName)?"

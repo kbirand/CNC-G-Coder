@@ -152,7 +152,8 @@ nonisolated struct ProjectDocument: Codable, Sendable {
     }
 
     /// Where an opened project's files are copied to; cleared at launch.
-    static var workingRoot: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("CNCGCoderProjects", isDirectory: true)
-    }
+    static let workingRootName = "CNCGCoderProjects"
+    /// Per process (see TempRoots): unpacked projects of a running instance
+    /// survive other instances starting up.
+    static var workingRoot: URL { TempRoots.root(named: workingRootName) }
 }

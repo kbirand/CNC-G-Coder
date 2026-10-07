@@ -16,6 +16,13 @@ struct PreviewPane: View {
     @AppStorage("previewShowRulers") private var showRulers = true
     @AppStorage("previewShowGuides") private var showGuides = true
     @AppStorage("preview3D") private var show3D = false
+    @AppStorage("previewShowHeightMap") private var showHeightMap = true
+    @AppStorage("preview3DHeightMapExaggeration") private var heightMapExaggeration = 10.0
+    @AppStorage("previewShowMachineTravel") private var showMachineTravel = true
+    @AppStorage("preview3DShowHoles") private var showHoles = true
+    @AppStorage("preview3DShowPaths") private var showPaths = true
+    @AppStorage("preview3DShowCuts") private var showCuts = true
+    @AppStorage("machine.inspectorTab") private var inspectorTab = MachineInspectorTab.control.rawValue
     @AppStorage(SettingsKeys.snapToGrid) private var snapToGrid = false
     @AppStorage("previewGuidesX") private var guidesXRaw = ""
     @AppStorage("previewGuidesY") private var guidesYRaw = ""
@@ -31,19 +38,22 @@ struct PreviewPane: View {
         case toolpath = "Toolpath"
         case gcode = "G-code"
         case log = "Log"
+        case console = "Console"
     }
     /// A failure the user closed; its card stays hidden until the next failure.
     @State private var dismissedFailure: String?
-    // Dev hook: launch with `-debugTab gcode|log` to open a specific tab.
+    // Dev hook: launch with `-debugTab gcode|log|console` to open a specific tab.
     @State private var tab: Tab = {
         switch UserDefaults.standard.string(forKey: "debugTab") {
         case "gcode": .gcode
         case "log": .log
+        case "console": .console
         default: .toolpath
         }
     }()
 
     var body: some View {
+        let _ = DebugFlags.renderLog ? Self._printChanges() : ()
         VStack(spacing: 0) {
             header
             Divider()
@@ -51,6 +61,7 @@ struct PreviewPane: View {
             case .toolpath: toolpathTab
             case .gcode: GCodeTextTab(preview: preview, playback: playback)
             case .log: LogView(model: model)
+            case .console: ConsoleTab(machine: model.machine)
             }
         }
         .onAppear {
@@ -71,7 +82,8 @@ struct PreviewPane: View {
         guard !didApplyDebugScrub, let doc = preview.document else { return }
         let fraction = UserDefaults.standard.double(forKey: "debugScrub")
         let layerName = UserDefaults.standard.string(forKey: "debugLayer")
-        guard fraction > 0 || layerName != nil else { return }
+        let play = UserDefaults.standard.bool(forKey: "debugPlay")
+        guard fraction > 0 || layerName != nil || play else { return }
         didApplyDebugScrub = true
         if let layerName {
             playback.selectedLayer = doc.layers.first {
@@ -83,66 +95,93 @@ struct PreviewPane: View {
         if fraction > 0 {
             playback.currentTime = playback.totalTime * min(fraction, 1)
         }
-        // `-debugPlay 1` also starts playback (e.g. to profile it).
-        if UserDefaults.standard.bool(forKey: "debugPlay") { playback.isPlaying = true }
+        // `-debugPlay 1` also starts playback (e.g. to profile it), of the
+        // selected layer or — alone — the first one.
+        if play {
+            if playback.selectedLayer == nil { playback.selectedLayer = doc.layers.first?.id }
+            playback.isPlaying = true
+        }
     }
 
     // MARK: - Header
 
+    /// One row when it fits; two rows (tabs + status, then the view
+    /// controls) when the preview column is squeezed between a wide sidebar
+    /// and a wide Machine panel — the row's intrinsic width must never force
+    /// the window wider than the screen.
     private var header: some View {
-        HStack(spacing: 12) {
-            Picker("", selection: $tab) {
-                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                tabPicker
+                statusView
+                Spacer(minLength: 8)
+                headerControls
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 260)
-            .help("Toolpath: graphical preview with playback. G-code: the raw .ngc text, synced to playback. Log: pcb2gcode output with per-step timings.")
-
-            statusView
-
-            Spacer()
-
-            if preview.showsExternalFile, case .ready = preview.phase {
-                WarningPill(text: "Test file", color: .blue, icon: "doc.text",
-                            help: "Showing a test file exactly as it was written to disk — it is not built from the project settings. Open or refresh a project to preview its programs again.")
-            } else if preview.isStale, case .ready = preview.phase {
-                WarningPill(text: "Out of date", color: .orange, icon: "clock.arrow.circlepath",
-                            help: "Parameters changed since this preview was generated")
-            }
-
-            if tab == .toolpath {
-                Picker("", selection: $show3D) {
-                    Text("2D").tag(false)
-                    Text("3D").tag(true)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) {
+                    tabPicker
+                    statusView
+                    Spacer(minLength: 0)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .help("2D: the flat toolpath view with rulers and guides. 3D: orbit around the board — drag to orbit, right- or middle-drag to pan, scroll or pinch to zoom; the gizmo at the top right jumps to top, front, side or isometric views.")
-
-                viewOptionsMenu
-
-                Toggle(isOn: $showSideView) {
-                    Image(systemName: "rectangle.split.1x2")
+                HStack(spacing: 12) {
+                    Spacer(minLength: 0)
+                    headerControls
                 }
-                .toggleStyle(.button)
-                .buttonStyle(.borderless)
-                .help("Show side (Z) view")
             }
-
-            Button {
-                preview.refreshNow()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .controlSize(.small)
-            .disabled(!preview.canPreview || preview.phase == .running)
-            .help("Regenerate the preview with the current parameters")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $tab) {
+            ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 340)
+        .help("Toolpath: graphical preview with playback. G-code: the raw .ngc text, synced to playback. Log: pcb2gcode output with per-step timings. Console: the conversation with the machine controller.")
+    }
+
+    @ViewBuilder
+    private var headerControls: some View {
+        if preview.showsExternalFile, case .ready = preview.phase {
+            WarningPill(text: "Test file", color: .blue, icon: "doc.text",
+                        help: "Showing a test file exactly as it was written to disk — it is not built from the project settings. Open or refresh a project to preview its programs again.")
+        } else if preview.isStale, case .ready = preview.phase {
+            WarningPill(text: "Out of date", color: .orange, icon: "clock.arrow.circlepath",
+                        help: "Parameters changed since this preview was generated")
+        }
+
+        if tab == .toolpath {
+            Picker("", selection: $show3D) {
+                Text("2D").tag(false)
+                Text("3D").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("2D: the flat toolpath view with rulers and guides. 3D: orbit around the board — drag to orbit, right- or middle-drag to pan, scroll or pinch to zoom; the gizmo at the top right jumps to top, front, side or isometric views.")
+
+            viewOptionsMenu
+
+            Toggle(isOn: $showSideView) {
+                Image(systemName: "rectangle.split.1x2")
+            }
+            .toggleStyle(.button)
+            .buttonStyle(.borderless)
+            .help("Show side (Z) view")
+        }
+
+        Button {
+            preview.refreshNow()
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
+        .controlSize(.small)
+        .disabled(!preview.canPreview || preview.phase == .running)
+        .help("Regenerate the preview with the current parameters")
     }
 
     private var viewOptionsMenu: some View {
@@ -180,6 +219,44 @@ struct PreviewPane: View {
                 }
                 .help("DISPLAY ONLY. Back-side programs are genuinely mirrored — they have to be, to machine correctly once you turn the board over — so on screen they sit mirrored against the front. This un-mirrors them for viewing so the two sides overlay and you can check registration. It changes nothing in the generated G-code, and it is unrelated to \"Board flips\" in Machine setup, which chooses the axis the machining actually uses.")
             }
+            Divider()
+            Toggle(isOn: $showHeightMap) {
+                Label("Height Map", systemImage: "square.grid.3x3.topleft.filled")
+            }
+            .help("Show the probed height map (autolevel grid) of the shown side under the programs: the interpolation grid and every point coloured from blue (lowest) to red (highest), labelled with its height when zoomed in. The map is shown regardless while it is being probed, while the Machine panel is on its Height Map tab, and when the loaded machine program uses it. Probe one in the Machine panel's Height Map tab.")
+            Picker(selection: $heightMapExaggeration) {
+                Text("×1").tag(1.0)
+                Text("×10").tag(10.0)
+                Text("×20").tag(20.0)
+                Text("×50").tag(50.0)
+            } label: {
+                Label("Height map exaggeration", systemImage: "arrow.up.and.down")
+            }
+            .help("How much the 3D view stretches the height map's Z, so a warp of a tenth of a millimetre is visible")
+            Toggle(isOn: $showPaths) {
+                Label("Toolpath Lines", systemImage: "scribble")
+            }
+            .help("3D: show the programs' toolpath lines. Off, only the board, the holes, the material removal and the tool are drawn — the clearest view of what happens to the board")
+            Toggle(isOn: $showHoles) {
+                Label("Drill Holes", systemImage: "circle.dotted")
+            }
+            .help("3D: drill programs as holes of the bit's diameter and the drilling depth, appearing as the bit plunges during playback or live machining")
+            Toggle(isOn: $showCuts) {
+                Label("Material Removal", systemImage: "paintbrush.pointed")
+            }
+            .help("3D: paint what the programs take off the board onto its faces — isolation cuts bare the substrate, deep cuts are dark, drills are black discs — as far as playback or the live job has come")
+            Divider()
+            Toggle(isOn: $showMachineTravel) {
+                Label("Machine Travel", systemImage: "rectangle.dashed")
+            }
+            .help("While connected: the machine's travel area (its axis ranges, from the controller's settings) as a dashed outline around the work, with the home corner marked. It is never part of the default framing — use Fit Machine Travel to see it whole.")
+            Button {
+                model.travelFitRequest += 1
+            } label: {
+                Label("Fit Machine Travel", systemImage: "arrow.down.left.and.arrow.up.right.rectangle")
+            }
+            .disabled(!(model.machine.isConnected && model.machine.workTravelRect != nil))
+            .help("Frame the whole travel area once (double-click or Fit returns to the board)")
         } label: {
             Label("View Options", systemImage: "eye")
         }
@@ -222,11 +299,16 @@ struct PreviewPane: View {
     // MARK: - Toolpath tab
 
     private var toolpathTab: some View {
-        VStack(spacing: 0) {
+        BodyCounter.count("PreviewPane.toolpathTab")
+        return VStack(spacing: 0) {
             Group {
                 if show3D {
                     Toolpath3DView(preview: preview, playback: playback,
-                                   tool: playback.selectedLayer.flatMap { model.toolGeometry(for: $0) })
+                                   tool: playback.displayedKind.flatMap { model.toolGeometry(for: $0) },
+                                   machine: model.machine,
+                                   heightMap: model.heightMapOverlay(toggle: showHeightMap, inspectorTab: inspectorTab),
+                                   heightMapExaggeration: heightMapExaggeration,
+                                   showHoles: showHoles, showPaths: showPaths, showCuts: showCuts)
                 } else {
                     ToolpathCanvasView(preview: preview, playback: playback, params: model.parameters,
                                        model: model, editor: model.editor, layerEditor: model.layerEditor)
@@ -253,17 +335,26 @@ struct PreviewPane: View {
                         .padding(.top, 10)
                     }
                 }
-                .overlay(alignment: .topLeading) {
+                // The notes sit at the top right, clear of the tool strip and
+                // editor bars at the top left.
+                .overlay(alignment: .topTrailing) {
                     if !show3D {
                         canvasNotes
-                            .padding(.leading, showRulers ? ToolpathCanvasView.leftGutter : 0)
-                            // Under the editor bar while drawing.
-                            .padding(.top, (showRulers ? ToolpathCanvasView.topGutter : 0) + (editorActive ? 64 : 0))
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 420, alignment: .trailing)
+                            .padding(.top, showRulers ? ToolpathCanvasView.topGutter : 0)
                     }
                 }
                 .overlay(alignment: .bottom) {
-                    // Editing a layer file: no program to play until editing ends.
-                    if layerEditor.target == nil {
+                    if playback.job != nil {
+                        // A program is being sent: the machine drives the
+                        // clock, so the job bar replaces the player — even
+                        // mid layer-edit, the job must stay controllable.
+                        JobBar(machine: model.machine, compact: true)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 12)
+                    } else if layerEditor.target == nil {
+                        // Editing a layer file: no program to play until editing ends.
                         PlaybackControls(preview: preview, playback: playback)
                             .padding(.horizontal, 16)
                             .padding(.bottom, 12)
@@ -399,5 +490,46 @@ struct PreviewPane: View {
         .font(.caption2)
         .foregroundStyle(.tertiary)
         .padding(10)
+    }
+}
+
+
+/// `-debugDumpViews`: how often a view body is evaluated (printed per 5 s).
+@MainActor
+enum BodyCounter {
+    private static let enabled = UserDefaults.standard.bool(forKey: "debugDumpViews")
+    private static var counts: [String: Int] = [:]
+    private static var since: TimeInterval = 0
+
+    private static var times: [String: (total: Double, max: Double, count: Int)] = [:]
+
+    static func count(_ name: String) {
+        guard enabled else { return }
+        counts[name, default: 0] += 1
+        report()
+    }
+
+    /// Accumulates a drawing time (seconds) under `name`.
+    static func time(_ name: String, _ seconds: Double) {
+        guard enabled else { return }
+        var e = times[name] ?? (0, 0, 0)
+        e.total += seconds * 1000; e.max = max(e.max, seconds * 1000); e.count += 1
+        times[name] = e
+        report()
+    }
+
+    private static func report() {
+        let now = CACurrentMediaTime()
+        if since == 0 { since = now; return }
+        guard now - since >= 5 else { return }
+        var parts = counts.sorted { $0.key < $1.key }.map { String(format: "%@ %.1f/s", $0.key as NSString, Double($0.value) / (now - since)) }
+        parts += times.sorted { $0.key < $1.key }.map {
+            String(format: "%@ %.1f/s avg %.2f ms max %.1f ms", $0.key as NSString, Double($0.value.count) / (now - since),
+                   $0.value.total / Double(max($0.value.count, 1)), $0.value.max)
+        }
+        print("[debug] body evaluations: " + parts.joined(separator: ", "))
+        counts = [:]
+        times = [:]
+        since = now
     }
 }

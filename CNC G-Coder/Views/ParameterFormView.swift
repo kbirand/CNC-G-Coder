@@ -91,6 +91,7 @@ struct ParameterFormView: View {
     @AppStorage(BacklashCompensation.Settings.yKey) private var backlashY = "0"
 
     var body: some View {
+        let _ = DebugFlags.renderLog ? Self._printChanges() : ()
         Form {
             projectSection
             layerPickerSection
@@ -259,7 +260,11 @@ struct ParameterFormView: View {
                         get: { sectionOverride.isEmpty && playback.selectedLayer == layer.id },
                         set: { if $0 { select(layer: layer.id) } }
                     )) {
-                        Text("\(layer.displayName)  ·  \(formatDuration(layer.totalTime))")
+                        if playback.job?.kind == layer.id {
+                            Text("\(layer.displayName)  ·  ▶ running")
+                        } else {
+                            Text("\(layer.displayName)  ·  \(formatDuration(layer.totalTime))")
+                        }
                     }
                 }
             }
@@ -964,6 +969,19 @@ struct ParameterFormView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(stale)
+                // Shows the Machine panel with this layer loaded in its
+                // Program section; the panel's own Send button starts the job.
+                Button {
+                    model.requestedMachineLayer = layer.id
+                    model.showMachineInspector = true
+                } label: {
+                    Label("Send \(layer.id.fileSlug).ngc to Machine…", systemImage: "dot.radiowaves.left.and.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(stale || model.machine.isStreaming)
+                .help(model.machine.isStreaming
+                      ? "A program is already being sent — stop it in the Machine panel first."
+                      : "Stream this program to the connected controller from the Machine panel: connect, zero, probe, then Send.")
                 LabeledContent("X0 Y0 at") {
                     Button(originSummary) { select(section: .setup) }
                         .buttonStyle(.link)

@@ -13,17 +13,58 @@ nonisolated extension Duration {
 /// the assumed rapid rate for G0) — so at 1× the playback runs at 100% of the
 /// real machining speed and the tool travels smoothly along every move,
 /// including rapids between sections.
+/// A program being streamed to the machine. Identity only — it is set once
+/// when the job starts and cleared when it ends, so the views that observe
+/// `PlaybackState` re-render twice per job, not once per acknowledged line.
+/// While it is set, its `layer` (parsed from the exact text sent) is the
+/// geometry every canvas draws for the selected program; the preview document
+/// only supplies the other overlay layers and the board frame.
+struct LiveJob: Identifiable {
+    let token: UUID
+    var id: UUID { token }
+    /// The program's layer kind (`.test` for an external file).
+    let kind: LayerKind
+    /// Parsed from the text that is actually sent, so `sourceLine`s match it.
+    let layer: ParsedLayer
+    /// The sent text on disk, for the G-code tab.
+    let url: URL
+    /// The document's back→front mapping when the job started, so a preview
+    /// refresh mid-job cannot move the drawing.
+    let backToFront: CGAffineTransform
+    let projectSize: CGSize?
+}
+
 @MainActor
 final class PlaybackState: ObservableObject {
 
     @Published var selectedLayer: LayerKind? {
         didSet {
-            if selectedLayer != oldValue {
+            // The streamer owns the clock while a job runs.
+            if selectedLayer != oldValue, job == nil {
                 currentTime = 0
                 isPlaying = false
             }
         }
     }
+    /// The program being sent to the machine, if any (see LiveJob).
+    @Published var job: LiveJob? {
+        didSet {
+            if let job {
+                isPlaying = false
+                selectedLayer = job.kind
+                currentTime = 0
+            } else if oldValue != nil {
+                // Reconcile with whatever document exists now.
+                documentToken = nil
+                syncToDocument()
+            }
+        }
+    }
+    /// The layer kind the canvases show: the job's while one runs.
+    var displayedKind: LayerKind? { job?.kind ?? selectedLayer }
+    /// Cache key for the selected program's geometry: changes when a job
+    /// starts/ends or the document is regenerated.
+    var renderToken: UUID? { job?.token ?? preview?.document?.token }
     /// "Set Origin" mode: the next click in the toolpath view places X0/Y0.
     /// App-wide so the sidebar can start it too.
     @Published var placingOrigin = false
@@ -33,9 +74,13 @@ final class PlaybackState: ObservableObject {
     /// the whole settings sidebar included. Views that move with playback
     /// observe `clock` (see PlaybackTimeReader).
     let clock = PlaybackClock()
+    /// The live value is always current; SwiftUI is told at most ~30× a
+    /// second (a streaming job advances it once per screen refresh, and
+    /// the 3D view reads it directly in that same tick — see
+    /// `PlaybackClock.liveTime`).
     var currentTime: Double {
-        get { clock.currentTime }
-        set { clock.currentTime = newValue }
+        get { clock.liveTime }
+        set { clock.advance(to: newValue) }
     }
     @Published var speedMultiplier: Double = 1    // 1 = real machining speed
     @Published var isPlaying = false {
@@ -49,6 +94,7 @@ final class PlaybackState: ObservableObject {
     private var documentToken: UUID?
 
     var layer: ParsedLayer? {
+        if let job { return job.layer }
         guard let selectedLayer else { return nil }
         return preview?.document?.layers.first { $0.id == selectedLayer }
     }
@@ -90,7 +136,8 @@ final class PlaybackState: ObservableObject {
 
     /// True while scrubbed to mid-program: views ghost the remainder.
     var isEngaged: Bool {
-        selectedLayer != nil && moveCount > 0 && currentTime < totalTime - 1e-9
+        if job != nil { return true }
+        return selectedLayer != nil && moveCount > 0 && currentTime < totalTime - 1e-9
     }
 
     /// Tool XY position, interpolated along the in-progress move.
@@ -114,6 +161,9 @@ final class PlaybackState: ObservableObject {
     /// parameter tweak doesn't throw away where you were. Otherwise fall back
     /// to the first layer, rewound.
     func syncToDocument() {
+        // A running job keeps its layer and clock whatever the document does;
+        // `job`'s didSet reconciles once it ends.
+        guard job == nil else { return }
         guard let doc = preview?.document else {
             // A drawn layer stays selected with nothing generated yet: the
             // editor is open on it.
@@ -169,7 +219,37 @@ final class PlaybackState: ObservableObject {
 /// re-render on every tick.
 @MainActor
 final class PlaybackClock: ObservableObject {
-    @Published var currentTime: Double = 0
+    /// The published time: views that follow playback observe this.
+    @Published private(set) var currentTime: Double = 0
+    /// The latest time set, possibly ahead of `currentTime` by one refresh.
+    private(set) var liveTime: Double = 0
+    private var lastPublish: TimeInterval = 0
+    /// Just under a 30 Hz frame: the simulation loop's ~30 Hz writes all
+    /// pass, a streaming job's 60 Hz writes pass every other time.
+    static let minimumPublishInterval: TimeInterval = 1.0 / 45
+
+    /// Sets the time; publishes it unless the previous publish was less
+    /// than `minimumPublishInterval` ago — except when the value jumps (a
+    /// seek, a reset to zero), which is always published at once.
+    func advance(to time: Double) {
+        liveTime = time
+        let now = ProcessInfo.processInfo.systemUptime
+        let jump = abs(time - currentTime) > 0.5 || time == 0
+        if jump || now - lastPublish >= Self.minimumPublishInterval {
+            lastPublish = now
+            currentTime = time
+        } else if !flushScheduled {
+            // Make sure the last value of a burst still gets published.
+            flushScheduled = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(34))
+                guard let self else { return }
+                self.flushScheduled = false
+                if self.currentTime != self.liveTime { self.lastPublish = ProcessInfo.processInfo.systemUptime; self.currentTime = self.liveTime }
+            }
+        }
+    }
+    private var flushScheduled = false
 }
 
 /// Re-evaluates `content` on every playback tick, without invalidating the

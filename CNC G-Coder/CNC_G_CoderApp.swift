@@ -14,9 +14,16 @@ struct CNC_G_CoderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(model)
-                .frame(minWidth: 1180, minHeight: 720)
+            // The column minimums live on the columns; `WindowSizePolicy`
+            // (ContentView) keeps the window at least as wide as their sum.
+            // `RootSizeIsolator` answers the window's min/ideal size itself
+            // (see its doc): a `.frame(minWidth:)` here would make every
+            // SwiftUI update re-measure the whole hierarchy.
+            RootSizeIsolator(minimum: CGSize(width: WindowSizePolicy.baseMinWidth, height: WindowSizePolicy.minHeight),
+                             ideal: CGSize(width: 1440, height: 900)) {
+                ContentView()
+                    .environmentObject(model)
+            }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -79,6 +86,13 @@ struct CNC_G_CoderApp: App {
             CommandGroup(after: .toolbar) {
                 Toggle("Snap to Grid", isOn: $snapToGrid)
                     .keyboardShortcut("'", modifiers: .command)
+                // ⇧⌘M: plain ⌘M is Minimize.
+                Toggle("Machine Panel", isOn: $model.showMachineInspector)
+                    .keyboardShortcut("M", modifiers: [.command, .shift])
+                // ⇧⌘. — ⌘. is the controlled stop (hold, rest, reset).
+                Button("Emergency Stop") { model.machine.emergencyStop() }
+                    .keyboardShortcut(".", modifiers: [.command, .shift])
+                    .disabled(!model.machine.isConnected)
             }
             CommandGroup(replacing: .help) {
                 Button("CNC G-Coder Help") { openWindow(id: "help") }
@@ -90,6 +104,16 @@ struct CNC_G_CoderApp: App {
             ToolLibraryView()
                 .environmentObject(model)
         }
+
+        // Machine control in a window of its own (opened from the inspector's
+        // "Open in a window"); the same controls live in the main window's
+        // Machine panel. Closing it does not stop a running job.
+        Window("Machine", id: "machine") {
+            MachineWindow()
+                .environmentObject(model)
+                .frame(minWidth: 1100, minHeight: 720)
+        }
+        .defaultSize(width: 1180, height: 860)
 
         Window("CNC G-Coder Help", id: "help") {
             HelpView()
@@ -116,5 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model = MainActor.assumeIsolated({ AppModel.current }) else { return .terminateNow }
         return MainActor.assumeIsolated { model.confirmDiscardChanges() } ? .terminateNow : .terminateCancel
+    }
+
+    /// The built-in simulator is a child process; it must not outlive the app
+    /// (an `atexit` handler and the script's own parent watchdog back this up).
+    func applicationWillTerminate(_ notification: Notification) {
+        SimulatorLauncher.terminateAll()
     }
 }

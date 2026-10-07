@@ -20,11 +20,21 @@ final class GCodeTextModel: ObservableObject {
     func reload(from document: PreviewDocument?) {
         guard let document, let selectedLayer,
               let layer = document.layers.first(where: { $0.id == selectedLayer }) else {
+            reload(fileURL: nil)
+            return
+        }
+        reload(fileURL: layer.fileURL)
+    }
+
+    /// Loads any .ngc file — a document layer's, or the exact text a job
+    /// sent to the machine. nil clears the view.
+    func reload(fileURL url: URL?) {
+        guard let url else {
+            loadTask?.cancel()
             loadedURL = nil
             setContent("", lineStarts: [], utf16Length: 0, truncated: false)
             return
         }
-        let url = layer.fileURL
         loadTask?.cancel()
         loadTask = Task { [weak self] in
             let loaded = await Task.detached(priority: .userInitiated) { () -> (String, [Int], Int, Bool) in
@@ -79,13 +89,23 @@ struct GCodeTextTab: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Picker("File", selection: $textModel.selectedLayer) {
-                    ForEach(preview.document?.layers ?? []) { layer in
-                        Text(layer.fileURL.lastPathComponent).tag(Optional(layer.id))
+                if let job = playback.job {
+                    // While a job streams the tab shows the text actually
+                    // sent (line numbers match the machine's), nothing else.
+                    Picker("File", selection: .constant(0)) {
+                        Text("Sent to machine: \(job.url.lastPathComponent)").tag(0)
                     }
+                    .frame(maxWidth: 340)
+                    .disabled(true)
+                } else {
+                    Picker("File", selection: $textModel.selectedLayer) {
+                        ForEach(preview.document?.layers ?? []) { layer in
+                            Text(layer.fileURL.lastPathComponent).tag(Optional(layer.id))
+                        }
+                    }
+                    .frame(maxWidth: 340)
+                    .disabled(preview.document == nil)
                 }
-                .frame(maxWidth: 340)
-                .disabled(preview.document == nil)
 
                 if textModel.truncated {
                     Label("Large file — first 8 MB shown", systemImage: "exclamationmark.triangle")
@@ -98,7 +118,7 @@ struct GCodeTextTab: View {
 
             Divider()
 
-            if preview.document == nil {
+            if preview.document == nil, playback.job == nil {
                 ContentUnavailableView("No G-code yet",
                                        systemImage: "doc.text.magnifyingglass",
                                        description: Text("Choose a project folder and refresh the preview."))
@@ -111,15 +131,31 @@ struct GCodeTextTab: View {
             }
         }
         .onAppear {
-            syncSelection()
-            textModel.reload(from: preview.document)
+            if let job = playback.job {
+                textModel.reload(fileURL: job.url)
+            } else {
+                syncSelection()
+                textModel.reload(from: preview.document)
+            }
         }
+        // A running job owns the tab: document refreshes are ignored until
+        // it ends, then the view goes back to the document's file.
         .onChange(of: preview.document?.token) {
+            guard playback.job == nil else { return }
             syncSelection()
             textModel.reload(from: preview.document)
         }
         .onChange(of: textModel.selectedLayer) {
+            guard playback.job == nil else { return }
             textModel.reload(from: preview.document)
+        }
+        .onChange(of: playback.job?.token) {
+            if let job = playback.job {
+                textModel.reload(fileURL: job.url)
+            } else {
+                syncSelection()
+                textModel.reload(from: preview.document)
+            }
         }
     }
 
@@ -139,8 +175,10 @@ struct GCodeTextTab: View {
     }
 
     private var highlightRange: NSRange? {
-        guard textModel.selectedLayer == playback.selectedLayer,
-              let move = playback.currentMove else { return nil }
+        guard let move = playback.currentMove else { return nil }
+        // The job's moves were parsed from the very text on screen, so their
+        // source lines index it directly.
+        if playback.job == nil, textModel.selectedLayer != playback.selectedLayer { return nil }
         return textModel.rangeOfLine(move.sourceLine)
     }
 }

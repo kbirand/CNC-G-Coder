@@ -32,6 +32,22 @@ struct ToolpathCanvasView: View {
     /// material actually removed (not just the tool centerline).
     @AppStorage("previewShowToolWidth") private var showToolWidth = true
 
+    /// The probed height map (autolevel grid) of the shown side, under the
+    /// programs: the interpolated surface, grid and points colour-coded by
+    /// height. Also shown regardless while probing, while the Machine
+    /// panel is on its Height Map tab, and when the loaded machine program
+    /// carries a map (see `AppModel.heightMapOverlay`).
+    @AppStorage("previewShowHeightMap") private var showHeightMap = true
+    @AppStorage("previewFollowTool") private var followTool = false
+    @AppStorage("machine.inspectorTab") private var inspectorTab = MachineInspectorTab.control.rawValue
+    /// The machine's travel area (bed) while connected (View Options).
+    @AppStorage("previewShowMachineTravel") private var showMachineTravel = true
+    /// One-shot: frame the travel area too (View Options → Fit Machine Travel).
+    @State private var fitTravel = false
+    /// Candle's "interpolation grid": lines of the height-map wireframe.
+    @AppStorage(HeightMapSurface.interpolationXKey) private var heightMapLinesX = HeightMapSurface.interpolationDefault
+    @AppStorage(HeightMapSurface.interpolationYKey) private var heightMapLinesY = HeightMapSurface.interpolationDefault
+
     /// Rulers along the top (X) and left (Y) edges of the canvas.
     @AppStorage("previewShowRulers") var showRulers = true
 
@@ -85,18 +101,37 @@ struct ToolpathCanvasView: View {
         var token: UUID?
         var paths: [LayerKind: MappedPaths] = [:]
         var bridges: [LayerKind: Path] = [:]
+        /// The program being streamed (see LiveJob): its geometry comes from
+        /// the text actually sent, not from the document, and lives for the
+        /// job's token — a preview refresh mid-job never touches it.
+        var jobToken: UUID?
+        var jobPaths: MappedPaths?
+        /// The height map's wireframe, keyed by the map's identity (side,
+        /// probed date, point count, geometry), the line counts and the
+        /// render token.
+        var heightMapKey: String?
+        var heightMapSurface: [(path: Path, color: Color)] = []
     }
     @State private var cacheBox = CacheBox()
 
     var body: some View {
+        let _ = DebugFlags.renderLog ? Self._printChanges() : ()
         PlaybackTimeReader(clock: playback.clock) { playbackContent }
     }
 
     /// Everything here moves with playback, so it re-renders on each tick.
     @ViewBuilder
     private var playbackContent: some View {
+        // Read here, inside the time reader, so Observation re-renders only
+        // this subtree when the controller's status changes (5 Hz while
+        // connected) — never the pane around it.
+        let machine = machineMarkerPosition
+        // The live probe target is read here too, so every recorded point
+        // redraws the map as it fills in.
+        let heightMap = layerEditActive ? nil : model.heightMapOverlay(toggle: showHeightMap, inspectorTab: inspectorTab)
+        let travel = showMachineTravel && !layerEditActive ? machineTravel : nil
         Canvas { context, size in
-            draw(context: context, size: size)
+            draw(context: context, size: size, machine: machine, heightMap: heightMap, travel: travel)
         }
         .clipped()
         .background(Color(nsColor: .underPageBackgroundColor))
@@ -151,6 +186,12 @@ struct ToolpathCanvasView: View {
         // changes (different framing semantics) reset the view.
         .onChange(of: showAllLayers) { resetView() }
         .onChange(of: flipBackView) { resetView() }
+        .onChange(of: model.travelFitRequest) {
+            zoomFactor = 1
+            pan = .zero
+            fitBox.rect = nil
+            fitTravel = true
+        }
         .onChange(of: playback.selectedLayer) {
             editor.layerDidChange()
             layerEditor.selectedLayerChanged(to: playback.selectedLayer)
@@ -185,12 +226,12 @@ struct ToolpathCanvasView: View {
         .overlay {
             // Right- or middle-drag pans, in every mode, drawing included.
             MousePanCatcher { delta in
+                if followTool { followTool = false }
                 pan = CGSize(width: pan.width + delta.width, height: pan.height + delta.height)
             }
         }
         .overlay(alignment: .topTrailing) {
             VStack(alignment: .trailing, spacing: 0) {
-                zoomControls
                 if editorActive {
                     ShapeInspectorPanel(model: model, editor: editor)
                         .padding(.trailing, 10)
@@ -211,6 +252,7 @@ struct ToolpathCanvasView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(10)
+                    .padding(.leading, showRulers ? Self.leftGutter : 0)   // clear of the Y ruler
             }
         }
     }
@@ -219,12 +261,14 @@ struct ToolpathCanvasView: View {
         zoomFactor = 1
         pan = .zero
         fitBox.rect = nil   // editing: refit to what is drawn now
+        fitTravel = false
     }
 
     /// The editor bar and the Set Origin banner, stacked under the ruler.
     @ViewBuilder
     private var topOverlays: some View {
         VStack(alignment: .leading, spacing: 8) {
+            zoomControls
             if editorActive {
                 ShapeEditorToolbar(model: model, editor: editor)
             } else if layerEditActive {
@@ -262,7 +306,8 @@ struct ToolpathCanvasView: View {
 
     // MARK: - Drawing
 
-    private func draw(context: GraphicsContext, size: CGSize) {
+    private func draw(context: GraphicsContext, size: CGSize, machine: CGPoint?, heightMap: HeightMapOverlay?,
+                      travel: MachineTravel?) {
         guard let map = mapping(in: size) else { return }
         let plot = map.plot
         let focus = map.focus
@@ -278,12 +323,26 @@ struct ToolpathCanvasView: View {
         ctx.concatenate(world)
 
         drawGrid(&ctx, world: map.visibleWorld, scale: scale, step: step)
+        if let travel { drawMachineTravel(&ctx, travel: travel, scale: scale) }
 
         // Editing a layer file: only its artwork. The programs are out of
         // date until editing ends, so they are not drawn under it.
         if !layerEditActive {
-            if let doc = preview.document { drawLayers(&ctx, doc: doc, scale: scale) }
-            drawToolMarker(&ctx, scale: scale)
+            if let heightMap { drawHeightMap(&ctx, overlay: heightMap, scale: scale) }
+            drawLayers(&ctx, doc: preview.document, scale: scale)
+            // Simulating (playing or scrubbed, no job): the red tool follows
+            // playback and the machine, if connected, is the blue marker.
+            // Otherwise the tool follows the machine's live position (as in
+            // Candle) when connected, else playback.
+            let simulating = playback.job == nil && (playback.isPlaying || playback.currentTime > 0)
+            if simulating, let position = playbackToolPosition {
+                drawToolMarker(&ctx, at: position, scale: scale)
+                if let machine { drawMachineMarker(&ctx, at: machine, scale: scale) }
+            } else if let machine {
+                drawToolMarker(&ctx, at: machine, scale: scale)
+            } else if let position = playbackToolPosition {
+                drawToolMarker(&ctx, at: position, scale: scale)
+            }
         }
 
         drawEditor(context, map: map, world: world)
@@ -291,27 +350,41 @@ struct ToolpathCanvasView: View {
         drawMeasurement(context, map: map)
         drawGuides(context, map: map)
         drawOriginMarker(context, map: map)
+        if let heightMap { drawHeightMapLegend(context, map: map, overlay: heightMap) }
         if showRulers {
             drawRulers(context, size: size, map: map, step: step)
         }
     }
 
     /// The programs: the selected one alone, or — with All Layers Overlay on —
-    /// every program with the selected one on top.
-    private func drawLayers(_ ctx: inout GraphicsContext, doc: PreviewDocument, scale: CGFloat) {
-        let cache = cachedPaths(for: doc)
+    /// every program with the selected one on top. While a job streams, the
+    /// selected program is the job's own geometry (which may exist without
+    /// any document at all: an external .ngc sent straight to the machine).
+    private func drawLayers(_ ctx: inout GraphicsContext, doc: PreviewDocument?, scale: CGFloat) {
+        let cache = doc.map { cachedPaths(for: $0) } ?? [:]
         let engaged = playback.isEngaged
+        let job = playback.job
+        let jobPaths = job.map { cachedJobPaths(for: $0) }
+
+        func drawSelected(_ layer: ParsedLayer, _ paths: MappedPaths) {
+            var layerCtx = ctx
+            if let flip = displayTransform(for: layer.id) { layerCtx.concatenate(flip) }
+            drawSelectedLayer(&layerCtx, layer: layer, paths: paths, engaged: engaged, scale: scale)
+        }
 
         if showAllLayers {
             // Overlay all programs; draw order: outline, back, front, drills on top.
-            let ordered = doc.layers.sorted { drawRank($0.id) < drawRank($1.id) }
+            // The job's own document layer is left out: the job draws it.
+            let ordered = (doc?.layers ?? [])
+                .filter { $0.id != job?.kind }
+                .sorted { drawRank($0.id) < drawRank($1.id) }
             for layer in ordered {
                 guard let paths = cache[layer.id] else { continue }
-                var layerCtx = ctx
-                if let flip = displayTransform(for: layer.id) { layerCtx.concatenate(flip) }
-                if layer.id == playback.selectedLayer {
-                    drawSelectedLayer(&layerCtx, layer: layer, paths: paths, engaged: engaged, scale: scale)
+                if job == nil, layer.id == playback.displayedKind {
+                    drawSelected(layer, paths)
                 } else {
+                    var layerCtx = ctx
+                    if let flip = displayTransform(for: layer.id) { layerCtx.concatenate(flip) }
                     strokeLayer(&layerCtx, layerID: layer.id, paths: paths,
                                 cut: paths.cutFull, travel: paths.travelFull,
                                 color: layer.id.color, dimming: engaged ? 0.15 : 0.35,
@@ -319,18 +392,17 @@ struct ToolpathCanvasView: View {
                                 toolDiameter: layer.toolDiameter)
                 }
             }
+            if let job, let jobPaths { drawSelected(job.layer, jobPaths) }
+        } else if let job, let jobPaths {
+            drawSelected(job.layer, jobPaths)
         } else if editorActive {
             // Only the drawn layer's own program — none yet while it is empty
             // (never the fallback first program).
-            guard let kind = editorLayerKind, let layer = doc.layers.first(where: { $0.id == kind }),
+            guard let kind = editorLayerKind, let layer = doc?.layers.first(where: { $0.id == kind }),
                   let paths = cache[layer.id] else { return }
-            var layerCtx = ctx
-            if let flip = displayTransform(for: layer.id) { layerCtx.concatenate(flip) }
-            drawSelectedLayer(&layerCtx, layer: layer, paths: paths, engaged: engaged, scale: scale)
-        } else if let layer = selectedLayer(in: doc), let paths = cache[layer.id] {
-            var layerCtx = ctx
-            if let flip = displayTransform(for: layer.id) { layerCtx.concatenate(flip) }
-            drawSelectedLayer(&layerCtx, layer: layer, paths: paths, engaged: engaged, scale: scale)
+            drawSelected(layer, paths)
+        } else if let doc, let layer = selectedLayer(in: doc), let paths = cache[layer.id] {
+            drawSelected(layer, paths)
         }
     }
 
@@ -456,9 +528,31 @@ struct ToolpathCanvasView: View {
         }
     }
 
-    private func drawToolMarker(_ ctx: inout GraphicsContext, scale: CGFloat) {
-        guard let selected = playback.selectedLayer, var position = playback.toolPosition else { return }
+    /// The playback (planned) tool position in the shown frame.
+    private var playbackToolPosition: CGPoint? {
+        guard let selected = playback.displayedKind, var position = playback.toolPosition else { return nil }
         if let flip = displayTransform(for: selected) { position = position.applying(flip) }
+        return position
+    }
+
+    /// The machine's live position while a simulation plays: a blue dot
+    /// with a crosshair, distinct from the red simulated tool.
+    private func drawMachineMarker(_ ctx: inout GraphicsContext, at position: CGPoint, scale: CGFloat) {
+        let r = 5 / scale
+        let gap = 2 / scale
+        var marker = Path()
+        marker.addEllipse(in: CGRect(x: position.x - r, y: position.y - r, width: r * 2, height: r * 2))
+        for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            marker.move(to: CGPoint(x: position.x + dx * gap, y: position.y + dy * gap))
+            marker.addLine(to: CGPoint(x: position.x + dx * r * 2.2, y: position.y + dy * r * 2.2))
+        }
+        ctx.stroke(marker, with: .color(.white.opacity(0.6)), lineWidth: 3 / scale)
+        ctx.stroke(marker, with: .color(.blue), lineWidth: 1.4 / scale)
+    }
+
+    /// The red tool crosshair: at the machine's live position while
+    /// connected, else at the playback position.
+    private func drawToolMarker(_ ctx: inout GraphicsContext, at position: CGPoint, scale: CGFloat) {
         let r = 4 / scale
         var marker = Path()
         marker.addEllipse(in: CGRect(x: position.x - r, y: position.y - r, width: r * 2, height: r * 2))
@@ -467,6 +561,187 @@ struct ToolpathCanvasView: View {
         marker.move(to: CGPoint(x: position.x, y: position.y - r * 2))
         marker.addLine(to: CGPoint(x: position.x, y: position.y + r * 2))
         ctx.stroke(marker, with: .color(.red), lineWidth: 1.2 / scale)
+    }
+
+    // MARK: - Machine
+
+    /// The connected controller's work position, in the shown program's
+    /// frame — nil when nothing is connected, no position is known yet, or
+    /// the board side on the machine (the job's) is not the one shown: a
+    /// back-side program's coordinates are mirrored, so the position would
+    /// land in the wrong place.
+    private var machineMarkerPosition: CGPoint? {
+        let machine = model.machine
+        guard machine.isConnected, let work = machine.smoothedWorkPosition ?? machine.status.workPosition,
+              let shown = playback.displayedKind else { return nil }
+        if let job = playback.job, job.kind.boardSide != shown.boardSide { return nil }
+        var point = CGPoint(x: work.x, y: work.y)
+        if let flip = displayTransform(for: shown) { point = point.applying(flip) }
+        return point
+    }
+
+    // MARK: - Machine travel
+
+    /// The connected machine's travel area in the shown frame.
+    struct MachineTravel {
+        var rect: CGRect
+        /// Width × height in mm, before any flip.
+        var size: CGSize
+        var home: CGPoint?
+    }
+
+    /// The bed (axis ranges − work offset) in work coordinates, through the
+    /// display flip of the shown program; nil when not connected or the
+    /// ranges / offset are unknown.
+    private var machineTravel: MachineTravel? {
+        let machine = model.machine
+        guard machine.isConnected, let rect = machine.workTravelRect else { return nil }
+        var shown = rect
+        var home = machine.workHomeCorner
+        if let kind = playback.displayedKind, let flip = displayTransform(for: kind) {
+            shown = rect.applying(flip)
+            home = home?.applying(flip)
+        }
+        return MachineTravel(rect: shown, size: rect.size, home: home)
+    }
+
+    /// A dashed grey outline with its size in a corner and a small marker at
+    /// the home corner.
+    private func drawMachineTravel(_ ctx: inout GraphicsContext, travel: MachineTravel, scale: CGFloat) {
+        ctx.stroke(Path(travel.rect), with: .color(.gray.opacity(0.7)),
+                   style: StrokeStyle(lineWidth: 1 / scale, dash: [6 / scale, 4 / scale]))
+        if let home = travel.home {
+            let r = 4 / scale
+            var marker = Path()
+            marker.addRect(CGRect(x: home.x - r, y: home.y - r, width: r * 2, height: r * 2))
+            marker.move(to: CGPoint(x: home.x - r, y: home.y))
+            marker.addLine(to: CGPoint(x: home.x + r, y: home.y))
+            marker.move(to: CGPoint(x: home.x, y: home.y - r))
+            marker.addLine(to: CGPoint(x: home.x, y: home.y + r))
+            ctx.stroke(marker, with: .color(.gray), lineWidth: 1 / scale)
+        }
+        let label = "Machine travel \(formatMM(travel.size.width, decimals: 0)) × \(formatMM(travel.size.height, decimals: 0)) mm"
+        drawWorldLabel(ctx, label, at: CGPoint(x: travel.rect.minX + 3 / scale, y: travel.rect.maxY - 3 / scale),
+                       transform: .identity, color: .gray, anchor: .topLeading)
+    }
+
+    /// The region the travel fit frames: the usual bounds plus the bed.
+    private func travelFitBounds(_ bounds: CGRect) -> CGRect {
+        guard fitTravel, let travel = machineTravel else { return bounds }
+        return bounds.union(travel.rect)
+    }
+
+    /// The height map of the shown side, Candle-style, under the programs:
+    /// the wireframe interpolation grid (every segment coloured by its
+    /// height, blue = lowest … red = highest; flat and teal where nothing
+    /// is probed yet), the border, every probe point as a hollow (unprobed)
+    /// or filled (probed) dot, the point being probed as a pulsing yellow
+    /// ring, and the heights as labels once zoomed in enough to read. The
+    /// map is in the side's work frame, so it is un-mirrored with the back
+    /// side like everything else.
+    private func drawHeightMap(_ ctx: inout GraphicsContext, overlay: HeightMapOverlay, scale: CGFloat) {
+        let map = overlay.map
+        var mapCtx = ctx
+        // Design coordinates → the side's program frame → the display flip.
+        let flip = playback.displayedKind.flatMap { displayTransform(for: $0) }
+        if let flip { mapCtx.concatenate(flip) }
+        mapCtx.concatenate(overlay.frame)
+        let toWorld = overlay.frame.concatenating(flip ?? .identity)
+        let range = HeightMapSurface.range(map)
+
+        // The interpolation grid, cached per map (see CacheBox), 1 px lines.
+        for (path, color) in cachedHeightMapSurface(for: overlay) {
+            mapCtx.stroke(path, with: .color(color.opacity(0.85)), lineWidth: 1 / scale)
+        }
+        // The border.
+        mapCtx.stroke(Path(map.rect), with: .color(.teal), lineWidth: 1 / scale)
+
+        // The probe points.
+        let r = 2.5 / scale
+        let labelled = scale >= 6
+        for row in 0..<map.ny {
+            for col in 0..<map.nx {
+                let p = map.gridPoint(row: row, col: col)
+                let rect = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
+                guard let z = HeightMapSurface.value(map, at: HeightMapIndex(row: row, col: col)) else {
+                    mapCtx.stroke(Path(ellipseIn: rect), with: .color(.teal.opacity(0.8)), lineWidth: 1 / scale)
+                    continue
+                }
+                let color = HeightMapSurface.hasSpread(range)
+                    ? HeightMapSurface.color(unit: HeightMapSurface.unit(z, in: range!)) : HeightMapSurface.neutral
+                mapCtx.fill(Path(ellipseIn: rect), with: .color(color))
+                mapCtx.stroke(Path(ellipseIn: rect), with: .color(.white), lineWidth: 0.6 / scale)
+                if labelled {
+                    drawWorldLabel(ctx, String(format: "%+.3f", z), at: CGPoint(x: p.x + r * 1.4, y: p.y + r * 1.4),
+                                   transform: toWorld, color: color, anchor: .bottomLeading)
+                }
+            }
+        }
+        // (d) The point being probed: a pulsing yellow ring (the canvas
+        // redraws with every status report, so the pulse runs at that rate).
+        // (The reference is work X0/Y0: that design point.)
+        let probingAt: CGPoint? = overlay.probingReference ? CGPoint.zero.applying(overlay.frame.inverted())
+            : overlay.currentPoint.map { map.gridPoint(row: $0.row, col: $0.col) }
+        if overlay.probing, let p = probingAt {
+            let phase = (Date().timeIntervalSinceReferenceDate * 2).truncatingRemainder(dividingBy: 1)
+            let pulse = r * (1.8 + 0.6 * sin(phase * 2 * .pi))
+            let ring = Path(ellipseIn: CGRect(x: p.x - pulse, y: p.y - pulse, width: pulse * 2, height: pulse * 2))
+            mapCtx.stroke(ring, with: .color(.yellow.opacity(0.9)), lineWidth: 2 / scale)
+            mapCtx.stroke(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
+                          with: .color(.yellow), lineWidth: 1.2 / scale)
+        }
+    }
+
+    /// Text is drawn unscaled: the anchor (in the coordinates `transform`
+    /// maps to the world) goes through the world transform by hand.
+    private func drawWorldLabel(_ ctx: GraphicsContext, _ text: String, at anchor: CGPoint,
+                                transform: CGAffineTransform, color: Color, anchor unitPoint: UnitPoint) {
+        let world = anchor.applying(transform)
+        var textCtx = ctx
+        textCtx.transform = .identity
+        let view = world.applying(ctx.transform)
+        textCtx.draw(Text(text).font(.system(size: 9, design: .rounded).monospacedDigit()).foregroundStyle(color),
+                     at: view, anchor: unitPoint)
+    }
+
+    /// The legend box in the plot's bottom-right corner, in view coordinates.
+    private func drawHeightMapLegend(_ context: GraphicsContext, map: Mapping, overlay: HeightMapOverlay) {
+        let title = overlay.legend
+        var detail: String?
+        if overlay.probing, !overlay.probingReference, let last = HeightMapSurface.lastProbed(overlay.map) {
+            detail = String(format: "last Z %+.3f mm", last.z)
+        } else if !overlay.probing, let date = overlay.map.probedAt {
+            detail = "\(overlay.side.title) side · probed " + date.formatted(date: .abbreviated, time: .shortened)
+        } else {
+            detail = "\(overlay.side.title) side"
+        }
+        let titleText = context.resolve(Text(title).font(.caption.weight(.medium).monospacedDigit()).foregroundStyle(.primary))
+        let detailText = detail.map { context.resolve(Text($0).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)) }
+        let titleSize = titleText.measure(in: CGSize(width: 400, height: 40))
+        let detailSize = detailText?.measure(in: CGSize(width: 400, height: 40)) ?? .zero
+        let padding: CGFloat = 7
+        let width = max(titleSize.width, detailSize.width) + padding * 2
+        let height = titleSize.height + (detailText == nil ? 0 : detailSize.height + 2) + padding * 2
+        let box = CGRect(x: map.plot.maxX - 10 - width, y: map.plot.maxY - 10 - height, width: width, height: height)
+        context.fill(Path(roundedRect: box, cornerRadius: 6), with: .color(Color(nsColor: .windowBackgroundColor).opacity(0.85)))
+        context.stroke(Path(roundedRect: box, cornerRadius: 6), with: .color(.teal.opacity(0.6)), lineWidth: 1)
+        context.draw(titleText, at: CGPoint(x: box.minX + padding, y: box.minY + padding), anchor: .topLeading)
+        if let detailText {
+            context.draw(detailText, at: CGPoint(x: box.minX + padding, y: box.minY + padding + titleSize.height + 2), anchor: .topLeading)
+        }
+    }
+
+    /// The wireframe of the overlay's map, rebuilt here — inside the draw
+    /// closure, like the path caches — when the map or the line counts change.
+    private func cachedHeightMapSurface(for overlay: HeightMapOverlay) -> [(path: Path, color: Color)] {
+        let map = overlay.map
+        let key = "\(overlay.side.rawValue)|\(map.probedAt?.timeIntervalSinceReferenceDate ?? 0)|\(map.probedCount)|"
+            + "\(playback.renderToken?.uuidString ?? "-")|\(map.rect)|\(map.nx)x\(map.ny)|\(heightMapLinesX)x\(heightMapLinesY)"
+        if cacheBox.heightMapKey != key {
+            cacheBox.heightMapKey = key
+            cacheBox.heightMapSurface = HeightMapSurface.wireframePaths(map, linesX: heightMapLinesX, linesY: heightMapLinesY)
+        }
+        return cacheBox.heightMapSurface
     }
 
     // MARK: - Rulers
@@ -516,7 +791,20 @@ struct ToolpathCanvasView: View {
         // Auto-fit scale from the real drawing area (canvas minus rulers), every frame.
         let fitScale = 0.9 * min(plot.width / max(focus.width, 0.001),
                                  plot.height / max(focus.height, 0.001))
-        return Mapping(plot: plot, pan: pan, focus: focus, scale: fitScale * zoomFactor)
+        let scale = fitScale * zoomFactor
+        // Following the tool: the pan keeps the tool at the plot centre.
+        if followTool, let tool = followedToolPosition {
+            let followPan = CGSize(width: -(tool.x - focus.midX) * scale, height: (tool.y - focus.midY) * scale)
+            return Mapping(plot: plot, pan: followPan, focus: focus, scale: scale)
+        }
+        return Mapping(plot: plot, pan: pan, focus: focus, scale: scale)
+    }
+
+    /// The point the view follows: the machine while connected, else playback.
+    private var followedToolPosition: CGPoint? {
+        let simulating = playback.job == nil && (playback.isPlaying || playback.currentTime > 0)
+        if simulating, let p = playbackToolPosition { return p }
+        return machineMarkerPosition ?? playbackToolPosition
     }
 
     /// Smallest 1/2/5 × 10ⁿ value that is at least `minimum` — keeps tick
@@ -875,15 +1163,23 @@ struct ToolpathCanvasView: View {
 
     // MARK: - Layer selection / mirroring / bounds
 
+    /// The program the view focuses on. While a job streams it is the job's
+    /// own parsed program (the text actually sent), whatever the document
+    /// holds — an external file has no document layer at all.
     func selectedLayer(in doc: PreviewDocument) -> ParsedLayer? {
-        doc.layers.first { $0.id == playback.selectedLayer } ?? doc.layers.first
+        if let job = playback.job { return job.layer }
+        return doc.layers.first { $0.id == playback.selectedLayer } ?? doc.layers.first
     }
 
     /// Back-side programs are mirrored; "Un-mirror Back Side" maps them onto
     /// the front frame for display (see ProjectFrame.backToFront), so the two
     /// sides overlay in exact registration wherever the origin was put.
+    /// A running job uses the mapping snapshotted when it started, so a
+    /// preview refresh mid-job cannot move the drawing under the marker.
     func displayTransform(for kind: LayerKind) -> CGAffineTransform? {
-        guard flipBackView, kind.isBackSide, let document = preview.document else { return nil }
+        guard flipBackView, kind.isBackSide else { return nil }
+        if let job = playback.job { return job.backToFront }
+        guard let document = preview.document else { return nil }
         return document.backToFront
     }
 
@@ -923,8 +1219,14 @@ struct ToolpathCanvasView: View {
             return bounds
         }
         fitBox.rect = nil
-        guard let doc else { return CGRect(x: 0, y: 0, width: 100, height: 80) }
-        return documentFitBounds(doc)
+        guard let doc else {
+            // A job with no document (an external file sent to the machine).
+            if let job = playback.job, let own = displayBounds(for: job.layer) {
+                return travelFitBounds(own.union(CGRect(origin: displayedOrigin, size: .zero)))
+            }
+            return travelFitBounds(CGRect(x: 0, y: 0, width: 100, height: 80))
+        }
+        return travelFitBounds(documentFitBounds(doc))
     }
 
     private func documentFitBounds(_ doc: PreviewDocument) -> CGRect {
@@ -950,7 +1252,7 @@ struct ToolpathCanvasView: View {
     /// the selected program, carried through the un-mirror when a back-side
     /// program is shown un-mirrored.
     var displayedOrigin: CGPoint {
-        guard let selected = playback.selectedLayer, let flip = displayTransform(for: selected) else { return .zero }
+        guard let selected = playback.displayedKind, let flip = displayTransform(for: selected) else { return .zero }
         return CGPoint.zero.applying(flip)
     }
 
@@ -996,7 +1298,7 @@ struct ToolpathCanvasView: View {
         cross.addLine(to: CGPoint(x: center.x, y: center.y + r + 4))
         ctx.stroke(cross, with: .color(.white), lineWidth: 1)
 
-        let side = playback.selectedLayer.map { $0.isBackSide && !flipBackView } ?? false
+        let side = playback.displayedKind.map { $0.isBackSide && !flipBackView } ?? false
         let pending = pendingOrigin.map { $0.token == preview.document?.token } ?? false
         let caption = originDrag.map { target -> String in
             let units = UnitSystem(rawValue: unitRaw) ?? .metric
@@ -1050,7 +1352,7 @@ struct ToolpathCanvasView: View {
         let displayed = CGPoint(x: map.worldX(location.x), y: map.worldY(location.y))
         let slop = Self.originSnap / map.scale
         // A back program shown in its own (mirrored) frame, as the machine sees it after the flip.
-        let backFrame = playback.selectedLayer.map { $0.isBackSide && !flipBackView } ?? false
+        let backFrame = playback.displayedKind.map { $0.isBackSide && !flipBackView } ?? false
 
         if let frame = doc.frame {
             let o = backFrame ? frame.backOrigin : frame.frontOrigin
@@ -1186,6 +1488,17 @@ struct ToolpathCanvasView: View {
         return cacheBox.paths
     }
 
+    /// The streamed program's paths, keyed by the job token (= `renderToken`
+    /// while a job runs) and built here, inside the draw closure, like the
+    /// document cache — never from onChange (see CLAUDE.md).
+    private func cachedJobPaths(for job: LiveJob) -> MappedPaths {
+        if cacheBox.jobToken != job.token || cacheBox.jobPaths == nil {
+            cacheBox.jobToken = job.token
+            cacheBox.jobPaths = MappedPaths.build(moves: job.layer.moves) { move, _ in (move.start, move.end) }
+        }
+        return cacheBox.jobPaths!
+    }
+
     // MARK: - Gestures / controls
 
     /// One drag gesture serves three jobs; which one is decided from where the
@@ -1205,6 +1518,7 @@ struct ToolpathCanvasView: View {
                 } else if dragMode == .origin {
                     if let map = mapping(in: canvasSize) { originDrag = originTarget(at: value.location, map: map) }
                 } else {
+                    if followTool { followTool = false }
                     pan = CGSize(width: pan.width + value.translation.width - lastDrag.width,
                                  height: pan.height + value.translation.height - lastDrag.height)
                     lastDrag = value.translation
@@ -1246,6 +1560,9 @@ struct ToolpathCanvasView: View {
                 .help("Zoom out")
             Button { resetView() } label: { Image(systemName: "arrow.down.left.and.arrow.up.right") }
                 .help("Fit the selected program to the view (double-click does the same)")
+            Toggle(isOn: $followTool) { Image(systemName: "scope") }
+                .toggleStyle(.button)
+                .help("Follow the tool head: the view keeps the tool centred while it moves (panning turns this off)")
             Button { toggleMeasuring() } label: {
                 Image(systemName: "ruler").foregroundStyle(measuring ? Color.yellow : Color.primary)
             }
@@ -1256,7 +1573,5 @@ struct ToolpathCanvasView: View {
         }
         .buttonStyle(.glass)
         .controlSize(.small)
-        .padding(10)
-        .padding(.top, showRulers ? Self.topGutter : 0)
     }
 }

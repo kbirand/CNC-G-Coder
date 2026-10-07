@@ -106,6 +106,21 @@ nonisolated struct ToolpathMove: Sendable {
     var cumulativeDistance: Double // mm of 3D travel at end of this move
 }
 
+/// One drilled hole of a drill program: where, how wide (the bit announced
+/// by the tool-change comment before its section), how deep, and which
+/// plunge moves make it (peck drilling plunges the same hole several times).
+nonisolated struct DrillHole: Sendable {
+    var center: CGPoint
+    /// Bit diameter, mm.
+    var diameter: Double
+    /// Positive mm below Z0: the deepest plunge at this XY.
+    var depth: Double
+    /// Index (into `ParsedLayer.moves`) of the first plunge into this hole.
+    var moveIndex: Int
+    /// Index of the last plunge into it.
+    var lastMoveIndex: Int
+}
+
 /// Parsed content of one generated .ngc file.
 nonisolated struct ParsedLayer: Identifiable, Sendable {
     let id: LayerKind
@@ -113,6 +128,9 @@ nonisolated struct ParsedLayer: Identifiable, Sendable {
     var toolDiameter: Double?
     var moves: [ToolpathMove] = []
     var drillHits: [CGPoint] = []
+    /// The holes of a drill program (`drillHits` with bit size, depth and
+    /// the plunge moves), for the 3D view.
+    var drillHoles: [DrillHole] = []
     var cutBounds: CGRect?
     var allBounds: CGRect?
     var zMin: Double = 0

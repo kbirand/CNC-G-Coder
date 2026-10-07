@@ -13,18 +13,54 @@ nonisolated enum SettingsKeys {
     static let snapToGrid = "previewSnapToGrid"
 }
 
+/// Per-process temp roots. Each running instance of the app gets its own
+/// folder named after its process id, and startup only removes the folders
+/// of processes that no longer exist — a second instance (or a dev/test
+/// launch) must never delete the files a running app is still using.
+nonisolated enum TempRoots {
+    static func root(named name: String) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(name, isDirectory: true)
+            .appendingPathComponent(String(ProcessInfo.processInfo.processIdentifier), isDirectory: true)
+    }
+
+    /// Removes sibling folders left by processes that are gone (and any
+    /// legacy, un-numbered content).
+    static func cleanStale(named name: String) {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        let mine = ProcessInfo.processInfo.processIdentifier
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil) else { return }
+        for entry in entries {
+            if let pid = Int32(entry.lastPathComponent) {
+                if pid == mine { continue }
+                // kill(pid, 0) succeeds (or fails with EPERM) while the process exists.
+                if kill(pid, 0) == 0 || errno == EPERM { continue }
+            }
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+}
+
 /// Temp-directory layout for preview runs.
 nonisolated enum PreviewPaths {
-    static var root: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("CNCGCoderPreview", isDirectory: true)
-    }
+    static let rootName = "CNCGCoderPreview"
+    static var root: URL { TempRoots.root(named: rootName) }
 
     static func newRunDir() -> URL {
         root.appendingPathComponent(UUID().uuidString, isDirectory: true)
     }
 
+    /// Programs prepared for the machine (the exact text streamed), under the
+    /// same root so the launch-time cleanup wipes them too.
+    static var machineDir: URL {
+        root.appendingPathComponent("machine", isDirectory: true)
+    }
+
+    /// Startup housekeeping: this process's root starts empty and dead
+    /// processes' roots go; a running instance's files are left alone.
     static func cleanRoot() {
         try? FileManager.default.removeItem(at: root)
+        TempRoots.cleanStale(named: rootName)
     }
 }
 

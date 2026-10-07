@@ -64,7 +64,7 @@ The native engine uses [Clipper2](https://github.com/AngusJohnson/Clipper2)
 2. Launch CNC G-Coder → **Choose Folder** — layers are detected by filename (`Gerber_TopLayer.GTL`, `Gerber_BottomLayer.GBL`, `Gerber_BoardOutlineLayer.GKO`, `.GTS`/`.GBS` masks, all `.DRL` files).
 3. Set tools, depths and feeds — the sidebar shows the selected program's settings (Machine setup holds the shared ones); watch the preview and the Σ time estimate update.
 4. Inspect each program: play it back, check depths in the side view.
-5. **Generate G-code** and send the `.ngc` files to your machine (UGS, Candle, …).
+5. **Generate G-code**, then open the **Machine** window (⇧⌘M) to connect to your GRBL/FluidNC controller, zero, probe and send each program — or save the `.ngc` files for another sender.
 
 Machining order: front isolation → drills (bit changes at M0 pauses) → flip → back isolation → outline cutout → snap/file the bridge tabs → paint & cure solder mask → run the mask etch programs.
 
@@ -87,16 +87,28 @@ The built-in test board is the cross-check: measure the 0.2 mm test trace after 
 
 - All programs share one origin per side (the app normalizes pcb2gcode's per-invocation origins): zero X/Y once at the project corner for the front-side programs, once more after flipping for the back side, and Z on the board surface — copper, drills and masks stay registered.
 - Choose the flip direction (*Board flips*) to match how you physically turn the board and verify with *Un-mirror Back Side* — the flipped back must sit exactly over the front.
-- The app intentionally generates **no probing/height-map G-code** — use your sender's autolevel (e.g. UGS AutoLeveler) for the isolation programs on anything less than perfectly flat stock.
+- Probing and height maps are done live from the Machine panel (Probe and Height Map tabs); the generated programs themselves stay plain G-code, and the height map is applied to the copy that is streamed.
 - Playback rapids are simulated at 2000 mm/min (G-code carries no rapid feed); cutting times are exact per the programmed feeds.
+
+## Machine control
+
+The **Machine** panel (toolbar button or View → Machine Panel, ⇧⌘M; a right-hand inspector of the main window, also openable as its own window) is a native sender for GRBL 1.1 and FluidNC controllers, over Wi‑Fi (TCP/telnet, port 23) or USB serial:
+
+- Connection bar with live state, firmware badge and decoded alarms; DRO with work and machine positions, feed/spindle, buffer and pin readouts; zero X/Y/Z, set an axis, go to work zero, safe Z; saved machine positions and go-to.
+- Jog pad with step and continuous (hold) jogging, diagonals and keyboard control; feed, rapid and spindle overrides; spindle and coolant control; Home, Unlock, Reset, Hold/Resume, Check mode.
+- **Program tab**: pick any generated layer (or an external `.ngc`), optionally apply backlash compensation and the height map, verify it in check mode, and stream it with per-line progress. The main window's canvases, side view, 3D view and G-code tab follow the running job, with a blue marker at the machine's actual position. Tool changes suspend the job at the change point so you can swap the bit and re-probe Z before continuing; Send-from-line resumes safely.
+- **Probe tab**: two-pass Z touch-off (bit on copper with a clip, or a touch plate of known thickness) that sets the active work origin from the exact trigger point.
+- **Height Map tab**: probe a grid over the board, see the deviation, and warp the streamed program to the measured surface (bilinear, per side).
+- Console with command history and user macros.
+- **Simulator** transport (shown in the connection picker once enabled in Settings → Machine): a built-in FluidNC simulator (`Scripts/fake-grbl.py`, bundled; needs python3) the app launches on a private port, for trying the whole Machine panel — jogging, programs, probing, height maps — without a machine. The state pill is tagged SIM while it is connected.
 
 ## Roadmap
 
-Planned: turning CNC G-Coder from a G-code generator into a complete milling station — no external sender needed.
-
-- [ ] **Direct machine control over USB (GRBL)** — connect to a GRBL controller via USB/serial, jog the machine, and stream the generated programs straight from the app; the playback simulator becomes the live machining monitor (real tool position on the toolpath, current line, time remaining)
-- [ ] **Z probing & X/Y zeroing** — touch-off the board surface for Z0 and set the X/Y work origin from the app, guided per side to match the shared-origin scheme
-- [ ] **Auto height / auto-leveling** — probe a height map across the copper and warp the isolation G-code to the measured surface, replacing external autolevel tools (UGS AutoLeveler)
+- [x] Direct machine control (GRBL/FluidNC over Wi‑Fi or USB), live machining monitor
+- [x] Z probing & X/Y zeroing from the app
+- [x] Auto-leveling with a probed height map
+- [ ] X/Y edge and corner probing with a known probe diameter
+- [ ] WebSocket transport for FluidNC WebUI setups
 
 ## Documentation
 

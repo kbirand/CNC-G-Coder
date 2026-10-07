@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 /// Z cross-section of the selected playback layer, for verifying drill and
 /// etch depths. Two modes: orthographic projection (X–Z or Y–Z) and profile
@@ -25,6 +26,7 @@ struct SideViewCanvas: View {
     private let padBottom: CGFloat = 16
 
     var body: some View {
+        let _ = DebugFlags.renderLog ? Self._printChanges() : ()
         PlaybackTimeReader(clock: playback.clock) { playbackContent }
     }
 
@@ -54,12 +56,27 @@ struct SideViewCanvas: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
 
+            // The machine position is read here, inside the time reader, so
+            // Observation re-renders only this subtree on status reports.
+            let machine = machineMarkerPosition
             Canvas { context, size in
-                draw(context: context, size: size)
+                let start = CACurrentMediaTime()
+                draw(context: context, size: size, machine: machine)
+                BodyCounter.time("SideViewCanvas.draw", CACurrentMediaTime() - start)
             }
             .clipped()
         }
         .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    /// The connected controller's work position, in the shown program's
+    /// frame (see ToolpathCanvasView.machineMarkerPosition for the rules).
+    private var machineMarkerPosition: MachinePosition? {
+        let machine = model.machine
+        guard machine.isConnected, let work = machine.status.workPosition,
+              let shown = playback.displayedKind else { return nil }
+        if let job = playback.job, job.kind.boardSide != shown.boardSide { return nil }
+        return work
     }
 
     // MARK: - Domains and mapping
@@ -72,7 +89,7 @@ struct SideViewCanvas: View {
             }
         }
         let p = model.parameters
-        switch playback.selectedLayer {
+        switch playback.displayedKind {
         case .front, .back:
             add("zwork", p.zWork)
         case .outline:
@@ -154,14 +171,21 @@ struct SideViewCanvas: View {
 
     /// Display-only un-mirroring of back-side programs (matches the top view).
     private var isFlipped: Bool {
-        guard flipBackView, let selected = playback.selectedLayer else { return false }
+        guard flipBackView, let selected = playback.displayedKind else { return false }
         return selected.isBackSide
+    }
+
+    /// The back→front mapping in force: a running job's snapshot (so a
+    /// preview refresh mid-job cannot move the drawing), else the document's.
+    private var backToFront: CGAffineTransform? {
+        if let job = playback.job { return job.backToFront }
+        return preview.document?.backToFront
     }
 
     /// Back-side coordinates onto the front frame, exactly as the top view does.
     private func reflected(_ point: CGPoint) -> CGPoint {
-        guard isFlipped, let document = preview.document else { return point }
-        return point.applying(document.backToFront)
+        guard isFlipped, let flip = backToFront else { return point }
+        return point.applying(flip)
     }
 
     /// Maps a move into side-view "domain space" (horizontal value, warped z).
@@ -182,8 +206,8 @@ struct SideViewCanvas: View {
 
     private func bounds(of layer: ParsedLayer) -> CGRect? {
         guard let b = layer.allBounds else { return nil }
-        guard isFlipped, let document = preview.document else { return b }
-        return b.applying(document.backToFront)
+        guard isFlipped, let flip = backToFront else { return b }
+        return b.applying(flip)
     }
 
     private func viewTransform(domains: (x: ClosedRange<Double>, z: ClosedRange<Double>), size: CGSize) -> CGAffineTransform {
@@ -197,10 +221,12 @@ struct SideViewCanvas: View {
             .scaledBy(x: sx, y: -sy)
     }
 
-    /// Cached view-space paths for the current (doc, layer, mode, size); the
-    /// view transform is baked in so playback frames stroke pre-scaled paths.
+    /// Cached view-space paths for the current (program, layer, mode, size);
+    /// the view transform is baked in so playback frames stroke pre-scaled
+    /// paths. `renderToken` is the job's token while one streams, so the
+    /// cache follows the sent program rather than the regenerating document.
     private func cachedPaths(layer: ParsedLayer, domains: (x: ClosedRange<Double>, z: ClosedRange<Double>), size: CGSize) -> MappedPaths? {
-        let key = "\(preview.document?.token.uuidString ?? "-")|\(layer.displayName)|\(mode)|\(Int(size.width))x\(Int(size.height))|\(isFlipped)"
+        let key = "\(playback.renderToken?.uuidString ?? "-")|\(layer.displayName)|\(mode)|\(Int(size.width))x\(Int(size.height))|\(isFlipped)"
         if cacheBox.key != key {
             cacheBox.key = key
             guard size.width > padX * 2, size.height > padTop + padBottom else {
@@ -219,7 +245,7 @@ struct SideViewCanvas: View {
 
     // MARK: - Drawing
 
-    private func draw(context: GraphicsContext, size: CGSize) {
+    private func draw(context: GraphicsContext, size: CGSize, machine: MachinePosition?) {
         guard let layer = playback.layer, let domains = domains(for: layer),
               let cache = cachedPaths(layer: layer, domains: domains, size: size) else {
             context.draw(
@@ -286,7 +312,7 @@ struct SideViewCanvas: View {
         }
 
         // In-progress move (partial) + playback marker, interpolated along the move.
-        if playback.selectedLayer != nil, let move = playback.currentMove {
+        if playback.displayedKind != nil, let move = playback.currentMove {
             let previousDistance = move.cumulativeDistance - moveLength(move)
             let (mappedStart, mappedEnd) = mapMove(move, previousDistance: previousDistance, warp: warp)
             let fraction = playback.progressIndex == nil ? 1.0 : playback.progressFraction
@@ -317,6 +343,37 @@ struct SideViewCanvas: View {
             var dot = Path()
             dot.addEllipse(in: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6))
             context.fill(dot, with: .color(.red))
+        }
+
+        // The machine's live Z: a blue line across the plot (and, in the
+        // projections, a dot at its X or Y), distinct from the red playback
+        // marker that follows the planned position.
+        if let machine {
+            let zView = CGPoint(x: 0, y: warp(machine.z)).applying(t).y
+            let clampedY = min(max(zView, padTop), size.height - padBottom)
+            var line = Path()
+            line.move(to: CGPoint(x: padX, y: clampedY))
+            line.addLine(to: CGPoint(x: size.width - 6, y: clampedY))
+            context.stroke(line, with: .color(.blue.opacity(0.55)),
+                           style: StrokeStyle(lineWidth: 1, dash: [6, 3]))
+            context.draw(
+                Text("machine \(UnitSystem.current.length(machine.z))")
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(Color.blue),
+                at: CGPoint(x: size.width - 8, y: clampedY - 2),
+                anchor: .bottomTrailing
+            )
+            if mode != "profile" {
+                let xy = reflected(CGPoint(x: machine.x, y: machine.y))
+                let h = mode == "projY" ? xy.y : xy.x
+                let p = CGPoint(x: h, y: warp(machine.z)).applying(t)
+                if p.x >= padX, p.x <= size.width - 6 {
+                    var dot = Path()
+                    dot.addEllipse(in: CGRect(x: p.x - 3.5, y: p.y - 3.5, width: 7, height: 7))
+                    context.stroke(dot, with: .color(.white.opacity(0.8)), lineWidth: 2.5)
+                    context.stroke(dot, with: .color(.blue), lineWidth: 1.2)
+                }
+            }
         }
 
         // Scale note.
