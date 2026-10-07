@@ -199,6 +199,28 @@ nonisolated struct DrawnShape: Codable, Hashable, Identifiable, Sendable {
         return copy
     }
 
+    /// Reflected by `r` (a mirror across a vertical or horizontal line).
+    /// Text is moved to the reflected position but stays readable.
+    func mirrored(by r: CGAffineTransform) -> DrawnShape {
+        var copy = self
+        switch geometry {
+        case .line(let points, let closed):
+            copy.geometry = .line(points: points.map { $0.applying(r) }, closed: closed)
+        case .rect(let origin, let size, let radius, let rotation):
+            // Rotation is about the box centre, so mirror the (normalised)
+            // box and turn the other way.
+            let box = CGRect(origin: origin, size: size).standardized.applying(r).standardized
+            copy.geometry = .rect(origin: box.origin, size: box.size, cornerRadius: radius, rotation: -rotation)
+        case .circle(let center, let diameter):
+            copy.geometry = .circle(center: center.applying(r), diameter: diameter)
+        case .text:
+            guard let b = bounds else { return copy }
+            let c = CGPoint(x: b.midX, y: b.midY), m = c.applying(r)
+            return moved(by: CGVector(dx: m.x - c.x, dy: m.y - c.y))
+        }
+        return copy
+    }
+
     /// Distance from a point to the nearest outline segment, and whether the
     /// point lies inside a closed outline — for click selection.
     func hit(_ point: CGPoint) -> (distance: Double, inside: Bool) {
@@ -240,11 +262,46 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         }
     }
 
+    /// What the layer is for. It decides how shapes are machined and which
+    /// library tools are offered.
+    enum LayerType: String, Codable, CaseIterable, Identifiable, Sendable {
+        /// Cut along, outside or inside the shapes (see Operation).
+        case milling
+        /// The tool follows the drawn lines — labels, marks.
+        case engraving
+        /// A legend engraved into the cured mask or silk, with a fine V-bit.
+        case silkscreen
+        /// Every circle is drilled at its centre.
+        case drill
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .milling: "Milling"
+            case .engraving: "Engraving"
+            case .silkscreen: "Silkscreen"
+            case .drill: "Drill"
+            }
+        }
+        /// The library tools offered for it.
+        var toolSection: SettingsSection {
+            switch self {
+            case .milling, .engraving: .custom
+            case .silkscreen: .silk
+            case .drill: .drilling
+            }
+        }
+    }
+
     var id = UUID()
     var name: String
+    var type: LayerType = .milling
     /// Machined after flipping the board (mirrored like back copper).
     var back = false
     var operation: Operation = .engrave
+    /// How the tool follows shapes: only milling layers choose; engraving
+    /// and silkscreen follow the lines (drill layers do not follow them).
+    var effectiveOperation: Operation { type == .milling ? operation : .engrave }
     var shapes: [DrawnShape] = []
 
     // Tool — copied from the library, then editable (like every settings group).
@@ -267,6 +324,9 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
     var extraCut: Double = 0
     /// M4 instead of M3.
     var spindleCCW = false
+    /// Milling inside: added to every circle's diameter, so holes come out a
+    /// little large and pins still fit (like the drilling Hole tolerance).
+    var holeTolerance: Double = 0.125
 
     init(name: String) { self.name = name }
 
@@ -297,9 +357,9 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
 
     // Decoded field by field so project files survive fields added later.
     private enum CodingKeys: String, CodingKey {
-        case id, name, back, operation, shapes, toolID, toolDiameter, cutDepth, depthPerPass
+        case id, name, type, back, operation, shapes, toolID, toolDiameter, cutDepth, depthPerPass
         case feedXY, feedZ, spindle, dwell, overlap
-        case travelZ, endZ, extraCut, spindleCCW
+        case travelZ, endZ, extraCut, spindleCCW, holeTolerance
     }
 
     init(from decoder: Decoder) throws {
@@ -307,6 +367,7 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         let base = CustomLayer(name: "")
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Custom layer"
+        type = (try? c.decodeIfPresent(LayerType.self, forKey: .type)) ?? .milling
         back = try c.decodeIfPresent(Bool.self, forKey: .back) ?? false
         operation = (try? c.decodeIfPresent(Operation.self, forKey: .operation)) ?? .engrave
         shapes = (try? c.decodeIfPresent([DrawnShape].self, forKey: .shapes)) ?? []
@@ -325,6 +386,7 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         travelZ = d(.travelZ, base.travelZ)
         endZ = d(.endZ, base.endZ)
         extraCut = d(.extraCut, base.extraCut)
+        holeTolerance = d(.holeTolerance, base.holeTolerance)
         spindleCCW = (try? c.decodeIfPresent(Bool.self, forKey: .spindleCCW)) ?? false
     }
 
@@ -332,6 +394,7 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(name, forKey: .name)
+        try c.encode(type, forKey: .type)
         try c.encode(back, forKey: .back)
         try c.encode(operation, forKey: .operation)
         try c.encode(shapes, forKey: .shapes)
@@ -348,6 +411,7 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         try c.encode(endZ, forKey: .endZ)
         try c.encode(extraCut, forKey: .extraCut)
         try c.encode(spindleCCW, forKey: .spindleCCW)
+        try c.encode(holeTolerance, forKey: .holeTolerance)
     }
 }
 

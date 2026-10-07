@@ -16,6 +16,16 @@ set -euo pipefail
 
 DEST="${1:?usage: bundle-pcb2gcode.sh <Helpers dir> [identity]}"
 IDENTITY="${2:--}"
+
+# The App Store build (AppStore configuration) ships without pcb2gcode — it
+# is GPL-3, which the App Store terms are widely held to conflict with — and
+# uses the native engine only.
+if [ "${BUNDLE_PCB2GCODE:-YES}" = "NO" ]; then
+    rm -rf "$DEST"
+    rm -f "$(dirname "$DEST")/Resources/LICENSE-pcb2gcode.txt" "$(dirname "$DEST")/Resources/pcb2gcode-bundled-from.txt"
+    echo "note: BUNDLE_PCB2GCODE=NO — building without pcb2gcode (native engine only)."
+    exit 0
+fi
 SOURCE="$(command -v pcb2gcode || true)"
 [ -z "$SOURCE" ] && [ -x /opt/homebrew/bin/pcb2gcode ] && SOURCE=/opt/homebrew/bin/pcb2gcode
 [ -z "$SOURCE" ] && [ -x /usr/local/bin/pcb2gcode ] && SOURCE=/usr/local/bin/pcb2gcode
@@ -30,7 +40,7 @@ mkdir -p "$RESOURCES"
 
 # Up to date already? (Same source binary, same signing identity.)
 STAMP="$RESOURCES/pcb2gcode-bundled-from.txt"
-if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$SOURCE|$IDENTITY" ] && [ -x "$DEST/pcb2gcode" ]; then
+if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$SOURCE|$IDENTITY|sandboxed" ] && [ -x "$DEST/pcb2gcode" ]; then
     exit 0
 fi
 
@@ -116,7 +126,10 @@ for f in "$DEST"/lib/*.dylib; do
 done
 RUNTIME=()
 [ "$IDENTITY" != "-" ] && RUNTIME=(--options runtime)
-codesign --force --timestamp=none ${RUNTIME[@]+"${RUNTIME[@]}"} --sign "$IDENTITY" "$DEST/pcb2gcode" 2>/dev/null
+# The app is sandboxed, so the helper must be too: it inherits the app's
+# sandbox (App Store review requires exactly these two entitlements).
+codesign --force --timestamp=none ${RUNTIME[@]+"${RUNTIME[@]}"} \
+    --entitlements "$(dirname "$0")/pcb2gcode-helper.entitlements" --sign "$IDENTITY" "$DEST/pcb2gcode" 2>/dev/null
 
 cat > "$RESOURCES/LICENSE-pcb2gcode.txt" <<'TXT'
 pcb2gcode — https://github.com/pcb2gcode/pcb2gcode
@@ -126,4 +139,4 @@ available at the address above. Its libraries (Boost, gerbv, GLib, cairo and
 their dependencies) are under their own open-source licences.
 TXT
 
-echo "$SOURCE|$IDENTITY" > "$STAMP"
+echo "$SOURCE|$IDENTITY|sandboxed" > "$STAMP"

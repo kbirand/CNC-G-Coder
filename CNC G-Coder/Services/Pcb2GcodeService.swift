@@ -183,6 +183,28 @@ nonisolated enum Pcb2GcodeService {
     /// each program's own value there.
     private static let spinupPlaceholder = "1s"
 
+    /// pcb2gcode reads hole sizes from the file itself, so with a hole
+    /// tolerance it gets a copy whose tool table is enlarged by it. The copy
+    /// lives at a path named after the source contents and the tolerance:
+    /// the same input always maps to the same path, so job caching holds.
+    static func allowedDrillInput(_ drill: URL, _ p: ParameterSnapshot) -> URL {
+        guard let allowance = Double(p.drillHoleAllowance), abs(allowance) > 1e-9,
+              let data = FileManager.default.contents(atPath: drill.path),
+              var image = try? ExcellonFile.read(drill) else { return drill }
+        for (tool, size) in image.tools where size >= 0.01 {
+            image.tools[tool] = max(0.01, size + allowance)
+        }
+        let digest = SHA256.hash(data: data + Data(p.drillHoleAllowance.utf8))
+            .prefix(12).map { String(format: "%02x", $0) }.joined()
+        let dir = PreviewPaths.root.appendingPathComponent("drill-tolerance/\(digest)", isDirectory: true)
+        let copy = dir.appendingPathComponent(drill.lastPathComponent)
+        if !FileManager.default.fileExists(atPath: copy.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            guard (try? ExcellonFile.write(image).write(to: copy, atomically: true, encoding: .utf8)) != nil else { return drill }
+        }
+        return copy
+    }
+
     static func drillOutputURL(for drill: URL, index: Int, outputDir: URL) -> URL {
         let stem = drill.deletingPathExtension().lastPathComponent
         return outputURL(for: .drill(index: index, name: stem), in: outputDir)
@@ -343,7 +365,7 @@ nonisolated enum Pcb2GcodeService {
                 products.append(Job.Product(layer: .millDrill(index: index, name: stem), url: milled, tool: p.holeMillDiameter))
             }
             jobs.append(Job(label: "Drilling — \(stem)",
-                            args: drillArgs(p, drill: drill, output: out, millOutput: milled),
+                            args: drillArgs(p, drill: allowedDrillInput(drill, p), output: out, millOutput: milled),
                             products: products,
                             bitCheck: p.drillBits.isEmpty ? nil : out))
         }
@@ -481,7 +503,8 @@ nonisolated enum Pcb2GcodeService {
         var step = 0
 
         if let pcb2gcode, !usesNativeEngine(p, pcb2gcode: pcb2gcode) {
-            step = await runJobs(pcb2gcode: pcb2gcode, params: p, files: files, outputDir: outputDir,
+            // pcb2gcode inherits only the app's static sandbox: it reads copies.
+            step = await runJobs(pcb2gcode: pcb2gcode, params: p, files: FileAccess.helperReadable(files), outputDir: outputDir,
                                  cache: cache, total: total, onStep: onStep, result: &result)
         } else {
             // The native engine: in-process, no pcb2gcode.

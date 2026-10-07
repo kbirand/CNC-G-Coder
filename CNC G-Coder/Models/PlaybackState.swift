@@ -183,6 +183,13 @@ final class PlaybackState: ObservableObject {
             if wasPlaying, currentTime < totalTime {
                 isPlaying = true
             }
+        } else if let sibling = selectedLayer?.drillSibling, doc.layers.contains(where: { $0.id == sibling }) {
+            // Toggling hole milling can empty a drill file's drilled (or milled)
+            // program — e.g. an NPTH file of only large holes. Stay on that
+            // drill file's other program instead of jumping to the first layer.
+            isPlaying = false
+            selectedLayer = sibling
+            currentTime = 0
         } else if selectedLayer?.isCustom == true {
             // An empty drawn layer has no program yet; keep editing it.
             isPlaying = false

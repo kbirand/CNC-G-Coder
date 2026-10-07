@@ -13,7 +13,7 @@ import AppKit
 final class ShapeEditor: ObservableObject {
 
     enum Tool: String, CaseIterable, Identifiable {
-        case select, line, rectangle, circle, text
+        case select, line, rectangle, circle, hole, text
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -21,6 +21,7 @@ final class ShapeEditor: ObservableObject {
             case .line: "Line"
             case .rectangle: "Rectangle"
             case .circle: "Circle"
+            case .hole: "Hole"
             case .text: "Text"
             }
         }
@@ -30,6 +31,7 @@ final class ShapeEditor: ObservableObject {
             case .line: "line.diagonal"
             case .rectangle: "rectangle"
             case .circle: "circle"
+            case .hole: "circle.circle"
             case .text: "textformat"
             }
         }
@@ -39,6 +41,7 @@ final class ShapeEditor: ObservableObject {
             case .line: "l"
             case .rectangle: "r"
             case .circle: "c"
+            case .hole: "h"
             case .text: "t"
             }
         }
@@ -48,6 +51,7 @@ final class ShapeEditor: ObservableObject {
             case .line: "Line (L): click each point; double-click or Return finishes, clicking the first point closes it into a polygon. Shift constrains to 45° steps."
             case .rectangle: "Rectangle (R): click or drag from one corner to the opposite one. Shift makes a square."
             case .circle: "Circle (C): click or drag from the centre out to the radius."
+            case .hole: "Hole (H): click to place a hole of the diameter set in the bar — a filled circle: drilled at its centre on a Drill layer, milled out to its size on a Milling layer cutting inside."
             case .text: "Text (T): set the text and its height in the bar, then click where the baseline starts."
             }
         }
@@ -162,6 +166,10 @@ final class ShapeEditor: ObservableObject {
     @Published var textStyle: TextStyle {
         didSet { UserDefaults.standard.set(try? JSONEncoder().encode(textStyle), forKey: "editor.textStyle") }
     }
+    /// Diameter of holes placed with the Hole tool, mm.
+    @Published var holeDiameter: Double {
+        didSet { UserDefaults.standard.set(holeDiameter, forKey: "editor.holeDiameter") }
+    }
     /// Stroke width given to newly drawn shapes (0 = one tool pass).
     @Published var newStrokeWidth: Double {
         didSet { UserDefaults.standard.set(newStrokeWidth, forKey: "editor.strokeWidth") }
@@ -189,6 +197,8 @@ final class ShapeEditor: ObservableObject {
         textStyle = defaults.data(forKey: "editor.textStyle").flatMap { try? JSONDecoder().decode(TextStyle.self, from: $0) }
             ?? TextStyle()
         newStrokeWidth = max(0, defaults.double(forKey: "editor.strokeWidth"))
+        let hole = defaults.double(forKey: "editor.holeDiameter")
+        holeDiameter = hole > 0 ? hole : 1.0
     }
 
     // MARK: - Active layer
@@ -281,6 +291,39 @@ final class ShapeEditor: ObservableObject {
         }
         setShapes(layer.shapes + copies, actionName: "Duplicate")
         selection = Set(copies.map(\.id))
+    }
+
+    // MARK: - Guides and mirroring
+
+    /// Design → world (the rulers' frame), as the canvas last drew the
+    /// layer. Guides are world positions; this maps them onto the shapes.
+    var designToWorld: CGAffineTransform = .identity
+
+    /// Adds a guide through the centre of the selection's bounds.
+    func addGuideAtSelectionCentre(vertical: Bool) {
+        let box = selectedShapes.compactMap(\.bounds).reduce(CGRect.null) { $0.union($1) }
+        guard !box.isNull else { notify("Select one or more shapes first"); return }
+        notify("Guide at \(PreviewGuide.addThroughCentre(of: box, designToWorld: designToWorld, vertical: vertical).title)")
+    }
+
+    /// Reflects the selected shapes across a guide — as copies, or moving them.
+    func mirrorSelection(across guide: PreviewGuide, copy: Bool) {
+        guard let layer = activeLayer, !selection.isEmpty else { return }
+        let r = guide.reflection(designToWorld: designToWorld)
+        var shapes = layer.shapes
+        var mirrored = Set<UUID>()
+        for (i, shape) in layer.shapes.enumerated() where selection.contains(shape.id) {
+            var m = shape.mirrored(by: r)
+            if copy {
+                m.id = UUID()
+                shapes.append(m)
+            } else {
+                shapes[i] = m
+            }
+            mirrored.insert(m.id)
+        }
+        setShapes(shapes, actionName: copy ? "Mirror Copy" : "Mirror")
+        selection = mirrored
     }
 
     func nudge(dx: Double, dy: Double) {
@@ -475,12 +518,12 @@ final class ShapeEditor: ObservableObject {
         switch tool {
         case .select:
             setHint(nil)
-        case .line, .rectangle, .circle, .text:
+        case .line, .rectangle, .circle, .hole, .text:
             let point = cursorPoint(p, shift: shift, context: context)
             if draft != nil {
                 draft?.cursor = point
                 draft?.closing = snapHint?.label == "close"
-            } else if tool == .text || tool == .line {
+            } else if tool == .text || tool == .line || tool == .hole {
                 draft = Draft(points: [], cursor: point)   // shows the text/point ghost before the first click
             }
         }
@@ -517,6 +560,12 @@ final class ShapeEditor: ObservableObject {
             } else {
                 draft = Draft(points: [point], cursor: point)
             }
+        case .hole:
+            let point = cursorPoint(p, shift: shift, context: context)
+            guard holeDiameter > 0 else { notify("Set the hole diameter in the bar first"); return }
+            addShape(DrawnShape(geometry: .circle(center: point, diameter: holeDiameter), filled: true),
+                     actionName: "Add Hole")
+            draft = Draft(points: [], cursor: point)
         case .text:
             let point = cursorPoint(p, shift: shift, context: context)
             guard !textString.isEmpty else { notify("Type the text in the bar first"); return }
@@ -539,7 +588,7 @@ final class ShapeEditor: ObservableObject {
             if draft.points.count >= 2 { finishLine(draft.points, closed: false) } else { cancelDraft() }
         case .rectangle, .circle:
             if let anchor = draft.points.first, let end = draft.cursor { commitTwoPoint(anchor: anchor, end: end, shift: false) }
-        case .select, .text:
+        case .select, .hole, .text:
             break
         }
     }
@@ -626,7 +675,7 @@ final class ShapeEditor: ObservableObject {
             if draft == nil { draft = Draft(points: [], cursor: point) }
             if draft!.points.last.map({ ShapeMath.distance($0, point) > 1e-6 }) ?? true { draft!.points.append(point) }
             drag = .draw(anchor: point)
-        case .text:
+        case .hole, .text:
             drag = nil
         }
     }

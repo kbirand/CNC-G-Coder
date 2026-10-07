@@ -57,7 +57,12 @@ nonisolated enum CustomLayerGenerator {
         let step = max(d * (1 - min(max(layer.overlap, 0), 99) / 100), 0.02)
         var passes: [Pass] = []
 
-        for shape in layer.shapes {
+        for var shape in layer.shapes {
+            // Holes cut inside are enlarged by the hole tolerance.
+            if layer.effectiveOperation == .inside, layer.holeTolerance != 0,
+               case .circle(let center, let diameter) = shape.geometry {
+                shape.geometry = .circle(center: center, diameter: max(diameter + layer.holeTolerance, 0.01))
+            }
             let outlines = shape.outlines().map(ShapeMath.cleaned)
             // Glyphs (and any nested contour) have holes: a hole's "outside" is
             // the body of the letter, so offsets flip sign for them.
@@ -66,13 +71,7 @@ nonisolated enum CustomLayerGenerator {
                 let closed = outline.closed && outline.points.count >= 3
                 let sign: Double = holes[index] ? -1 : 1
                 let width = max(shape.strokeWidth, d)
-                let operation = closed ? layer.operation : .engrave
-
-                if shape.filled, closed, !holes[index], !isText(shape) {
-                    for ring in ShapeMath.pocketRings(outline, toolDiameter: d, stepOver: step) {
-                        passes.append(Pass(path: ring, shapeID: shape.id))
-                    }
-                }
+                let operation = closed ? layer.effectiveOperation : .engrave
 
                 // The band of material to clear, as offsets from the drawn line
                 // (positive = outward / left), then the tool-centre offsets that
@@ -83,6 +82,17 @@ nonisolated enum CustomLayerGenerator {
                 case .inside: (-width, 0)
                 }
                 let lo = band.inner + d / 2, hi = band.outer - d / 2
+
+                if shape.filled, closed, !holes[index], !isText(shape) {
+                    // Pocketed inside-out, ending on the ring half a tool in from
+                    // the line — which an inside cut's own passes finish on, so
+                    // there it is left to them instead of being cut twice.
+                    var rings = ShapeMath.pocketRings(outline, toolDiameter: d, stepOver: step)
+                    if operation == .inside, !rings.isEmpty { rings.removeLast() }
+                    for ring in rings {
+                        passes.append(Pass(path: ring, shapeID: shape.id))
+                    }
+                }
                 var offsets: [Double]
                 if hi - lo < 1e-6 {
                     offsets = [(lo + hi) / 2]
@@ -137,6 +147,9 @@ nonisolated enum CustomLayerGenerator {
     /// The whole program for one layer, or nil when there is nothing to cut.
     static func gcode(for layer: CustomLayer, frame: ProgramFrame, zSafe machineSafe: Double, zChange: Double,
                       plungeClearance: Double) -> String? {
+        if layer.type == .drill {
+            return drillGcode(for: layer, frame: frame, zSafe: machineSafe, zChange: zChange, plungeClearance: plungeClearance)
+        }
         let passes = passes(for: layer)
         guard !passes.isEmpty else { return nil }
         let zSafe = layer.travelZ > 0 ? layer.travelZ : machineSafe
@@ -148,7 +161,7 @@ nonisolated enum CustomLayerGenerator {
 
         var g: [String] = []
         g.append("( CNC G-Coder custom layer: \(layer.name) )")
-        g.append("( \(layer.back ? "back" : "front") side · \(layer.operation.title.lowercased()) · tool \(ParametersStore.format(layer.toolDiameter)) mm · depth \(ParametersStore.format(layer.cutDepth)) mm )")
+        g.append("( \(layer.type.title.lowercased()) · \(layer.back ? "back" : "front") side · \(layer.effectiveOperation.title.lowercased()) · tool \(ParametersStore.format(layer.toolDiameter)) mm · depth \(ParametersStore.format(layer.cutDepth)) mm )")
         g.append("( \(layer.shapes.count) shape\(layer.shapes.count == 1 ? "" : "s"), \(passes.count) pass\(passes.count == 1 ? "" : "es") )")
         g.append("G94 ( mm/min feed )")
         g.append("G21 ( metric )")
@@ -187,6 +200,66 @@ nonisolated enum CustomLayerGenerator {
             }
         }
 
+        if zEnd > zSafe + 1e-9 { g.append("G0 Z\(f(zEnd)) ( end height )") }
+        g.append("M5 ( spindle off )")
+        if layer.dwell > 0 { g.append("G4 P\(ParametersStore.format(layer.dwell))") }
+        g.append("M2 ( program end )")
+        return g.joined(separator: "\n") + "\n"
+    }
+
+    /// Drill layers: the centre of every circle, nearest-neighbour ordered.
+    static func drillPoints(for layer: CustomLayer) -> [CGPoint] {
+        var remaining: [CGPoint] = layer.shapes.compactMap {
+            if case .circle(let center, _) = $0.geometry { return center }
+            return nil
+        }
+        var out: [CGPoint] = []
+        var cursor = CGPoint.zero
+        while let i = remaining.indices.min(by: { ShapeMath.distance(remaining[$0], cursor) < ShapeMath.distance(remaining[$1], cursor) }) {
+            cursor = remaining.remove(at: i)
+            out.append(cursor)
+        }
+        return out
+    }
+
+    /// A drill layer's program: one plunge per circle, pecking by Depth per
+    /// pass (out to the plunge clearance between pecks to clear chips).
+    private static func drillGcode(for layer: CustomLayer, frame: ProgramFrame, zSafe machineSafe: Double,
+                                   zChange: Double, plungeClearance: Double) -> String? {
+        let points = drillPoints(for: layer).map { $0.applying(frame.designToProgram(back: layer.back)) }
+        guard !points.isEmpty else { return nil }
+        let zSafe = layer.travelZ > 0 ? layer.travelZ : machineSafe
+        let zEnd = layer.endZ > 0 ? layer.endZ : zChange
+        let clearance = plungeClearance > 0 && plungeClearance < zSafe ? plungeClearance : 0
+        let levels = depths(cutDepth: layer.cutDepth, depthPerPass: layer.depthPerPass)
+        let feed = ParametersStore.format(layer.feedZ)
+        func f(_ v: Double) -> String { String(format: "%.4f", abs(v) < 5e-5 ? 0 : v) }
+        let skipped = layer.shapes.count - points.count
+
+        var g: [String] = []
+        g.append("( CNC G-Coder custom layer: \(layer.name) )")
+        g.append("( drill · \(layer.back ? "back" : "front") side · drill \(ParametersStore.format(layer.toolDiameter)) mm · depth \(ParametersStore.format(layer.cutDepth)) mm )")
+        g.append("( \(points.count) hole\(points.count == 1 ? "" : "s")\(skipped > 0 ? ", \(skipped) non-circle shape\(skipped == 1 ? "" : "s") ignored" : "") )")
+        g.append("G94 ( mm/min feed )")
+        g.append("G21 ( metric )")
+        g.append("G90 ( absolute )")
+        g.append("S\(Int(layer.spindle.rounded()))")
+        g.append(layer.spindleCCW ? "M4 ( spindle on counter-clockwise )" : "M3 ( spindle on )")
+        if layer.dwell > 0 { g.append("G4 P\(ParametersStore.format(layer.dwell))") }
+        g.append("G0 Z\(f(zSafe))")
+        for p in points {
+            g.append("G0 X\(f(p.x)) Y\(f(p.y))")
+            if clearance > 0 { g.append("G0 Z\(f(clearance))") }
+            for (i, depth) in levels.enumerated() {
+                if i > 0 {
+                    // Back down to just above the previous peck, then feed on.
+                    g.append("G0 Z\(f(min(levels[i - 1] + 0.2, max(clearance, 0))))")
+                }
+                g.append("G1 Z\(f(depth)) F\(feed)")
+                if i < levels.count - 1 { g.append("G0 Z\(f(max(clearance, 0.5)))") }
+            }
+            g.append("G0 Z\(f(zSafe))")
+        }
         if zEnd > zSafe + 1e-9 { g.append("G0 Z\(f(zEnd)) ( end height )") }
         g.append("M5 ( spindle off )")
         if layer.dwell > 0 { g.append("G4 P\(ParametersStore.format(layer.dwell))") }

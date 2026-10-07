@@ -968,11 +968,11 @@ struct ToolpathCanvasView: View {
     var guidesX: [CGFloat] { Self.decodeGuides(guidesXRaw) }
     var guidesY: [CGFloat] { Self.decodeGuides(guidesYRaw) }
 
-    private static func decodeGuides(_ raw: String) -> [CGFloat] {
+    static func decodeGuides(_ raw: String) -> [CGFloat] {
         raw.split(separator: ",").compactMap { Double($0) }.map { CGFloat($0) }
     }
 
-    private static func encodeGuides(_ values: [CGFloat]) -> String {
+    static func encodeGuides(_ values: [CGFloat]) -> String {
         values.sorted().map { String(format: "%.4f", $0) }.joined(separator: ",")
     }
 

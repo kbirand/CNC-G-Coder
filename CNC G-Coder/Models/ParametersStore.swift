@@ -9,6 +9,8 @@ nonisolated struct ParameterSnapshot: Sendable {
     var zDrill, drillFeed, drillSpeed, drillPeck: String
     /// pcb2gcode --drills-available entries ("0.8mm:-0.1mm:+0.1mm"); empty = drill every size as designed.
     var drillBits: [String]
+    /// Added to every designed hole diameter before anything else (mm).
+    var drillHoleAllowance: String
     var drillMillLarge: Bool
     var drillMillFrom: String
     var holeMillDiameter, holeMillDepth, holeMillInfeed, holeMillFeed, holeMillVertFeed, holeMillSpeed: String
@@ -97,6 +99,8 @@ final class ParametersStore: ObservableObject {
     @AppStorage("param.drillBitIDs") var drillBitIDs = ""
     // Tolerance for bits whose library entry has no range of its own.
     @AppStorage("param.drillBitTolerance") var drillBitTolerance = "0.10"
+    // Added to every hole's designed diameter (FR4 closes up a little).
+    @AppStorage("param.drillHoleAllowance") var drillHoleAllowance = "0.125"
     @AppStorage("param.drillDwell") var drillDwell = "1.0"
     // Hole milling: holes from drillMillFrom up are milled as helices with
     // their own end mill instead of drilled.
@@ -273,7 +277,8 @@ final class ParametersStore: ObservableObject {
         ("millFeed", \.millFeed), ("millVertFeed", \.millVertFeed), ("millSpeed", \.millSpeed),
         ("drillToolID", \.drillToolID), ("zDrill", \.zDrill), ("drillFeed", \.drillFeed),
         ("drillSpeed", \.drillSpeed), ("drillPeck", \.drillPeck), ("drillBitIDs", \.drillBitIDs),
-        ("drillBitTolerance", \.drillBitTolerance), ("drillMillFrom", \.drillMillFrom),
+        ("drillBitTolerance", \.drillBitTolerance), ("drillHoleAllowance", \.drillHoleAllowance),
+        ("drillMillFrom", \.drillMillFrom),
         ("holeMillToolID", \.holeMillToolID), ("holeMillDiameter", \.holeMillDiameter),
         ("holeMillDepth", \.holeMillDepth), ("holeMillInfeed", \.holeMillInfeed),
         ("holeMillFeed", \.holeMillFeed), ("holeMillVertFeed", \.holeMillVertFeed),
@@ -412,7 +417,7 @@ final class ParametersStore: ObservableObject {
             millFeed: t(millFeed), millVertFeed: t(millVertFeed), millSpeed: t(millSpeed),
             millOverlap: t(millOverlap), millInfeed: t(millInfeed),
             zDrill: t(zDrill), drillFeed: t(drillFeed), drillSpeed: t(drillSpeed), drillPeck: t(drillPeck),
-            drillBits: drillBitSpecs, drillMillLarge: drillMillLarge, drillMillFrom: t(drillMillFrom),
+            drillBits: drillBitSpecs, drillHoleAllowance: t(drillHoleAllowance), drillMillLarge: drillMillLarge, drillMillFrom: t(drillMillFrom),
             holeMillDiameter: t(holeMillDiameter), holeMillDepth: t(holeMillDepth), holeMillInfeed: t(holeMillInfeed),
             holeMillFeed: t(holeMillFeed), holeMillVertFeed: t(holeMillVertFeed), holeMillSpeed: t(holeMillSpeed),
             millDwell: t(millDwell), drillDwell: t(drillDwell), holeMillDwell: t(holeMillDwell),
@@ -444,6 +449,7 @@ final class ParametersStore: ObservableObject {
             ("Isolation XY feed", millFeed), ("Isolation Z feed", millVertFeed), ("Isolation spindle", millSpeed),
             ("Drill depth", zDrill), ("Drill feed", drillFeed), ("Drill spindle", drillSpeed),
             ("Peck depth", drillPeck), ("Drill bit tolerance", drillBitTolerance),
+            ("Hole tolerance", drillHoleAllowance),
             ("Cutter diameter", cutterDiameter), ("Cutout depth", zCut), ("Cutout XY feed", cutFeed),
             ("Cutout Z feed", cutVertFeed), ("Cutout spindle", cutSpeed), ("Cutout pass depth", cutInfeed),
             ("Bridge width", bridgeWidth), ("Bridge Z", zBridge),

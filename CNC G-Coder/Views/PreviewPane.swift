@@ -141,7 +141,7 @@ struct PreviewPane: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .frame(maxWidth: 340)
-        .help("Toolpath: graphical preview with playback. G-code: the raw .ngc text, synced to playback. Log: pcb2gcode output with per-step timings. Console: the conversation with the machine controller.")
+        .help("Toolpath: graphical preview with playback. G-code: the raw .ngc text, synced to playback. Log: the generator's output with per-step timings. Console: the conversation with the machine controller.")
     }
 
     @ViewBuilder
@@ -279,7 +279,7 @@ struct PreviewPane: View {
         case .running:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Running pcb2gcode…")
+                Text("Generating toolpaths…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -443,7 +443,7 @@ struct PreviewPane: View {
             ProgressView(value: progress?.fraction ?? 0)
                 .progressViewStyle(.linear)
                 .animation(.easeOut(duration: 0.3), value: progress?.fraction)
-            Text(progress?.label ?? "Starting pcb2gcode")
+            Text(progress?.label ?? "Starting")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

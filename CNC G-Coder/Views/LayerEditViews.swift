@@ -28,6 +28,17 @@ struct LayerEditToolbar: View {
                 Button { editor.deleteSelection() } label: { Image(systemName: "trash") }
                     .disabled(editor.selection.isEmpty)
                     .help("Delete the selection (⌫)")
+                if editor.target?.isDrill == true {
+                    divider
+                    Toggle(isOn: $editor.addingHoles) {
+                        Image(systemName: "plus.circle")
+                    }
+                    .help("Add Holes: click empty space to place a hole — the size of the selected hole, else the last one added. It snaps to guides and (with Snap to Grid) the grid; change its size in Properties. Esc stops.")
+                }
+                divider
+                GuideToolbarItems(hasSelection: !editor.selection.isEmpty,
+                                  addGuide: { editor.addGuideAtSelectionCentre(vertical: $0) },
+                                  mirror: { editor.mirrorSelection(across: $0, copy: $1) })
                 divider
                 Toggle(isOn: $snapToGrid) {
                     Image(systemName: "squareshape.split.3x3")
@@ -89,7 +100,9 @@ struct LayerEditToolbar: View {
             break
         }
         if !editor.selection.isEmpty { parts.append("\(editor.selection.count) selected") }
-        parts.append("click to select, ⇧-click adds, drag a box or move, arrows nudge · toolpaths update on Done")
+        parts.append(editor.addingHoles
+                     ? "click empty space to add a hole · Esc stops adding"
+                     : "click to select, ⇧-click adds, drag a box or move, arrows nudge · toolpaths update on Done")
         return parts.joined(separator: " · ")
     }
 }

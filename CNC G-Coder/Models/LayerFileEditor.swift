@@ -100,6 +100,14 @@ final class LayerFileEditor: ObservableObject {
     @Published private(set) var message: String?
     /// Bumped when the canvas should take keyboard focus.
     @Published var focusRequest = 0
+    /// Drill files: a click on empty space places a new hole.
+    @Published var addingHoles = false
+
+    /// Design → world (the rulers' frame), as the canvas last drew the
+    /// file. Guides are world positions; this maps them onto the artwork.
+    var designToWorld: CGAffineTransform = .identity
+    /// Hole size for the next added hole when nothing is selected.
+    private var lastHoleDiameter: Double?
 
     weak var app: AppModel?
 
@@ -195,6 +203,7 @@ final class LayerFileEditor: ObservableObject {
     }
 
     private func resetInteraction() {
+        addingHoles = false
         selection = []
         drag = nil
         dragPreview = nil
@@ -354,6 +363,50 @@ final class LayerFileEditor: ObservableObject {
         selection = Set(image.holes.filter { $0.tool == tool }.map(\.id))
     }
 
+    // MARK: - Guides
+
+    /// Adds a guide through the centre of the selection's bounds — between
+    /// two selected lines, or across the middle of a selected outline.
+    func addGuideAtSelectionCentre(vertical: Bool) {
+        guard let b = artwork?.bounds(of: selection) else { notify("Select one or more objects first"); return }
+        notify("Guide at \(PreviewGuide.addThroughCentre(of: b, designToWorld: designToWorld, vertical: vertical).title)")
+    }
+
+    /// Reflects the selected holes across a guide — as copies, or moving them.
+    func mirrorSelection(across guide: PreviewGuide, copy: Bool) {
+        guard let artwork, !selection.isEmpty else { return }
+        let result = artwork.mirroring(selection, by: guide.reflection(designToWorld: designToWorld), copy: copy)
+        guard !result.ids.isEmpty else { notify("Those holes are already mirrored"); return }
+        commit(result.artwork, actionName: copy ? "Mirror Copy" : "Mirror")
+        selection = result.ids
+        if result.unflipped > 0 {
+            notify("\(result.unflipped) custom-shaped pad\(result.unflipped == 1 ? " was" : "s were") moved but not flipped")
+        }
+    }
+
+    /// Places a hole at a design point, the size of the selected holes (or
+    /// the last one added), and selects it so the inspector can resize it.
+    private func addHole(at p: CGPoint) {
+        guard case .drill(let image) = artwork else { return }
+        let selectedSizes = image.holes.filter { selection.contains($0.id) }.map { image.diameter($0.tool) }
+        let common = image.toolUse.max { $0.value < $1.value }.map { image.diameter($0.key) }
+        let diameter = selectedSizes.first ?? lastHoleDiameter ?? common ?? 1.0
+        lastHoleDiameter = diameter
+        var new = image
+        let hole = ExcellonHole(tool: new.tool(forDiameter: diameter), at: p)
+        new.holes.append(hole)
+        commit(.drill(new), actionName: "Add Hole")
+        selection = [hole.id]
+    }
+
+    /// Grid first, then guides within reach (both optional).
+    private func snapped(_ p: CGPoint, context: ShapeEditor.SnapContext) -> CGPoint {
+        var q = context.gridSnap?(p) ?? p
+        if let gx = context.guidesX.min(by: { abs($0 - p.x) < abs($1 - p.x) }), abs(gx - p.x) <= context.tolerance { q.x = gx }
+        if let gy = context.guidesY.min(by: { abs($0 - p.y) < abs($1 - p.y) }), abs(gy - p.y) <= context.tolerance { q.y = gy }
+        return q
+    }
+
     func notify(_ text: String) {
         message = text
         messageTask?.cancel()
@@ -366,9 +419,14 @@ final class LayerFileEditor: ObservableObject {
 
     // MARK: - Pointer input (design coordinates)
 
-    func click(at p: CGPoint, shift: Bool, tolerance: Double) {
+    func click(at p: CGPoint, shift: Bool, tolerance: Double, context: ShapeEditor.SnapContext? = nil) {
         focusRequest += 1
-        if let id = artwork?.hitTest(p, tolerance: tolerance) {
+        let hit = artwork?.hitTest(p, tolerance: tolerance)
+        if addingHoles, hit == nil, !shift {
+            addHole(at: context.map { snapped(p, context: $0) } ?? p)
+            return
+        }
+        if let id = hit {
             if shift {
                 if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
             } else {
@@ -421,13 +479,14 @@ final class LayerFileEditor: ObservableObject {
         }
     }
 
-    /// With Snap to Grid on, the dragged objects' anchor lands on the grid.
+    /// The dragged objects' anchor lands on the grid (Snap to Grid) or a
+    /// guide it comes near.
     private func moveDelta(from origin: CGPoint, to p: CGPoint, base: LayerArtwork,
                            context: ShapeEditor.SnapContext) -> CGVector {
         var delta = CGVector(dx: p.x - origin.x, dy: p.y - origin.y)
-        if let snap = context.gridSnap, let id = selection.first, let anchor = base.anchor(of: id) {
+        if let id = selection.first, let anchor = base.anchor(of: id) {
             let moved = anchor + delta
-            let s = snap(moved)
+            let s = snapped(moved, context: context)
             delta = CGVector(dx: delta.dx + s.x - moved.x, dy: delta.dy + s.y - moved.y)
         }
         return delta
@@ -435,7 +494,7 @@ final class LayerFileEditor: ObservableObject {
 
     /// Escape: drop the selection, else stop editing.
     func cancel() {
-        if !selection.isEmpty { selection = [] } else { end() }
+        if addingHoles { addingHoles = false } else if !selection.isEmpty { selection = [] } else { end() }
     }
 
     var isDragging: Bool { drag != nil }

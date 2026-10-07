@@ -85,6 +85,66 @@ nonisolated enum LayerArtwork: Hashable, Sendable {
         }
     }
 
+    /// The objects reflected by `r` (a mirror across a vertical or horizontal
+    /// line) — moved, or added as copies. Returns the new artwork, the ids of
+    /// the reflected objects, and how many custom (macro) pads were only
+    /// moved, since a macro's own shape cannot be flipped.
+    func mirroring(_ ids: Set<UUID>, by r: CGAffineTransform, copy: Bool)
+        -> (artwork: LayerArtwork, ids: Set<UUID>, unflipped: Int) {
+        var out = Set<UUID>()
+        var unflipped = 0
+        switch self {
+        case .gerber(var image):
+            for object in image.objects where ids.contains(object.id) {
+                var m = object
+                switch object.kind {
+                case .track(let a, let path):
+                    m.kind = .track(aperture: a, path: path.applying(r))
+                case .flash(let a, let at):
+                    var code = a
+                    if let aperture = image.apertures[a] {
+                        if aperture.shape == .polygon, aperture.params.count >= 3 {
+                            var flipped = aperture
+                            flipped.params[2] = (r.a < 0 ? 180 : 0) - aperture.params[2]
+                            code = image.aperture(matching: flipped)
+                        } else if aperture.shape == .macro {
+                            unflipped += 1
+                        }
+                    }
+                    m.kind = .flash(aperture: code, at: at.applying(r))
+                case .region(let contours):
+                    m.kind = .region(contours: contours.map { $0.applying(r) })
+                }
+                if copy {
+                    m.id = UUID()
+                    image.objects.append(m)
+                } else if let i = image.objects.firstIndex(where: { $0.id == object.id }) {
+                    image.objects[i] = m
+                }
+                out.insert(m.id)
+            }
+            return (.gerber(image), out, unflipped)
+        case .drill(var image):
+            let original = image.holes
+            for hole in original where ids.contains(hole.id) {
+                var m = hole
+                m.at = hole.at.applying(r)
+                m.slotEnd = hole.slotEnd.map { $0.applying(r) }
+                if copy {
+                    // Already a hole there (e.g. mirrored before): leave it.
+                    guard !original.contains(where: { ShapeMath.distance($0.at, m.at) < 1e-3 && $0.tool == m.tool })
+                    else { continue }
+                    m.id = UUID()
+                    image.holes.append(m)
+                } else if let i = image.holes.firstIndex(where: { $0.id == hole.id }) {
+                    image.holes[i] = m
+                }
+                out.insert(m.id)
+            }
+            return (.drill(image), out, 0)
+        }
+    }
+
     func removing(_ ids: Set<UUID>) -> LayerArtwork {
         switch self {
         case .gerber(var image):
@@ -368,6 +428,14 @@ nonisolated enum GerberSegment: Hashable, Sendable {
         }
     }
 
+    /// Reflected by a mirror transform: arcs turn the other way.
+    func applying(_ r: CGAffineTransform) -> GerberSegment {
+        switch self {
+        case .line(let to): .line(to: to.applying(r))
+        case .arc(let to, let center, let cw): .arc(to: to.applying(r), center: center.applying(r), clockwise: !cw)
+        }
+    }
+
     func moved(by d: CGVector) -> GerberSegment {
         switch self {
         case .line(let to): .line(to: to + d)
@@ -420,6 +488,10 @@ nonisolated struct GerberPath: Hashable, Sendable {
             cursor = segment.end
         }
         return pts
+    }
+
+    func applying(_ r: CGAffineTransform) -> GerberPath {
+        GerberPath(start: start.applying(r), segments: segments.map { $0.applying(r) })
     }
 
     func moved(by d: CGVector) -> GerberPath {
