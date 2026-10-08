@@ -1,6 +1,6 @@
 import Foundation
 
-/// Files auto-detected in the selected EasyEDA gerber export folder.
+/// Files auto-detected in the selected gerber export folder (EasyEDA or KiCad naming).
 nonisolated struct DetectedFiles: Equatable, Sendable {
     var front: URL?
     var back: URL?
@@ -35,14 +35,14 @@ nonisolated enum LayerSlot: String, CaseIterable, Identifiable, Codable, Sendabl
 
     var title: String {
         switch self {
-        case .front: "Top copper"
-        case .back: "Bottom copper"
-        case .outline: "Board outline"
-        case .topMask: "Top mask"
-        case .bottomMask: "Bottom mask"
-        case .topSilk: "Top silkscreen"
-        case .bottomSilk: "Bottom silkscreen"
-        case .drill: "Drill"
+        case .front: String(localized: "Top copper")
+        case .back: String(localized: "Bottom copper")
+        case .outline: String(localized: "Board outline")
+        case .topMask: String(localized: "Top mask")
+        case .bottomMask: String(localized: "Bottom mask")
+        case .topSilk: String(localized: "Top silkscreen")
+        case .bottomSilk: String(localized: "Bottom silkscreen")
+        case .drill: String(localized: "Drill")
         }
     }
 }

@@ -9,7 +9,7 @@ extension AppModel {
     @discardableResult
     func addCustomLayer(select: Bool = true) -> CustomLayer {
         var n = customLayers.count + 1
-        var name = "Custom \(n)"
+        var name = String(localized: "Custom \(n)")
         while customLayers.contains(where: { $0.name == name }) {
             n += 1
             name = "Custom \(n)"
@@ -27,14 +27,14 @@ extension AppModel {
         let i = min(max(index, 0), customLayers.count)
         customLayers.insert(layer, at: i)
         editor.undoManager?.registerUndo(withTarget: self) { model in model.removeCustomLayer(id: layer.id) }
-        editor.undoManager?.setActionName("Add Layer")
+        editor.undoManager?.setActionName(String(localized: "Add Layer"))
     }
 
     func removeCustomLayer(id: UUID) {
         guard let i = customLayers.firstIndex(where: { $0.id == id }) else { return }
         let layer = customLayers.remove(at: i)
         editor.undoManager?.registerUndo(withTarget: self) { model in model.insertCustomLayer(layer, at: i) }
-        editor.undoManager?.setActionName("Delete Layer")
+        editor.undoManager?.setActionName(String(localized: "Delete Layer"))
         if player.selectedLayer?.customRef?.id == id {
             player.selectedLayer = preview.document?.layers.first { $0.id.customRef?.id != id }?.id
                 ?? customLayers.first.map { .custom($0.ref(index: 0)) }

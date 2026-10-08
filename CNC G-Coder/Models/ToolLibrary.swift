@@ -17,9 +17,9 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .flat: "Flat end mill / drill"
-            case .ball: "Ball nose"
-            case .vBit: "V-bit"
+            case .flat: String(localized: "Flat end mill / drill")
+            case .ball: String(localized: "Ball nose")
+            case .vBit: String(localized: "V-bit")
             }
         }
     }
@@ -31,10 +31,10 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .machine: "Machine default"
-            case .any: "Either (shortest path)"
-            case .climb: "Climb"
-            case .conventional: "Conventional"
+            case .machine: String(localized: "Machine default")
+            case .any: String(localized: "Either (shortest path)")
+            case .climb: String(localized: "Climb")
+            case .conventional: String(localized: "Conventional")
             }
         }
     }
@@ -45,12 +45,12 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .general: "General"
-            case .isolation: "Isolation"
-            case .drilling: "Drilling"
-            case .cutout: "Cutout"
-            case .mask: "Mask etch"
-            case .silk: "Silkscreen"
+            case .general: String(localized: "General")
+            case .isolation: String(localized: "Isolation")
+            case .drilling: String(localized: "Drilling")
+            case .cutout: String(localized: "Cutout")
+            case .mask: String(localized: "Mask etch")
+            case .silk: String(localized: "Silkscreen")
             }
         }
     }

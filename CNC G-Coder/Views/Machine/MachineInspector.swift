@@ -9,12 +9,12 @@ nonisolated enum MachineInspectorTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .control: "Control"
-        case .positions: "Positions"
-        case .program: "Program"
-        case .probe: "Probe"
-        case .heightMap: "Height Map"
-        case .macros: "Macros"
+        case .control: String(localized: "Control")
+        case .positions: String(localized: "Positions")
+        case .program: String(localized: "Program")
+        case .probe: String(localized: "Probe")
+        case .heightMap: String(localized: "Height Map")
+        case .macros: String(localized: "Macros")
         }
     }
 

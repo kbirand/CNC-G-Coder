@@ -4,7 +4,7 @@
 
 ## Workflow overview
 
-1. Export Gerber + drill files from EasyEDA into a folder.
+1. Export Gerber + drill files from EasyEDA or KiCad into a folder.
 2. **Choose Folder** (toolbar) — layers are auto-detected by filename.
 3. Set your tools, depths and feeds (or load a **Preset**). The sidebar shows the settings for the selected program only — the layer menu at its top switches both the preview and the settings; pick **Machine setup** there for the parameters shared by every program.
 4. Inspect the preview: select each program, play it back, check depths in the side view and the total time estimate.
@@ -12,9 +12,13 @@
 6. Machine in order: front copper isolation → drills (one program per drill file; change bits at the M0 pauses) → flip the board → back copper → outline cutout (bridges hold the board) → snap/file the bridge tabs.
 7. Solder mask: paint the milled board with UV solder mask, cure it, then run `top-mask-etch.ngc` / `bottom-mask-etch.ngc` to mill the pad openings clear.
 
+Using a laser engraver instead of (or next to) the mill: every program can also be exported as 1:1 artwork (SVG, PDF or PNG) — see *Laser engraving & artwork export*.
+
 ## Project folder & detection
 
-The app expects an EasyEDA export: `Gerber_TopLayer.GTL`, `Gerber_BottomLayer.GBL`, `Gerber_BoardOutlineLayer.GKO`, solder masks `.GTS`/`.GBS`, and `.DRL` drill files. EasyEDA splits drills into PTH / PTH-via / NPTH files; each becomes a separate program because pcb2gcode accepts one drill file per run.
+EasyEDA exports are recognised by extension: `Gerber_TopLayer.GTL`, `Gerber_BottomLayer.GBL`, `Gerber_BoardOutlineLayer.GKO`, solder masks `.GTS`/`.GBS`, silkscreens `.GTO`/`.GBO` and `.DRL` drill files. EasyEDA splits drills into PTH / PTH-via / NPTH files; each becomes a separate program because pcb2gcode accepts one drill file per run.
+
+KiCad exports are recognised by KiCad's layer names: `board-F_Cu.gbr` / `board-B_Cu.gbr` (copper), `board-Edge_Cuts.gbr` (outline), `board-F_Mask.gbr` / `board-B_Mask.gbr`, `board-F_Silkscreen.gbr` / `board-B_Silkscreen.gbr`, and `board.drl` or `board-PTH.drl` + `board-NPTH.drl`. Paste, fab, courtyard, inner-copper, drill-map and job files are ignored. In KiCad's drill dialog choose the **Excellon** format (not Gerber X2), and use the same origin setting in the plot and drill dialogs (both "drill/place file origin" or neither), otherwise the drills land offset from the copper. Exports made with "Use Protel filename extensions" work too.
 
 Generate asks where to write the programs (the dialog's New Folder button creates a fresh destination); the choice is remembered until you switch projects. The live preview uses a temporary folder and never touches your files until you press Generate.
 
@@ -31,6 +35,14 @@ Every diameter you enter must be the **effective cutting diameter at depth**, wi
 
 - **V-bit mode**: set **Bit → V-bit** on isolation, mask or silkscreen and enter tip and angle instead; the width at depth is worked out (and follows the cut depth) for you.
 
+## Test boards
+
+**File → Generate Test Board…** (⇧⌘T) cuts a small board that answers one question about your setup. Each test has its own bit (**Bit**, from the Tool Library; remembered per test — the default is the copper isolation bit, for the hole test the hole-milling bit) and its own settings; safe Z, plunge clearance and the isolation width come from the project. The result is written as a `.ngc` next to a legend `.txt` and shown in the preview like any program, so it can be played back and sent to the machine.
+
+- **Parameter test board** — finds the cut depth and feed for production isolation. A grid of patches: rows sweep the **cut depth** (from … to), columns sweep the **XY feed**; each patch has 0.2 / 0.3 / 0.4 mm traces. Every trace runs between two probe pads inside a closed isolation moat, so a multimeter in continuity mode tells you whether the trace survived (pad to pad beeps) and whether the isolation is complete (pad to the surrounding copper stays silent). **Board size** and **Grid** (feeds × depths) set the layout; **Suggest** picks a grid for the board size. The legend maps each patch to its depth and feed.
+- **Backlash test** — measures play in X and Y on a 75 × 75 mm board. Per axis, one straight line is cut in two halves reached from opposite directions: a step where the halves meet is that axis's backlash. A 50 mm square and a Ø30 circle show it too — short sides, an oval. Enter the step in Machine setup → Backlash compensation and cut the test again until both lines are straight (see *Backlash compensation*).
+- **Hole fit test** — finds the hole size that fits a pin. Each **hole size** you list (rows) is milled in several **variants** (columns: the size plus a clearance in mm), the way production mills holes — a spiral down from the surface, then a clean-up circle. Push the pin into each hole of its row and keep the variant that fits the way you want; design the hole at that size. Mill it with the same bit as the real board.
+
 ## Projects
 
 A project (`.cncproj`) is a self-contained **package**: Finder shows it as one file, but right-click → **Show Package Contents** reveals
@@ -44,8 +56,8 @@ Board.cncproj/
 Move or copy the project on its own — it never loses its layers. (To email one, compress it first; Mail does this automatically.) When a project is opened its files are copied into a private working folder, so the originals are not needed and are never modified.
 
 - **File → New Project** (⌘N), **Open Project…** (⌘O), **Open Recent**, **Save Project** (⌘S), **Save Project As…** (⇧⌘S). The same actions are in the sidebar's **Open** menu. The window title shows the project and "Edited" when it has unsaved changes; New, Open and Quit ask before discarding them.
-- **Open Gerber Folder…** (⇧⌘O) starts an untitled project from an EasyEDA export folder, detecting the layers by filename, as before.
-- The packed copies are what the project uses. If you re-export the Gerbers from EasyEDA, bring them in with **Import Layer…** or **Replace…** (or open the new export folder), then save. **Show Original in Finder** on a layer points at the file it was packed from, if it still exists.
+- **Open Gerber Folder…** (⇧⌘O) starts an untitled project from an EasyEDA or KiCad export folder, detecting the layers by filename, as before.
+- The packed copies are what the project uses. If you re-export the Gerbers from your PCB editor, bring them in with **Import Layer…** or **Replace…** (or open the new export folder), then save. **Show Original in Finder** on a layer points at the file it was packed from, if it still exists.
 - Projects saved by earlier versions (a single file with the layers embedded, or with links to them) still open, and become a package on their next save.
 - Finder shows the package as one file once the app has been run (that registers the project type); before that it appears as a folder named `….cncproj`.
 - Opening a project replaces the current parameters with the project's.
@@ -57,6 +69,23 @@ Move or copy the project on its own — it never loses its layers. (To email one
 ## Exporting one program
 
 With a layer selected, **CNC export → Export <name>.ngc…** in the sidebar saves just that program — exactly the previewed G-code, with the same post-processing and origin Generate would write. It is available once the preview is up to date. The "X0 Y0 at" link beside it jumps to the origin setting.
+
+## Laser engraving & artwork export
+
+Every program the app generates — copper isolation, outline, drills, mask openings, silkscreen, custom layers — can be exported as artwork at the board's true physical size for a laser engraver: as vector paths (SVG, PDF) a laser can follow, or as a bitmap (PNG). Typical uses: exposing a paint or film resist on the copper for chemical etching, burning the mask openings clear after the mask has cured, and engraving the silkscreen legend.
+
+**Where.** With a program selected, the **Laser export** section at the bottom of the sidebar exports that one program (**Export <name>…**). To export all programs at once, use **Generate → Produce: Laser artwork**, which writes one file per program into the destination folder instead of G-code. The options are the same in both places and are remembered.
+
+- **Format** — SVG and PDF stay vector: the toolpath as paths. PNG is a bitmap at the chosen **Resolution** (300, 600, 1000 or 2400 dpi); the dpi is written into the file so laser software places it at its real size. 1000 dpi resolves a 0.15 mm trace across about 6 pixels. All three come out at the board's true size.
+- **Polarity** — *White on black*: the cut is white on a black field. *Black on white*: the inverse. The background is drawn into the file, so the polarity survives import into any laser program.
+- **Frame** — what the page spans. *Board*: the finished board — the cutout path pulled in by half the cutter, so a 70 × 30 mm board gives a 70 × 30 mm page you can align to the physical PCB. *Origin*: from X0/Y0 out to the far corner of every program, so placing the file at 0,0 puts it exactly where the mill would cut. *Project*: that same shared page, cropped to the programs. *Layer*: this program's own extent only.
+- **Tool width** — with **Tool Width** on in View Options, the toolpath is swept at the cutter diameter, i.e. the copper the mill would clear; off, it is exported as bare centrelines. Rapids are never included.
+
+**Mask openings for ablation.** Solder mask → **Output: Laser SVGs** skips the mask milling programs and instead exports the opening shapes themselves (pads and vias) as 1:1 SVGs through gerbv, ready to burn the cured mask away where parts are soldered.
+
+**Silkscreen.** Silkscreen → **Output: Engrave** makes the legend a program (and so exportable as artwork); with Output off the layer is ignored.
+
+What you do with the artwork is your own process; the app does not generate laser G-code or set laser power. Align the file by the Frame you chose: *Board* to the physical board edge, *Origin* to the same X0 Y0 you zero the mill at.
 
 ## Custom layers — drawing your own shapes
 
@@ -98,6 +127,18 @@ Machine setup → **Toolpath engine** picks what turns the Gerber and drill file
 
 Both write their programs the same way, so every setting (dwells, pecks, plunge clearance, extra cut, heights, origins) applies to either. Differences you may notice: the native engine splits depths exactly (1.8 mm in 0.6 mm passes is 3 passes; pcb2gcode makes it 4 of 0.45 mm) and orders paths by nearest neighbour.
 
+## Generating programs
+
+**Generate** (toolbar, or the Generate button in the sidebar) opens the Generate dialog.
+
+- **Produce** — *CNC G-code* generates the toolpaths with the current parameters and writes the `.ngc` programs, exactly the files the preview is showing. *Laser artwork* generates the same programs, then writes each one as 1:1 artwork for a laser engraver instead of G-code (the `.ngc` files are not kept); its Format, Polarity, Resolution and Frame options are the ones described under *Laser engraving & artwork export*.
+- **Destination** — the folder the files go to; **Choose…** opens the folder picker (its New Folder button creates a fresh one). The folder is created if it does not exist, and existing files with the same names are replaced. The suggestion is `Generated_GCode` next to the project; the choice is remembered until you switch projects.
+- While it runs the dialog lists the stages (front copper, back copper, outline, one per drill file, masks, silkscreen, custom layers) with their state; **Cancel Run** stops after the stage that is currently running. When it is done, **Open Folder** reveals the output in Finder, and the Log tab has the full output with per-stage timings.
+
+**Output files.** `front-copper.ngc`, `back-copper.ngc`, `outline.ngc`, one `<drill file>.ngc` per drill file (plus `<drill file>-milled.ngc` when Mill large holes is on), `top-mask-etch.ngc` / `bottom-mask-etch.ngc`, `top-silkscreen.ngc` / `bottom-silkscreen.ngc`, and one program per custom layer. Back-side programs are mirrored and ready to run after the flip; all programs share the origin chosen in Machine setup. Backlash compensation (Machine setup) is applied to these files as they are written.
+
+**The More menu** (… in the toolbar): **Open Output Folder** reveals the last destination; **Copy pcb2gcode Command** puts the exact command line the app ran on the clipboard, for running pcb2gcode yourself or for a bug report; **New Custom Layer** and **Generate Test Board…** are the same as in the File menu.
+
 ## Parameters
 
 ### Copper isolation
@@ -131,6 +172,12 @@ The `.GTS`/`.GBS` layers describe the *openings* (pads/vias that stay exposed). 
 - **Clear width** — how far inward each opening is pocketed. By default (**Clear width from the mask layers** on) the app measures the widest opening in the mask files and clears by half of it plus a little, so every opening is cleared to its centre and no wider; the footer shows the widest opening. Switched off, enter it yourself: it must be ≥ half the widest opening or the middle of large openings stays covered, and larger values slow generation dramatically.
 - Etch depth only needs to remove cured paint, not copper.
 
+### Silkscreen engraving
+Silkscreen layers are off by default (engraving them costs generation and machining time). **Output: Engrave** mills the legend strokes themselves — reference designators, outlines and text — so they end up cut into the board: `top-silkscreen.ngc` / `bottom-silkscreen.ngc`, run last, after the mask. The section has its own tool (straight or V-bit), depth, **Clear width** (strokes wider than the tool are cleared with overlapping passes), pass overlap, feeds and spindle. Either way the layer can be exported to a laser once a program exists.
+
+### Feeds, spindle and per-layer heights
+Every settings group ends with **Feeds & spindle** — XY feed, Z (plunge) feed, spindle speed and spindle dwell — and **Heights & direction** (Travel Z, Tool-change Z, Extra cut, Milling direction, Spindle direction), described under *Safety heights & plunge clearance*. Picking a tool from the **Tool** menu copies the library's values into the group; **Edited** appears when the fields no longer match the tool.
+
 ## Preview
 
 ### 3D view
@@ -144,6 +191,13 @@ The **2D / 3D** switch above the preview shows the programs in 3D: cuts as lines
 - One program is shown at a time (layer menu at the top of the sidebar). All programs share one origin per side, so the "All Layers Overlay" registers copper, drills and masks exactly; enable "Un-mirror Back Side" to overlay the mirrored back side aligned with the front.
 - **Colors**: per-layer colors for cuts; **yellow dashed = head travel** (no cutting); **white = holding bridges**; the translucent band under cuts is the real cutter width ("Tool Width" in the View Options menu).
 - **Un-mirror Back Side** (View Options menu) un-mirrors back-side programs for visual alignment checks — display only; the G-code stays mirrored and CNC-ready. Off, the back correctly sits mirrored against the front.
+
+### View Options
+The **View Options** menu above the preview toggles what the views draw: **Tool Width** (the translucent band at the real cutter diameter; also decides whether a laser export is swept or centrelines), **Rulers**, **Guides** and **Clear Guides**, **Snap to Grid** (⌘'), **All Layers Overlay**, **Un-mirror Back Side**, **Height Map** with its **exaggeration** (×1 … ×50), **Toolpath Lines**, **Drill Holes** (the holes as cylinders in 3D), **Material Removal** (the cut channels and copper mask in 3D), **Machine Travel** (the connected machine's travel area, dashed) and **Fit Machine Travel**.
+
+**Guides.** With Rulers and Guides on, drag out of a ruler into the view to pull a guide line; drag a guide to move it. Guides snap drawing, measuring and the origin marker, and are saved with the project. Clear Guides removes them all.
+
+**Canvas buttons** (top left of the 2D view): zoom in, zoom out, fit (double-click does the same), set the origin by clicking, the tape measure, and centre on the origin.
 
 ## Playback & estimates
 
@@ -163,9 +217,33 @@ Scroll wheel / pinch = zoom (anchored at cursor) · drag = pan · double-click /
 
 **Undo.** Edit → Undo / Redo (⌘Z / ⇧⌘Z) step through one history for the whole app — parameter edits, tools and presets being applied, the origin being moved, layer files imported, replaced or removed, and every drawing edit. Opening another project starts a new history.
 
+## G-code, Log and Console tabs
+
+The tabs above the preview switch the main area:
+
+- **Toolpath** — the 2D/3D preview described above.
+- **G-code** — the text of the selected program (the **File** menu at the top picks any generated program). During playback and while a program is streamed, the current line is highlighted and kept in view. Files over 8 MB show their first 8 MB.
+- **Log** — everything pcb2gcode and the native engine printed, one step at a time with timings; warnings start with `WARNING:`, failures with `ERROR:` and the error is at the bottom. The pcb2gcode version and the auto-detected files are logged when a project opens. When a preview fails, the preview pane offers **Show Log** and **Try Again**.
+- **Console** — the machine console: every line sent to and received from the controller. **Show status reports** includes the `?` polls and `<…>` reports (several per second — useful for diagnosing, noisy otherwise); **Clear** empties the view. The command field sends a line as typed on Return (`$G`, `G0 X10`, `$/axes/x/max_travel_mm`…); a single character such as `!`, `~` or `?` is sent as a real-time byte; ↑ and ↓ recall earlier commands. The field is locked while a program runs.
+
 ## Presets & settings
 
-**Presets** (toolbar) save/recall complete parameter sets. **Settings (⌘,)**: preview refresh mode — Automatic (debounced after edits, delay adjustable) or Manual (Refresh button); the "Out of date" badge marks a stale preview.
+**Presets** (toolbar) save and recall complete parameter sets — tools, feeds, depths, heights, origin — useful per material or per machine. **Save Current as Preset…** names the current values; picking a preset applies it (and puts every drill file on the preset's drilling settings); **Delete Preset** removes one. Applying a preset is undoable.
+
+**Settings (⌘,)** has two panes:
+
+### General
+- **Language** — System (follows macOS) or English, French, Spanish, Turkish, for the interface and the built-in guide. Takes effect at the next launch. The guide window also has its own language menu.
+- **Units** — Metric (millimetres) or Imperial (inches). Changes the numbers you read and type: parameter fields, rulers, guides and the playback readout. The generated programs always stay metric (`G21`).
+- **Preview refresh** — *Automatic* regenerates the preview after parameter edits, once you stop typing for the **Delay after last edit**; *Manual* only on the Refresh button. The "Out of date" badge marks a stale preview either way.
+
+### Machine
+- **Connection** — Transport (Wi‑Fi telnet for FluidNC, USB serial for any Grbl-type controller, or the built-in Simulator), Host and Port, Serial port and Baud (115200), Status poll interval (200 ms = 5 reports a second), Reconnect automatically when the link drops, Show status reports in the console, Show the Simulator in the connection picker.
+- **Jog** — the feed and step the panel starts with, and the segment length for continuous jogging on firmware that cannot cancel a long jog.
+- **Z probe** — fast and slow feeds, maximum travel, retract, plate thickness (the same values as on the Probe tab).
+- **Motion** — safe work Z for Go to Work Zero, Safe Z below the top of travel (also the parked height for tool changes), spindle minimum and maximum for the panel's Spindle button, spindle warm-up before resuming.
+- **Programs** — Apply backlash compensation when sending, Confirm before continuing after a tool change, Save the work zero when a program is sent (a Work entry in the Positions tab named after the program and the time; the newest 20 automatic entries are kept), the stream window (how many unacknowledged bytes stay in flight; 0 = automatic: 128 on USB serial, 512 over Wi‑Fi, or the receive buffer the controller reports — raise it when arcs and round corners run slower than the feed over Wi‑Fi, keep a Grbl board on USB at 128), the Z below which the height map applies.
+- **Axis calibration (steps/mm)** — see *Axis calibration* under Machine panel.
 
 ## Machine zeroing & double-sided work
 
@@ -178,6 +256,16 @@ Scroll wheel / pinch = zoom (anchored at cursor) · drag = pan · double-click /
 
 Zero X/Y at the origin for the front-side programs (copper, drills, outline, top mask), then once more after flipping for the back-side programs — everything stays registered. Zero Z on the board surface. Choose the flip direction with **Mirror around Y axis** and verify with Flip Back View. Probing and height maps are done live from the Machine panel (below); the programs themselves stay plain G-code.
 
+## Backlash compensation
+
+GRBL and FluidNC have no backlash setting, so the app can compensate for play in the X and Y axes itself. **Machine setup → Backlash compensation** holds the play per axis (measure it with the backlash test board). The values belong to the machine, not the project: they are app-wide and are not saved in `.cncproj` files.
+
+- With a value set, every program the app writes — Generate, the CNC export, test boards — is rewritten: coordinates reached while moving in the negative direction are shifted by the play, a short take-up move of that axis alone is inserted wherever the axis reverses, arcs are split at their X/Y extremes, and the first rapid gets a lead-in from below. The preview and the G-code tab always show the uncompensated program.
+- **Compensate a G-code File…** writes a compensated copy of a program made outside this app.
+- When sending from the Machine panel, the **Backlash compensation** toggle on the Program tab (default from Settings → Machine → *Apply backlash compensation when sending*) rewrites the copy that is streamed; the files on disk are untouched.
+- Programs with G91 (relative moves), G20 (inches), R-format arcs, G28/G53/G92 or canned cycles are left uncompensated, with a WARNING in the Log.
+- Set the values back to 0 once the machine is repaired — fixing the play mechanically is always better.
+
 ## Machine panel
 
 The **Machine** button in the toolbar (View → Machine Panel, ⇧⌘M) opens a panel on the right of the main window: a native sender for GRBL 1.1 and FluidNC controllers. The connection strip and the position read-out stay at the top; the tabs below (Control, Positions, Program, Probe, Height Map, Macros) scroll on their own; a red **E-STOP** under the read-out stays in view on every tab; the console is the main window's Console tab, and "Open in a window" at the top of the panel gives the same controls a window of their own with the program text.
@@ -189,7 +277,12 @@ Pick **Wi‑Fi** (the controller's IP and telnet port, 23 by default) or **USB**
 Work and machine coordinates, live feed and spindle, the planner buffer and triggered pins (P = probe input closed). Click an axis value to set or zero that axis; the button grid under it has **Zero XY / Zero Z / Zero All** (`G10 L20 P0`, persistent) and **Probe Z** (the two-pass touch-off of the Probe tab) on the first row, **Work Zero** (retracts to the safe work Z first), **Safe Z** (just below the top of Z travel), **Home** and **Unlock** on the second. The **Positions** tab keeps named machine positions; **Go to coordinates…** moves to a typed machine target (Z first when rising, last when descending). **Save work zero** stores where work X0 Y0 Z0 is in machine coordinates, and **Use as zero** on any entry re-establishes the work origin at that point (`G10 L2 P0`, no motion) — restore a zero after a reset or re-homing. **User buttons** on the Control tab run the macros of the Macros tab (one button per macro, optional SF Symbol icon; "allow while running" keeps a button enabled during a job, for short commands such as coolant). **E-STOP** (also at the end of the job bar, and ⇧⌘.) sends jog cancel, feed hold and soft reset at once without waiting for anything; the position is marked untrusted if the machine was moving. ⌘. stays the controlled stop.
 
 ### Jogging and overrides
-Tap a jog button for one step; press and hold for continuous motion that stops on release (on a homed FluidNC with soft limits the jog runs to the limit and is cancelled on release; otherwise short segments are streamed). Diagonal buttons move two axes. **Keyboard jog**: arrows = X/Y, Page Up/Down = Z, Shift = step ×10, Esc or ⌘. = stop. Overrides adjust feed (10–200 %), rapid (25/50/100 %) and spindle speed in real time. Spindle on/off with RPM, coolant, Hold/Resume, Check mode, Sleep and Door are under Machine controls.
+Tap a jog button for one step; press and hold for continuous motion that stops on release (on a homed FluidNC with soft limits the jog runs to the limit and is cancelled on release; otherwise short segments are streamed). Diagonal buttons move two axes. **Keyboard jog**: arrows = X/Y, Page Up/Down = Z, Shift = step ×10, Esc or ⌘. = stop. Overrides adjust feed (10–200 %, in steps of 1 and 10), rapid (25/50/100 %) and spindle speed in real time; the controller reports the value it is using.
+
+**Machine controls** (Control tab): **Reset** (Ctrl‑X soft reset — stops everything; the position is lost if the machine was moving), **Hold** / **Resume** (feed hold, cycle start), **Check** (`$C` — G-code is parsed but nothing moves), **Spindle** on/off at the rpm beside it (clamped to the minimum and maximum in Settings → Machine), **Coolant** (M8/M9), and under More: **Sleep**, **Safety Door**, and the queries `$G` (parser state), `$#` (offsets) and `$I` (build info), whose answers appear in the Console.
+
+### Positions tab
+Named machine positions in two lists, chosen with the **Machine / Work** switch. **Machine** holds spots the spindle goes back to: **Save current…** stores the machine coordinates the spindle is at now, **Go to…** moves to a typed machine coordinate, and each entry has **Go** (Z moves first when rising, last when descending, at the jog feed). **Work** holds work zeros — where work X0 Y0 Z0 was, in machine coordinates: **Save work zero** stores the current one by hand, and with *Save the work zero when a program is sent* (Settings → Machine, on by default) every Send records one automatically, named after the program and the time ("Front copper – 8 Oct 14:07", clock icon). **Use as zero** on a Work entry makes that point the work origin again with `G10 L2` — the machine does not move — so after a crash, a reset or re-homing the same zero is back without touching off again. Right-click an entry for **Rename…**, **Overwrite with Current Position** / **Current Work Zero**, **Go There…** / **Use as Work Zero…** of the other kind, and **Delete**. Macros can move to a saved position with `@goto <name>`.
 
 ### Program tab — sending
 Pick a generated layer (or use CNC export → **Send … to Machine…** in the sidebar), or **Open .ngc file…** for an external program (a test board, for example). **Backlash** and **Apply height map** transform the copy that is sent, never the files on disk; **Save sent program…** keeps that copy. **Verify** streams the program in check mode without motion. If the machine's travel cannot hold the program the job bar says so in full — for example that line 12 rises to a Z above the top of travel because work Z0 is near the top; when that is the only problem, **Clamp Z to top** re-prepares the program with those retract heights lowered to just below the top (cutting depths are untouched; an orange "Z clamped" badge shows while it is on) so an air test can run. **Send** streams it with character counting; the main window's canvases, side view, 3D view and G-code tab follow the job, a blue crosshair marks the machine's real position, and the job bar shows the line, elapsed and remaining time. Hold/Resume and the overrides stay live. **Stop** holds, resets once the machine is at a standstill, and turns the spindle off.
@@ -202,6 +295,9 @@ A two-pass Z touch-off: fast down to find contact, back off 1 mm, slow down for 
 ### Axis calibration (steps/mm)
 
 If a 10 mm jog moves the spindle 9.85 mm, the controller's steps/mm is off. Settings → Machine → **Axis calibration** (FluidNC, while connected) reads `axes/x|y/steps_per_mm` and the config filename from the controller. Measure with a dial indicator or a ruler: jog a little in the measuring direction first (takes up the backlash), zero the indicator, jog a known distance — the longer the better — and enter commanded and measured; new steps/mm = current × commanded ÷ measured. **Apply** writes the running config at once (`$/axes/x/steps_per_mm=…`) and, with the save toggle on, `$CD=<config file>` rewrites that file (e.g. `raptorex.yaml`) from the running config so the value survives a reboot. Re-measure afterwards; measurements that disagree by more than a few hundredths point at backlash or a loose pulley, not at steps/mm.
+
+### Macros tab
+Your own command sequences. **Add** creates a macro with a name, an optional SF Symbol icon (`fan.fill`, `drop.fill`, `house`…) and the G-code lines it sends; **Run** sends the lines one after another, waiting for each to be acknowledged (the machine must be connected and idle); **Edit**, and by right-click **Duplicate** and **Delete**; **Restore Defaults** replaces the list with the built-in examples. Every macro is also a **user button** on the Control tab; *allow while running* keeps a button enabled during a job, for short commands such as coolant. `@goto <position>` in a line moves to a saved position from the Positions tab.
 
 ### Height Map tab
 Define a grid over the board (**Auto** fits the selected program), **Probe** it and read the deviation. Maps are per side and stored relative to the Z probed at the work origin, so re-probing Z there after a tool change keeps them valid. With **Apply height map** on, every cut and low plunge of the streamed copy is warped to the measured surface (bilinear interpolation); rapids at safe height are untouched. If the work origin moved since probing, the app warns before applying. Maps are kept per project under Application Support and can be saved/loaded as JSON; View Options → Height Map shows the points on the toolpath.
@@ -216,3 +312,22 @@ Turn on **Show the Simulator in the connection picker** in Settings → Machine,
 - **Uncut gaps between close traces** → tool too wide to fit; pcb2gcode warns in the Log. Reduce effective tool diameter or increase design clearance.
 - **Mask opening not cleared** → opening smaller than the mask tool, or a hand-entered Clear width < half the opening (turn "Clear width from the mask layers" back on).
 - **Slow generation** → mask Clear width too large, or very wide isolation width.
+
+## Keyboard shortcuts
+
+| Action | Keys |
+|---|---|
+| New Project / Open Project… / Open Gerber Folder… | ⌘N / ⌘O / ⇧⌘O |
+| Save Project / Save Project As… | ⌘S / ⇧⌘S |
+| Import Layer… / New Custom Layer | ⌘I / ⇧⌘N |
+| Generate Test Board… / Tool Library… | ⇧⌘T / ⇧⌘L |
+| Undo / Redo | ⌘Z / ⇧⌘Z |
+| Select All Shapes / Duplicate Shapes | ⇧⌘A / ⌘D |
+| Snap to Grid | ⌘' |
+| Machine Panel / Emergency Stop | ⇧⌘M / ⇧⌘. |
+| Settings / Help | ⌘, / ⌘? |
+| Drawing tools (custom layer, view focused) | V select · L line · R rectangle · C circle · T text |
+| Tape measure / leave the tool | M / Esc |
+| Nudge selected shapes | Arrows 0.1 mm · ⇧Arrows 1 mm |
+| Machine jog (Keyboard jog on) | Arrows X/Y · Page Up/Down Z · ⇧ step ×10 · Esc or ⌘. stop |
+| Console history | ↑ / ↓ |

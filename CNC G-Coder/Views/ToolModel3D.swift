@@ -73,11 +73,11 @@ nonisolated struct ToolGeometry: Equatable, Sendable {
         case .vBit:
             return "V-bit \(f(angle))° · tip \(f(tipDiameter)) mm · blade \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm"
         case .drill:
-            return "Drill Ø \(f(diameter)) mm · flutes \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm"
+            return String(localized: "Drill Ø \(f(diameter)) mm · flutes \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm")
         case .ball:
-            return "Ball nose Ø \(f(diameter)) mm · flutes \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm"
+            return String(localized: "Ball nose Ø \(f(diameter)) mm · flutes \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm")
         case .endMill:
-            return "End mill Ø \(f(diameter)) mm · flutes \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm"
+            return String(localized: "End mill Ø \(f(diameter)) mm · flutes \(String(format: "%.1f", cuttingLength)) mm · shank \(f(shankDiameter)) mm")
         }
     }
 

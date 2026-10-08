@@ -27,7 +27,7 @@ struct ToolLibraryView: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json, .plainText]
         panel.allowsOtherFileTypes = true
-        panel.message = "Choose a tool library exported from CNC G-Coder (.json) or a FlatCAM Tools Database export (.TXT)."
+        panel.message = String(localized: "Choose a tool library exported from CNC G-Coder (.json) or a FlatCAM Tools Database export (.TXT).")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let r = try library.importTools(from: url)
@@ -43,7 +43,7 @@ struct ToolLibraryView: View {
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "CNC G-Coder Tools.json"
-        panel.message = "Export the whole tool library, to import on another computer."
+        panel.message = String(localized: "Export the whole tool library, to import on another computer.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try library.exportLibrary(to: url)
@@ -149,7 +149,7 @@ private struct ToolLibraryContent: View {
         case .vBit:
             return "V \(ParametersStore.format(tool.tipAngle))° · \(length) at \(units.length(tool.cutDepth))"
         case .ball:
-            return "Ball · \(length)"
+            return String(localized: "Ball · \(length)")
         case .flat:
             return "Ø \(length) · Z \(units.length(tool.cutDepth))"
         }

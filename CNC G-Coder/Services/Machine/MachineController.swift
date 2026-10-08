@@ -1547,7 +1547,11 @@ final class MachineController {
     /// `(0,0).applying(T) + WCO` in XY, the work offset's Z — what a height
     /// map's `probedDesignOrigin` is compared with. Nil without a work offset.
     func currentDesignOrigin(side: BoardSide) -> MachinePosition? {
-        guard let wco = status.workOffset else { return nil }
+        // `workOffset` (published on change only), not `status`: the Program
+        // tab reads this in its body for the height-map validity badge, and
+        // reading `status` re-rendered the whole tab — buttons included — on
+        // every report.
+        guard let wco = workOffset else { return nil }
         let frame = app?.heightMapFrame(side: side) ?? .identity
         let p = CGPoint.zero.applying(frame)
         return MachinePosition(x: p.x + wco.x, y: p.y + wco.y, z: wco.z)
@@ -1860,6 +1864,21 @@ final class MachineController {
     }
 
     /// Job events from the streamer: console and the app log.
+    /// Settings → Machine "Save the work zero when a program is sent": keeps
+    /// the origin this program was cut with as a Positions entry ("Front
+    /// copper – 8 Oct 14:07"), so after a crash, reset or re-home the same
+    /// zero can be restored with Use as zero. Nothing is sent to the machine.
+    func recordWorkZero(for program: MachineProgram) {
+        guard MachineSettings.autoSaveWorkZero else { return }
+        guard let wco = workOffset else {
+            app?.appendLog("[machine] Work zero not recorded for \(program.name): the work offset is not known yet.\n")
+            return
+        }
+        let stamp = Date.now.formatted(date: .abbreviated, time: .shortened)
+        let entry = positions.recordAutomaticWorkZero(name: "\(program.kind.displayName) – \(stamp)", position: wco)
+        app?.appendLog("[machine] Work zero saved as “\(entry.name)”: machine \(wco.summary)\n")
+    }
+
     func noteJob(_ text: String) {
         log(.info, text)
         app?.appendLog("[machine] \(text)\n")

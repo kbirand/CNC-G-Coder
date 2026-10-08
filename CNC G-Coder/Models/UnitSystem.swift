@@ -15,8 +15,8 @@ nonisolated enum UnitSystem: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .metric: "Metric — millimetres"
-        case .imperial: "Imperial — inches"
+        case .metric: String(localized: "Metric — millimetres")
+        case .imperial: String(localized: "Imperial — inches")
         }
     }
 

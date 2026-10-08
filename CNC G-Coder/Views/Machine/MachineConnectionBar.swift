@@ -133,7 +133,7 @@ struct MachineConnectionBar: View {
         } else {
             Picker("", selection: $serialPath) {
                 if serialPath.isEmpty || !ports.contains(serialPath) {
-                    Text(serialPath.isEmpty ? "Choose a port…" : serialPath).tag(serialPath)
+                    Text(serialPath.isEmpty ? String(localized: "Choose a port…") : serialPath).tag(serialPath)
                 }
                 ForEach(ports, id: \.self) { path in
                     Text(path.replacingOccurrences(of: "/dev/cu.", with: "")).tag(path)
@@ -192,8 +192,8 @@ struct MachineConnectionBar: View {
         case .disconnected:
             endpointValid ? "Open the link and identify the controller (⌘K) — status reports start at once"
                           : "Fill in the host and port, or choose a serial port, first"
-        case .connecting: "Give up the connection attempt"
-        case .unresponsive: "The controller stopped answering — close the link (⌘K)"
+        case .connecting: String(localized: "Give up the connection attempt")
+        case .unresponsive: String(localized: "The controller stopped answering — close the link (⌘K)")
         case .connected: machine.isStreaming ? "Close the link; a running job is stopped first, after a confirmation (⌘K)"
                                              : "Close the link (⌘K). The controller keeps its state — a spindle left on stays on."
         }
@@ -231,7 +231,7 @@ struct MachineConnectionBar: View {
         .padding(.horizontal, 11)
         .padding(.vertical, 5)
         .background(stateColor.opacity(0.14), in: Capsule())
-        .help(machine.endpointDescription.isEmpty ? "Not connected" : machine.endpointDescription)
+        .help(machine.endpointDescription.isEmpty ? String(localized: "Not connected") : machine.endpointDescription)
         .animation(.easeInOut(duration: 0.2), value: stateColor)
     }
 
@@ -258,9 +258,9 @@ struct MachineConnectionBar: View {
 
     private var stateText: String {
         switch machine.phase {
-        case .disconnected: "Disconnected"
-        case .connecting: "Connecting…"
-        case .unresponsive: "Not responding"
+        case .disconnected: String(localized: "Disconnected")
+        case .connecting: String(localized: "Connecting…")
+        case .unresponsive: String(localized: "Not responding")
         case .connected: machine.statusSummary
         }
     }
@@ -363,12 +363,12 @@ struct MachineAlarmBanner: View {
     }
 
     private var title: String {
-        machine.alarmCode.map { "Alarm \($0)" } ?? "Alarm"
+        machine.alarmCode.map { String(localized: "Alarm \($0)") } ?? String(localized: "Alarm")
     }
 
     private var message: String {
         machine.alarmCode.map { GRBLAlarm.description(for: $0) }
-            ?? "The machine is locked. Home to reference it, or Unlock to continue."
+            ?? String(localized: "The machine is locked. Home to reference it, or Unlock to continue.")
     }
 }
 

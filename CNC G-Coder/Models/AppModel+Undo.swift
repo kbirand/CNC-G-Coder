@@ -25,13 +25,13 @@ extension AppModel {
         let now = Date()
         if changed.count == 1, let key = changed.first, let last = lastParameterEdit,
            last.key == key, now.timeIntervalSince(last.date) < 1.5,
-           undoManager?.canUndo == true, undoManager?.undoActionName == Self.parameterActionName {
+           undoManager?.canUndo == true, undoManager?.undoActionName == String(localized: String.LocalizationValue(Self.parameterActionName)) {
             lastParameterEdit = (key, now)
             return   // still the same edit: the step already on the stack covers it
         }
         lastParameterEdit = changed.count == 1 ? (changed[0], now) : nil
         undoManager?.registerUndo(withTarget: self) { model in model.restoreParameters(previous) }
-        undoManager?.setActionName(changed.count == 1 ? Self.parameterActionName : "Change Parameters")
+        undoManager?.setActionName(changed.count == 1 ? String(localized: String.LocalizationValue(Self.parameterActionName)) : String(localized: "Change Parameters"))
     }
 
     private static let parameterActionName = "Change Parameter"
@@ -56,7 +56,7 @@ extension AppModel {
         undoManager?.registerUndo(withTarget: self) { model in
             model.setDetectedFiles(old, actionName: actionName)
         }
-        undoManager?.setActionName(actionName)
+        undoManager?.setActionName(String(localized: String.LocalizationValue(actionName)))
         if undoManager?.isUndoing == true || undoManager?.isRedoing == true {
             if projectURL == nil { manualLayerEdits = true }
             if files.hasAnyToolpathInput || customLayers.hasShapes { preview.parametersDidChange() } else { preview.clear() }

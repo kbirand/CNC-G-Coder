@@ -336,12 +336,12 @@ final class ParametersStore: ObservableObject {
 
         var label: String {
             switch self {
-            case .iso: "Isolation"
-            case .drill: "Drilling"
-            case .holeMill: "Hole milling"
-            case .cut: "Cutout"
-            case .mask: "Mask"
-            case .silk: "Silkscreen"
+            case .iso: String(localized: "Isolation")
+            case .drill: String(localized: "Drilling")
+            case .holeMill: String(localized: "Hole milling")
+            case .cut: String(localized: "Cutout")
+            case .mask: String(localized: "Mask")
+            case .silk: String(localized: "Silkscreen")
             }
         }
 

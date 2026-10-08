@@ -19,9 +19,9 @@ nonisolated enum ArtworkExport {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .svg: "SVG"
-            case .png: "PNG"
-            case .pdf: "PDF"
+            case .svg: String(localized: "SVG")
+            case .png: String(localized: "PNG")
+            case .pdf: String(localized: "PDF")
             }
         }
         var fileExtension: String { rawValue }
@@ -39,8 +39,8 @@ nonisolated enum ArtworkExport {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .whiteOnBlack: "White on black"
-            case .blackOnWhite: "Black on white"
+            case .whiteOnBlack: String(localized: "White on black")
+            case .blackOnWhite: String(localized: "Black on white")
             }
         }
         /// The toolpath colour, and the field behind it.
@@ -69,10 +69,10 @@ nonisolated enum ArtworkExport {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .board: "Board"
-            case .origin: "Origin"
-            case .project: "Project"
-            case .layer: "Layer"
+            case .board: String(localized: "Board")
+            case .origin: String(localized: "Origin")
+            case .project: String(localized: "Project")
+            case .layer: String(localized: "Layer")
             }
         }
     }

@@ -8,14 +8,14 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .isolation: "Copper isolation"
-        case .drilling: "Drilling"
-        case .holeMill: "Hole milling"
-        case .cutout: "Board cutout"
-        case .mask: "Solder mask"
-        case .silk: "Silkscreen"
-        case .custom: "Custom layer"
-        case .setup: "Machine setup"
+        case .isolation: String(localized: "Copper isolation")
+        case .drilling: String(localized: "Drilling")
+        case .holeMill: String(localized: "Hole milling")
+        case .cutout: String(localized: "Board cutout")
+        case .mask: String(localized: "Solder mask")
+        case .silk: String(localized: "Silkscreen")
+        case .custom: String(localized: "Custom layer")
+        case .setup: String(localized: "Machine setup")
         }
     }
 
@@ -202,7 +202,7 @@ struct ParameterFormView: View {
     private func drillHeader(_ section: SettingsSection) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             sectionHeader(section)
-            Text(drillFile ?? "Defaults for new drill files")
+            Text(drillFile ?? String(localized: "Defaults for new drill files"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -213,7 +213,7 @@ struct ParameterFormView: View {
     /// Whose settings these are, for the groups' footers.
     private var drillScopeText: String {
         drillFile.map { "These settings belong to \($0) alone — every drill file has its own." }
-            ?? "Defaults — a drill file added to the project starts from these, then keeps its own settings."
+            ?? String(localized: "Defaults — a drill file added to the project starts from these, then keeps its own settings.")
     }
 
     // MARK: - Project
@@ -224,9 +224,14 @@ struct ParameterFormView: View {
                           files.topSilk, files.bottomSilk]
             .compactMap { $0 }.count
         var parts: [String] = []
-        if layerCount > 0 { parts.append("\(layerCount) layer\(layerCount == 1 ? "" : "s")") }
-        if !files.drills.isEmpty { parts.append("\(files.drills.count) drill file\(files.drills.count == 1 ? "" : "s")") }
-        return parts.isEmpty ? "No Gerber files recognized" : parts.joined(separator: " · ")
+        if layerCount > 0 {
+            parts.append(layerCount == 1 ? String(localized: "1 layer") : String(localized: "\(layerCount) layers"))
+        }
+        if !files.drills.isEmpty {
+            let n = files.drills.count
+            parts.append(n == 1 ? String(localized: "1 drill file") : String(localized: "\(n) drill files"))
+        }
+        return parts.isEmpty ? String(localized: "No Gerber files recognized") : parts.joined(separator: " · ")
     }
 
     private var projectSection: some View {
@@ -237,12 +242,12 @@ struct ParameterFormView: View {
                     .font(.title3)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.projectURL != nil ? model.projectName
-                         : (model.projectFolder?.lastPathComponent ?? "No project"))
+                         : (model.projectFolder?.lastPathComponent ?? String(localized: "No project")))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(model.projectFolder == nil && !model.detectedFiles.hasAnything
-                         ? "Open a project, a Gerber folder, or import layers"
-                         : detectedSummary + (model.isProjectEdited ? " · edited" : ""))
+                         ? String(localized: "Open a project, a Gerber folder, or import layers")
+                         : detectedSummary + (model.isProjectEdited ? String(localized: " · edited") : ""))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -259,29 +264,29 @@ struct ParameterFormView: View {
                     }
                 }
                 .fixedSize()
-                .help("Open a saved project, an EasyEDA Gerber export folder (layers are detected by filename), or add single Gerber / drill files as layers.")
+                .help("Open a saved project, an EasyEDA or KiCad Gerber export folder (layers are detected by filename), or add single Gerber / drill files as layers.")
             }
             .help(model.projectURL?.path ?? model.projectFolder?.path ?? "")
 
             if model.projectFolder != nil || model.detectedFiles.hasAnything {
                 DisclosureGroup(isExpanded: $filesExpanded) {
                     FileRow(slot: .front, model: model, url: model.detectedFiles.front,
-                            help: "Top copper layer (Gerber_TopLayer.GTL). Becomes front-copper.ngc — isolation milling around every trace and pad.")
+                            help: String(localized: "Top copper layer (Gerber_TopLayer.GTL). Becomes front-copper.ngc — isolation milling around every trace and pad."))
                     FileRow(slot: .back, model: model, url: model.detectedFiles.back,
-                            help: "Bottom copper layer (Gerber_BottomLayer.GBL). Becomes back-copper.ngc, mirrored around the mirror axis so it machines correctly after flipping the board.")
+                            help: String(localized: "Bottom copper layer (Gerber_BottomLayer.GBL). Becomes back-copper.ngc, mirrored around the mirror axis so it machines correctly after flipping the board."))
                     FileRow(slot: .outline, model: model, url: model.detectedFiles.outline,
-                            help: "Board outline (Gerber_BoardOutlineLayer.GKO). Becomes outline.ngc — the cutout program with holding bridges.")
+                            help: String(localized: "Board outline (Gerber_BoardOutlineLayer.GKO). Becomes outline.ngc — the cutout program with holding bridges."))
                     FileRow(slot: .topMask, model: model, url: model.detectedFiles.topMask,
-                            help: "Top solder-mask openings (.GTS) — pads/vias that must stay exposed.")
+                            help: String(localized: "Top solder-mask openings (.GTS) — pads/vias that must stay exposed."))
                     FileRow(slot: .bottomMask, model: model, url: model.detectedFiles.bottomMask,
-                            help: "Bottom solder-mask openings (.GBS). Mirrored like bottom copper.")
+                            help: String(localized: "Bottom solder-mask openings (.GBS). Mirrored like bottom copper."))
                     FileRow(slot: .topSilk, model: model, url: model.detectedFiles.topSilk,
-                            help: "Top printed legend (.GTO) — designators, outlines, text. Becomes top-silkscreen.ngc when Silkscreen is set to Engrave.")
+                            help: String(localized: "Top printed legend (.GTO) — designators, outlines, text. Becomes top-silkscreen.ngc when Silkscreen is set to Engrave."))
                     FileRow(slot: .bottomSilk, model: model, url: model.detectedFiles.bottomSilk,
-                            help: "Bottom printed legend (.GBO). Mirrored like bottom copper.")
+                            help: String(localized: "Bottom printed legend (.GBO). Mirrored like bottom copper."))
                     ForEach(model.detectedFiles.drills, id: \.self) { url in
                         FileRow(slot: .drill, model: model, url: url, drill: url,
-                                help: "Excellon drill file. EasyEDA splits PTH / via / NPTH holes into separate files; each becomes its own drill program.")
+                                help: String(localized: "Excellon drill file. EasyEDA (and KiCad with separate PTH / NPTH files) splits holes into several files; each becomes its own drill program."))
                     }
                     Button {
                         model.importLayers()
@@ -412,7 +417,7 @@ struct ParameterFormView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(currentSection.title)
                         .font(.headline)
-                    Text(drillFile.map { "Settings of \($0)" } ?? (preview.document == nil ? "No preview yet" : "Settings group"))
+                    Text(drillFile.map { String(localized: "Settings of \($0)") } ?? (preview.document == nil ? String(localized: "No preview yet") : String(localized: "Settings group")))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -911,7 +916,7 @@ struct ParameterFormView: View {
                 Text("Custom point").tag("custom")
                 Text("Design origin (no zeroing)").tag("design")
             }
-            .help("Where the machine's X0 Y0 is on the board — every program shares it. Corners and Centre are of the whole project (all programs' extent) as the machine sees it on each side, so after flipping you touch off at the same corner of the fixture. Custom point: a point in design coordinates — the same physical spot on both sides, e.g. a registration hole; set it with the Set Origin button in the view. Design origin: the coordinates exactly as EasyEDA exported them.")
+            .help("Where the machine's X0 Y0 is on the board — every program shares it. Corners and Centre are of the whole project (all programs' extent) as the machine sees it on each side, so after flipping you touch off at the same corner of the fixture. Custom point: a point in design coordinates — the same physical spot on both sides, e.g. a registration hole; set it with the Set Origin button in the view. Design origin: the coordinates exactly as the EDA tool exported them.")
             Button {
                 playback.placingOrigin = true
             } label: {
@@ -921,7 +926,7 @@ struct ParameterFormView: View {
             .help("Then click in the toolpath view where X0 Y0 should be. You can also drag the origin marker there directly. Both snap to the project's corners, centre and drill holes.")
             if params.zeroStart, params.originMode == "custom" {
                 ParamRow("Origin X", value: params.$originX, kind: .length,
-                         help: "X of the origin in design coordinates — the Gerber/EasyEDA frame, unaffected by tool sizes. The Set Origin button in the view fills this in from a click.")
+                         help: "X of the origin in design coordinates — the Gerber frame as exported, unaffected by tool sizes. The Set Origin button in the view fills this in from a click.")
                 ParamRow("Origin Y", value: params.$originY, kind: .length,
                          help: "Y of the origin in design coordinates.")
             }
@@ -1022,19 +1027,19 @@ struct ParameterFormView: View {
     private var backlashFooter: String {
         let settings = BacklashCompensation.Settings.current
         guard settings.isActive else {
-            return "For axes with play: a value here is added to every program the app writes — Generate, Export, test boards — not to the preview. Belongs to this machine, not the project. Fixing the play mechanically is always better."
+            return String(localized: "For axes with play: a value here is added to every program the app writes — Generate, Export, test boards — not to the preview. Belongs to this machine, not the project. Fixing the play mechanically is always better.")
         }
-        return "On (\(settings.summary)): every program the app writes gets a short take-up move wherever that axis reverses; the preview and G-code tab show the uncompensated program. Set back to 0 once the machine is repaired."
+        return String(localized: "On (\(settings.summary)): every program the app writes gets a short take-up move wherever that axis reverses; the preview and G-code tab show the uncompensated program. Set back to 0 once the machine is repaired.")
     }
 
     private var originFooter: String {
         guard params.zeroStart else {
-            return "Programs keep the design's own coordinates — X0 Y0 is wherever EasyEDA put it, often far off the board."
+            return String(localized: "Programs keep the design's own coordinates — X0 Y0 is wherever the EDA tool put it, often far off the board (KiCad: the page corner).")
         }
         if params.originMode == "custom" {
-            return "The origin is the same physical point on both sides — for a two-sided board, pick a hole on the flip axis or re-find it after flipping. The marker in the view shows where X0 Y0 is."
+            return String(localized: "The origin is the same physical point on both sides — for a two-sided board, pick a hole on the flip axis or re-find it after flipping. The marker in the view shows where X0 Y0 is.")
         }
-        return "Zero the machine at this corner of the board before the front programs, and at the same corner of the fixture after flipping. The marker in the view shows where X0 Y0 is — drag it to move the origin."
+        return String(localized: "Zero the machine at this corner of the board before the front programs, and at the same corner of the fixture after flipping. The marker in the view shows where X0 Y0 is — drag it to move the origin.")
     }
 
     // MARK: - CNC export (per layer)
@@ -1113,20 +1118,16 @@ struct ParameterFormView: View {
 
     private func exportFooter(for layer: ParsedLayer) -> String {
         let frame = switch ArtworkExport.FrameMode(rawValue: exportFrame) ?? .board {
-        case .board: "the page is the finished board, so it lines up with the physical PCB"
-        case .origin: "the page runs from X0/Y0, so the artwork keeps its position on the machine"
-        case .project: "every layer shares one page, so exports overlay in register"
-        case .layer: "cropped to this program's own extent"
+        case .board: String(localized: "the page is the finished board, so it lines up with the physical PCB")
+        case .origin: String(localized: "the page runs from X0/Y0, so the artwork keeps its position on the machine")
+        case .project: String(localized: "every layer shares one page, so exports overlay in register")
+        case .layer: String(localized: "cropped to this program's own extent")
         }
         if showToolWidth, let diameter = layer.toolDiameter, diameter > 0 {
             let units = UnitSystem(rawValue: unitRaw) ?? .metric
-            return "Exports this program's toolpath at 1:1 — the cut swept at "
-                + "\(units.length(diameter)) \(units.lengthSymbol), i.e. the copper the mill would clear. "
-                + "Rapids are never included; \(frame)."
+            return String(localized: "Exports this program's toolpath at 1:1 — the cut swept at \(units.length(diameter)) \(units.lengthSymbol), i.e. the copper the mill would clear. Rapids are never included; \(frame).")
         }
-        return "Exports this program's toolpath at 1:1 as bare centrelines "
-            + "(turn on Tool Width in View Options to sweep them at the cutter diameter). "
-            + "Rapids are never included; \(frame)."
+        return String(localized: "Exports this program's toolpath at 1:1 as bare centrelines (turn on Tool Width in View Options to sweep them at the cutter diameter). Rapids are never included; \(frame).")
     }
 
     @ViewBuilder
@@ -1199,7 +1200,7 @@ struct ParameterFormView: View {
     }
 
     /// A read-only value worked out from other fields.
-    private func derivedRow(_ label: String, _ value: String?, help: String) -> some View {
+    private func derivedRow(_ label: LocalizedStringKey, _ value: String?, help: LocalizedStringKey) -> some View {
         ParamRowLayout(label) { ParamReadout(value: value ?? "—", unit: "") }
             .help(help)
     }
@@ -1256,7 +1257,7 @@ struct WarningPill: View {
     let text: String
     let color: Color
     let icon: String
-    var help: String = ""
+    var help: LocalizedStringKey = ""
 
     var body: some View {
         Label(text, systemImage: icon)
@@ -1315,7 +1316,7 @@ private struct ToolPickerRow: View {
                     ))
                     Button("Edit Tool Library…", action: openLibrary)
                 } label: {
-                    Text(current?.name ?? "Custom")
+                    Text(current?.name ?? String(localized: "Custom"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -1397,9 +1398,9 @@ private struct FileRow: View {
     private var helpText: String {
         guard let url, let origin = model.layerOrigins[url] else { return help }
         if LayerFileEditor.isEditedCopy(url) {
-            return help + "\n\nEdited in CNC G-Coder (from \(origin.path)); the original file is unchanged."
+            return help + "\n\n" + String(localized: "Edited in CNC G-Coder (from \(origin.path)); the original file is unchanged.")
         }
-        return help + "\n\nPacked in the project (originally \(origin.path))."
+        return help + "\n\n" + String(localized: "Packed in the project (originally \(origin.path)).")
     }
 
     var body: some View {
@@ -1458,10 +1459,10 @@ enum ParamColumns {
 /// One sidebar row: the label on the left, the value (and unit) columns on
 /// the right, all on one text baseline.
 struct ParamRowLayout<Content: View>: View {
-    let label: String
+    let label: LocalizedStringKey
     @ViewBuilder let content: () -> Content
 
-    init(_ label: String, @ViewBuilder content: @escaping () -> Content) {
+    init(_ label: LocalizedStringKey, @ViewBuilder content: @escaping () -> Content) {
         self.label = label
         self.content = content
     }
@@ -1520,10 +1521,10 @@ enum ParamKind {
 /// own text so typing is never reformatted mid-edit, and commits every value
 /// that parses, so the debounced preview still follows along live.
 struct ParamRow: View {
-    let label: String
+    let label: LocalizedStringKey
     @Binding var value: String
     let kind: ParamKind
-    var help: String = ""
+    var help: LocalizedStringKey = ""
     /// Shown greyed in an empty field — for optional values that fall back
     /// to another one (a layer's travel Z → Machine setup's Safe Z).
     var placeholder: String = ""
@@ -1532,7 +1533,7 @@ struct ParamRow: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    init(_ label: String, value: Binding<String>, kind: ParamKind, help: String = "", placeholder: String = "") {
+    init(_ label: LocalizedStringKey, value: Binding<String>, kind: ParamKind, help: LocalizedStringKey = "", placeholder: String = "") {
         self.label = label
         self._value = value
         self.kind = kind

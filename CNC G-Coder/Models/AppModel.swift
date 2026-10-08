@@ -736,7 +736,7 @@ final class AppModel: ObservableObject {
             case "savezero":
                 // The work origin as a machine position, like the Positions tab's "Save work zero".
                 if let wco = m.status.workOffset {
-                    m.positions.add(name: argument.isEmpty ? "Work zero" : argument, position: wco)
+                    m.positions.add(name: argument.isEmpty ? String(localized: "Work zero") : argument, position: wco, kind: .workZero)
                     machineLog("savezero: \(m.positions.positions.last?.name ?? "?") = \(wco.summary)")
                 } else {
                     machineLog("savezero: work offset unknown")
@@ -797,8 +797,9 @@ final class AppModel: ObservableObject {
         manualLayerEdits = false
         layerOrigins = [:]
         customLayers = []
-        // EasyEDA names drill files the same in every export: the previous
-        // project's per-file settings must not land on this one's.
+        // EasyEDA names drill files the same in every export (KiCad: after the
+        // board): the previous project's per-file settings must not land on
+        // this one's.
         parameters.drillLayerValues = [:]
         detectedFiles = GerberDetector.detect(in: url)
 
@@ -812,6 +813,9 @@ final class AppModel: ObservableObject {
         appendLog("Top silkscreen: \(detectedFiles.topSilk?.lastPathComponent ?? "NOT FOUND")\n")
         appendLog("Bottom silkscreen: \(detectedFiles.bottomSilk?.lastPathComponent ?? "NOT FOUND")\n")
         appendLog("Drills: \(detectedFiles.drills.count)\n")
+        for warning in GerberDetector.warnings(in: url) {
+            appendLog("WARNING: \(warning)\n")
+        }
         clearUndoHistory()
 
         preview.parametersDidChange()
@@ -825,8 +829,8 @@ final class AppModel: ObservableObject {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .cnc: "CNC G-code"
-            case .laser: "Laser artwork"
+            case .cnc: String(localized: "CNC G-code")
+            case .laser: String(localized: "Laser artwork")
             }
         }
         var icon: String {
@@ -848,14 +852,14 @@ final class AppModel: ObservableObject {
     func generationBlocker(for target: GenerateTarget) -> String? {
         let hasCustom = customLayers.hasShapes
         if !detectedFiles.hasAnything && !hasCustom {
-            return "Nothing to generate — open a project, or draw on a custom layer."
+            return String(localized: "Nothing to generate — open a project, or draw on a custom layer.")
         }
         if detectedFiles.hasAnything {
             if projectFolder == nil { return "Choose a project folder first." }
         }
         if let bad = parameters.validationError { return "Invalid value in \"\(bad)\" — fix it before generating." }
         if let layer = customLayers.first(where: { !$0.isEmpty && $0.validationError != nil }) {
-            return "Custom layer \"\(layer.name)\": \(layer.validationError ?? "")."
+            return String(localized: "Custom layer \"\(layer.name)\": \(layer.validationError ?? "").")
         }
         return nil
     }
@@ -871,7 +875,7 @@ final class AppModel: ObservableObject {
         }
 
         guard FileAccess.canWrite(into: destination) else {
-            let problem = "No permission to write to \(destination.path) — use Choose… to pick the folder."
+            let problem = String(localized: "No permission to write to \(destination.path) — use Choose… to pick the folder.")
             appendLog("\nERROR: \(problem)\n")
             generationSteps = []
             generationSummary = problem
@@ -1049,7 +1053,7 @@ final class AppModel: ObservableObject {
         panel.allowsOtherFileTypes = true
         panel.canCreateDirectories = true
         panel.directoryURL = chosenOutputDir ?? projectFolder
-        panel.message = "Save the \(layer.displayName) program for the CNC."
+        panel.message = String(localized: "Save the \(layer.displayName) program for the CNC.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
@@ -1079,7 +1083,7 @@ final class AppModel: ObservableObject {
         let open = NSOpenPanel()
         open.allowsMultipleSelection = false
         open.canChooseDirectories = false
-        open.message = "Choose a G-code file to compensate (\(settings.summary))."
+        open.message = String(localized: "Choose a G-code file to compensate (\(settings.summary)).")
         guard open.runModal() == .OK, let source = open.url else { return }
 
         let save = NSSavePanel()
@@ -1118,7 +1122,7 @@ final class AppModel: ObservableObject {
         panel.allowedContentTypes = [options.format.contentType]
         panel.canCreateDirectories = true
         panel.directoryURL = chosenOutputDir ?? projectFolder
-        panel.message = "Export the \(layer.displayName) toolpath at 1:1 scale for a laser engraver."
+        panel.message = String(localized: "Export the \(layer.displayName) toolpath at 1:1 scale for a laser engraver.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         isExportingArtwork = true

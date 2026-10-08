@@ -129,7 +129,7 @@ struct MachineDRO: View {
     }
 
     private var parserStateTooltip: String {
-        machine.parserState.isEmpty ? "Modal state unknown ($G)" : "[GC:" + machine.parserState.joined(separator: " ") + "]"
+        machine.parserState.isEmpty ? String(localized: "Modal state unknown ($G)") : "[GC:" + machine.parserState.joined(separator: " ") + "]"
     }
 
     // MARK: Buttons
@@ -169,7 +169,7 @@ struct MachineDRO: View {
         }
     }
 
-    private func droButton(_ title: String, _ symbol: String, help: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func droButton(_ title: LocalizedStringKey, _ symbol: String, help: LocalizedStringKey, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: symbol)
                 .labelStyle(DROButtonLabelStyle())

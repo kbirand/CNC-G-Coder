@@ -152,6 +152,9 @@ final class JobStreamer {
     /// The most free planner blocks any report showed (`Bf:`): a report with
     /// that many free again means the planner is empty.
     @ObservationIgnored private var maxPlannerBlocks: Int?
+    /// The most RX bytes a `Bf:` report ever showed free: the controller's
+    /// receive buffer size (128 on Grbl serial, larger on FluidNC).
+    @ObservationIgnored private var maxRxBytes: Int?
     /// What to do once the height-map prompt is answered.
     private enum StartRequest { case start, fromLine(Int), continueSuspend }
     private var pendingStart: StartRequest?
@@ -391,6 +394,7 @@ final class JobStreamer {
         cursor = 0
         ackedCount = 0
         window.reset()
+        applyWindowBudget()
         allSent = false
         awaitingIdle = false
         idleReports = 0
@@ -403,6 +407,7 @@ final class JobStreamer {
         pendingStart = nil
         lastMatchedPosition = nil
         if mode == .run {
+            if resetElapsed, let program { controller?.recordWorkZero(for: program) }
             lineErrors = [:]
             sentLine = line - 1
             ackedLine = line - 1
@@ -744,6 +749,34 @@ final class JobStreamer {
         }
     }
 
+    /// How far ahead the stream runs. The classic 128 bytes / 8 lines is
+    /// what a Grbl serial board can hold; over a Wi‑Fi link whose round trip
+    /// is 50–100 ms that window starves the planner on the 0.07 mm segments
+    /// pcb2gcode writes around corners and holes (a new ack is needed every
+    /// five lines), and the cut crawls. TCP flow-controls the ESP32's input
+    /// itself, so a TCP link gets at least 512 bytes; both kinds grow to the
+    /// RX size the controller reports in `Bf:`; Settings → Machine can pin
+    /// a value (`machine.streamWindowBytes`, 0 = this automatic choice).
+    private func applyWindowBudget() {
+        let bytes: Int
+        let source: String
+        let pinned = MachineSettings.streamWindowBytes
+        if pinned > 0 {
+            bytes = max(64, pinned)
+            source = "setting"
+        } else {
+            let floor = controller?.transportKind == .serial ? 128 : 512
+            bytes = max(floor, min(maxRxBytes ?? 0, 2048))
+            source = (maxRxBytes ?? 0) > floor ? "controller buffer" : "automatic"
+        }
+        let lines = max(8, bytes / 16)
+        if window.byteBudget != bytes || window.lineBudget != lines {
+            window.byteBudget = bytes
+            window.lineBudget = lines
+            controller?.app?.appendLog("[machine] Stream window \(bytes) bytes, \(lines) lines (\(source)).\n")
+        }
+    }
+
     private func noteAllAcknowledged() {
         switch mode {
         case .verify:
@@ -872,6 +905,7 @@ final class JobStreamer {
             elapsed = elapsedBase + startedAt.duration(to: ContinuousClock.now).seconds
         }
         if let blocks = status.plannerBlocks { maxPlannerBlocks = max(maxPlannerBlocks ?? 0, blocks) }
+        if let rx = status.rxBytes { maxRxBytes = max(maxRxBytes ?? 0, rx) }
         if awaitingIdle, errorPrompt == nil {
             // One Idle can be a report generated before the last line was
             // planned: completion needs two in a row, or one whose planner

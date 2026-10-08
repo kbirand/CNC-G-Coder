@@ -194,7 +194,7 @@ private struct MacroEditSheet: View {
                         .map { $0.trimmingCharacters(in: .whitespaces) }
                         .filter { !$0.isEmpty }
                     let symbol = icon.trimmingCharacters(in: .whitespaces)
-                    onSave(MachineSettings.Macro(id: macro.id, name: name.trimmingCharacters(in: .whitespaces).isEmpty ? "Macro" : name,
+                    onSave(MachineSettings.Macro(id: macro.id, name: name.trimmingCharacters(in: .whitespaces).isEmpty ? String(localized: "Macro") : name,
                                                  lines: lines, icon: symbol.isEmpty ? nil : symbol, allowWhileRunning: allowWhileRunning))
                     dismiss()
                 }

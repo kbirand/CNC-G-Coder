@@ -46,7 +46,7 @@ extension AppModel {
     // MARK: - State
 
     var projectName: String {
-        projectURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
+        projectURL?.deletingPathExtension().lastPathComponent ?? String(localized: "Untitled")
     }
 
     /// Everything a project file records, as one comparable string.
@@ -87,13 +87,13 @@ extension AppModel {
         appendLog("\nNew project.\n")
     }
 
-    /// Open Gerber Folder: an untitled project from an EasyEDA export folder.
+    /// Open Gerber Folder: an untitled project from an EasyEDA or KiCad export folder.
     func openGerberFolder() {
         guard confirmDiscardChanges() else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.message = "Choose the folder exported by EasyEDA (Gerber + drill files)."
+        panel.message = String(localized: "Choose the Gerber export folder (EasyEDA or KiCad: Gerber + drill files).")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let useGerberOrigin = askGerberOrigin() else { return }
         projectURL = nil
@@ -128,13 +128,13 @@ extension AppModel {
     /// Asks which origin the programs should use. Nil = cancelled.
     private func askGerberOrigin() -> Bool? {
         let alert = NSAlert()
-        alert.messageText = "Use the Gerber files' own origin?"
-        alert.informativeText = "Gerber files have an origin of their own — the X0 Y0 of the design in the PCB editor. "
-            + "Keep it, or move X0 Y0 to the \(zeroedOriginName) of the board so you can touch off there.\n\n"
-            + "You can change this later under Machine setup → Origin."
-        alert.addButton(withTitle: "Use Gerber Origin")
-        alert.addButton(withTitle: "Zero at \(zeroedOriginName.prefix(1).uppercased() + zeroedOriginName.dropFirst())")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = String(localized: "Use the Gerber files' own origin?")
+        alert.informativeText = String(localized: "Gerber files have an origin of their own — the X0 Y0 of the design in the PCB editor. ")
+            + String(localized: "Keep it, or move X0 Y0 to the \(zeroedOriginName) of the board so you can touch off there.\n\n")
+            + String(localized: "You can change this later under Machine setup → Origin.")
+        alert.addButton(withTitle: String(localized: "Use Gerber Origin"))
+        alert.addButton(withTitle: String(localized: "Zero at \(zeroedOriginName.prefix(1).uppercased() + zeroedOriginName.dropFirst())"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         switch alert.runModal() {
         case .alertFirstButtonReturn: return true
         case .alertSecondButtonReturn: return false
@@ -151,7 +151,7 @@ extension AppModel {
         // listed as one, so it must be choosable as a directory too.
         panel.canChooseDirectories = true
         panel.treatsFilePackagesAsDirectories = false
-        panel.message = "Open a CNC G-Coder project (.\(ProjectDocument.fileExtension))."
+        panel.message = String(localized: "Open a CNC G-Coder project (.\(ProjectDocument.fileExtension)).")
         let response = withExtendedLifetime(filter) { panel.runModal() }
         guard response == .OK, let url = panel.url else { return }
         openProject(at: url, confirmed: true)
@@ -254,10 +254,10 @@ extension AppModel {
         panel.allowedContentTypes = [.cncProject]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = projectName == "Untitled"
-            ? (projectFolder?.lastPathComponent ?? "Untitled") + "." + ProjectDocument.fileExtension
+            ? (projectFolder?.lastPathComponent ?? String(localized: "Untitled")) + String(localized: ".") + ProjectDocument.fileExtension
             : projectName + "." + ProjectDocument.fileExtension
         panel.directoryURL = projectURL?.deletingLastPathComponent() ?? projectFolder
-        panel.message = "Save the project: its layer files and every parameter."
+        panel.message = String(localized: "Save the project: its layer files and every parameter.")
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         return write(to: url)
     }
@@ -303,10 +303,10 @@ extension AppModel {
         if machine.isStreaming {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "A program is being sent to the machine"
-            alert.informativeText = "Stop the job before changing the project. Stopping holds the machine, resets the controller and leaves the spindle off."
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Stop Job")
+            alert.messageText = String(localized: "A program is being sent to the machine")
+            alert.informativeText = String(localized: "Stop the job before changing the project. Stopping holds the machine, resets the controller and leaves the spindle off.")
+            alert.addButton(withTitle: String(localized: "Cancel"))
+            alert.addButton(withTitle: String(localized: "Stop Job"))
             if alert.runModal() == .alertSecondButtonReturn {
                 Task { await machine.streamer.stop() }
             }
@@ -314,11 +314,11 @@ extension AppModel {
         }
         guard isProjectEdited else { return true }
         let alert = NSAlert()
-        alert.messageText = "Save changes to \(projectName)?"
-        alert.informativeText = "The project's layer files and parameters have changed since it was last saved."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Don't Save")
+        alert.messageText = String(localized: "Save changes to \(projectName)?")
+        alert.informativeText = String(localized: "The project's layer files and parameters have changed since it was last saved.")
+        alert.addButton(withTitle: String(localized: "Save"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Don't Save"))
         switch alert.runModal() {
         case .alertFirstButtonReturn: return saveProject()
         case .alertThirdButtonReturn: return true
@@ -381,7 +381,7 @@ extension AppModel {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.directoryURL = projectFolder
-        panel.message = "Choose Gerber or Excellon drill files to add as layers."
+        panel.message = String(localized: "Choose Gerber or Excellon drill files to add as layers.")
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         pendingImports = panel.urls.map { PendingImport(url: $0, slot: GerberDetector.guessSlot(for: $0)) }
     }
@@ -418,7 +418,7 @@ extension AppModel {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.directoryURL = (drill ?? detectedFiles[slot])?.deletingLastPathComponent() ?? projectFolder
-        panel.message = "Choose the file for \(slot.title)."
+        panel.message = String(localized: "Choose the file for \(slot.title).")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         layerEditor.end()
         var files = detectedFiles

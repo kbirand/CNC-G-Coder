@@ -620,7 +620,7 @@ struct ToolpathCanvasView: View {
             marker.addLine(to: CGPoint(x: home.x, y: home.y + r))
             ctx.stroke(marker, with: .color(.gray), lineWidth: 1 / scale)
         }
-        let label = "Machine travel \(formatMM(travel.size.width, decimals: 0)) × \(formatMM(travel.size.height, decimals: 0)) mm"
+        let label = String(localized: "Machine travel \(formatMM(travel.size.width, decimals: 0)) × \(formatMM(travel.size.height, decimals: 0)) mm")
         drawWorldLabel(ctx, label, at: CGPoint(x: travel.rect.minX + 3 / scale, y: travel.rect.maxY - 3 / scale),
                        transform: .identity, color: .gray, anchor: .topLeading)
     }
@@ -1303,7 +1303,7 @@ struct ToolpathCanvasView: View {
         let caption = originDrag.map { target -> String in
             let units = UnitSystem(rawValue: unitRaw) ?? .metric
             let offset = "X\(units.length(target.display.x)) Y\(units.length(target.display.y))"
-            return target.label.isEmpty ? "Drop at \(offset)" : "Drop: \(target.label) · \(offset)"
+            return target.label.isEmpty ? String(localized: "Drop at \(offset)") : String(localized: "Drop: \(target.label) · \(offset)")
         }
             ?? (pending ? "Moving X0 Y0…" : (side ? "X0 Y0 · back" : "X0 Y0"))
         ctx.draw(Text(caption)

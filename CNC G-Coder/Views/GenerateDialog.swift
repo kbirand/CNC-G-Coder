@@ -120,7 +120,7 @@ struct GenerateDialog: View {
             return "\(done) of \(total) done — " + (running.isEmpty ? "starting…" : running.joined(separator: " · "))
         }
         if let summary = model.generationSummary { return summary }
-        return model.projectFolder?.lastPathComponent ?? "No project"
+        return model.projectFolder?.lastPathComponent ?? String(localized: "No project")
     }
 
     private var statusIcon: String {
@@ -228,7 +228,7 @@ struct GenerateDialog: View {
                 Image(systemName: "folder.fill")
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(resolvedDestination?.lastPathComponent ?? "No folder")
+                    Text(resolvedDestination?.lastPathComponent ?? String(localized: "No folder"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(resolvedDestination?.deletingLastPathComponent().path ?? "")
@@ -287,7 +287,7 @@ struct GenerateDialog: View {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        panel.message = "Choose the folder for the generated files — use New Folder to create one."
+        panel.message = String(localized: "Choose the folder for the generated files — use New Folder to create one.")
         panel.directoryURL = resolvedDestination?.deletingLastPathComponent() ?? model.projectFolder
         if panel.runModal() == .OK, let url = panel.url {
             storedDestination = url.path

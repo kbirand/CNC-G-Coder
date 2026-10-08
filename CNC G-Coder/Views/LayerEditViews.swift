@@ -160,7 +160,7 @@ struct LayerEditInspector: View {
         }
     }
 
-    private func field(_ label: String, _ value: Double, minimum: Double? = nil, help: String = "",
+    private func field(_ label: LocalizedStringKey, _ value: Double, minimum: Double? = nil, help: LocalizedStringKey = "",
                        set: @escaping (Double) -> Void) -> some View {
         ParamRowLayout(label) {
             MeasureField(value: Binding(get: { value }, set: set), kind: .length, minimum: minimum,
@@ -170,7 +170,7 @@ struct LayerEditInspector: View {
     }
 
     @ViewBuilder
-    private func position(_ anchor: CGPoint?, x: String, y: String, help: String) -> some View {
+    private func position(_ anchor: CGPoint?, x: LocalizedStringKey, y: LocalizedStringKey, help: LocalizedStringKey) -> some View {
         if editor.selection.count == 1, let id = editor.selection.first, let anchor {
             field(x, anchor.x, help: help) { editor.setPosition(of: id, x: $0) }
             field(y, anchor.y, help: help) { editor.setPosition(of: id, y: $0) }

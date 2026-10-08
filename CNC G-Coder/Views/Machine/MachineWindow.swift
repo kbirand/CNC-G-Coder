@@ -9,11 +9,11 @@ nonisolated enum MachineTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .program: "Program"
-        case .probe: "Probe"
-        case .heightMap: "Height Map"
-        case .console: "Console"
-        case .macros: "Macros"
+        case .program: String(localized: "Program")
+        case .probe: String(localized: "Probe")
+        case .heightMap: String(localized: "Height Map")
+        case .console: String(localized: "Console")
+        case .macros: String(localized: "Macros")
         }
     }
 
@@ -185,12 +185,13 @@ extension MachineController {
 
 /// Section title in the pendant column.
 struct MachineSectionLabel: View {
-    var title: String
+    var title: LocalizedStringKey
     var detail: String? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title.uppercased())
+            Text(title)
+                .textCase(.uppercase)
                 .font(.caption.weight(.semibold))
                 .tracking(0.6)
                 .foregroundStyle(.secondary)

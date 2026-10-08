@@ -16,8 +16,8 @@ nonisolated enum BoardSide: String, Codable, Sendable, CaseIterable {
 
     var title: String {
         switch self {
-        case .front: "Front"
-        case .back: "Back"
+        case .front: String(localized: "Front")
+        case .back: String(localized: "Back")
         }
     }
 }

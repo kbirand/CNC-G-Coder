@@ -33,6 +33,12 @@ nonisolated enum MachineSettings {
         static let applyBacklash = "machine.applyBacklash"
         static let heightMapApplyBelowZ = "machine.heightMap.applyBelowZ"
         static let confirmContinue = "machine.confirmContinue"
+        /// Record the work zero (as a machine point) in Positions when a program is sent.
+        static let autoSaveWorkZero = "machine.autoSaveWorkZero"
+        /// Bytes kept in flight while streaming; 0 = automatic (see JobStreamer.windowBudget).
+        static let streamWindowBytes = "machine.streamWindowBytes"
+        /// Which list the Positions tab shows: "machine" or "workZero".
+        static let positionsKind = "machine.positionsKind"
         static let showSimulator = "machine.showSimulator"
         /// FluidNC config file `$CD=` writes to ("" = the one the controller reports).
         static let configFilename = "machine.configFilename"
@@ -66,6 +72,8 @@ nonisolated enum MachineSettings {
         static let heightMapApplyBelowZ = 1.0
         /// Continue after a tool change runs at once; on, the preamble sheet asks first.
         static let confirmContinue = false
+        static let autoSaveWorkZero = true
+        static let streamWindowBytes = 0
         /// The built-in simulator is a developer/try-out feature: hidden from
         /// the connection picker unless asked for in Settings.
         static let showSimulator = false
@@ -175,6 +183,14 @@ nonisolated enum MachineSettings {
     static var confirmContinue: Bool {
         get { bool(Keys.confirmContinue, Defaults.confirmContinue) }
         set { defaults.set(newValue, forKey: Keys.confirmContinue) }
+    }
+    static var streamWindowBytes: Int {
+        get { defaults.object(forKey: Keys.streamWindowBytes) == nil ? Defaults.streamWindowBytes : defaults.integer(forKey: Keys.streamWindowBytes) }
+        set { defaults.set(newValue, forKey: Keys.streamWindowBytes) }
+    }
+    static var autoSaveWorkZero: Bool {
+        get { bool(Keys.autoSaveWorkZero, Defaults.autoSaveWorkZero) }
+        set { defaults.set(newValue, forKey: Keys.autoSaveWorkZero) }
     }
     static var showSimulator: Bool {
         get { bool(Keys.showSimulator, Defaults.showSimulator) }

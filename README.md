@@ -1,6 +1,6 @@
 # CNC G-Coder
 
-A native macOS app for milling PCBs on a hobby CNC — from an EasyEDA Gerber export to ready-to-run G-code, with a live, feed-rate-accurate toolpath simulator.
+A native macOS app for milling PCBs on a hobby CNC — from an EasyEDA or KiCad Gerber export to ready-to-run G-code, with a live, feed-rate-accurate toolpath simulator.
 
 CNC G-Coder drives [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) under the hood and adds everything around it: automatic layer detection, a full graphical preview with playback, a Z side view for verifying depths, honest machining-time estimates, solder-mask etching programs, and a parameter-calibration test board generator.
 
@@ -8,10 +8,11 @@ CNC G-Coder drives [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) under the
 
 ### Complete PCB workflow
 - **Isolation milling** for front and back copper (back side automatically mirrored around your flip axis, CNC-ready)
-- **Drilling** — one program per EasyEDA drill file (PTH / via / NPTH), with tool-change pauses
+- **Drilling** — one program per drill file (EasyEDA's PTH / via / NPTH, KiCad's PTH / NPTH), with tool-change pauses
 - **Board cutout** with configurable holding bridges (width, count, depth)
 - **Solder mask etching** — after you paint and UV-cure the mask, generated programs mill the pad/via openings clear (pcb2gcode's `--invert-gerbers` pocketing; also supports SVG export for laser ablation instead)
 - One-click **Generate** writes all `.ngc` programs into a folder you choose (create one on the spot with the dialog's New Folder button)
+- **Localized** in English, French, Spanish and Turkish (Settings → General → Language, or the macOS language), guide included
 
 ### Live preview
 - **Per-program toolpath view** with cursor-anchored zoom/pan, real cutter-width swaths, drill hits, and white bridge-tab markers
@@ -62,8 +63,8 @@ The native engine uses [Clipper2](https://github.com/AngusJohnson/Clipper2)
 
 ## Quick start
 
-1. In EasyEDA, export Gerber + drill files into a folder.
-2. Launch CNC G-Coder → **Choose Folder** — layers are detected by filename (`Gerber_TopLayer.GTL`, `Gerber_BottomLayer.GBL`, `Gerber_BoardOutlineLayer.GKO`, `.GTS`/`.GBS` masks, all `.DRL` files).
+1. In EasyEDA or KiCad, export Gerber + drill files into a folder.
+2. Launch CNC G-Coder → **Choose Folder** — layers are detected by filename: EasyEDA's `Gerber_TopLayer.GTL`, `Gerber_BottomLayer.GBL`, `Gerber_BoardOutlineLayer.GKO`, `.GTS`/`.GBS` masks and `.DRL` files, or KiCad's `board-F_Cu.gbr`, `board-B_Cu.gbr`, `board-Edge_Cuts.gbr`, `board-F_Mask.gbr`/`board-B_Mask.gbr` and `board-PTH.drl`/`board-NPTH.drl` (Protel-extension exports work too). In KiCad, export drills as Excellon, not Gerber X2.
 3. Set tools, depths and feeds — the sidebar shows the selected program's settings (Machine setup holds the shared ones); watch the preview and the Σ time estimate update.
 4. Inspect each program: play it back, check depths in the side view.
 5. **Generate G-code**, then open the **Machine** window (⇧⌘M) to connect to your GRBL/FluidNC controller, zero, probe and send each program — or save the `.ngc` files for another sender.

@@ -256,7 +256,7 @@ private struct ProgramControlsBody<Middle: View>: View {
             }
             if let clamp = program.options.clampZAboveWork {
                 badge("Z clamped to \(formatMM(clamp, decimals: 1))", tint: .orange, systemImage: "arrow.down.to.line.compact")
-                    .help(program.notes.first { $0.hasPrefix("Z clamped") } ?? "Z words above the top of travel lowered to this work Z")
+                    .help(program.notes.first { $0.hasPrefix("Z clamped") } ?? String(localized: "Z words above the top of travel lowered to this work Z"))
             }
         }
     }
@@ -322,7 +322,7 @@ private struct ProgramControlsBody<Middle: View>: View {
     @ViewBuilder
     private var preambleCaption: some View {
         if let line = streamer.resumeLine, let preamble = machine.resumePreamble(line: line), !preamble.isEmpty {
-            Text("Will send: " + preamble.joined(separator: " · ") + " · then line \(line)")
+            Text(String(localized: "Will send: ") + preamble.joined(separator: String(localized: " · ")) + String(localized: " · then line \(line)"))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
@@ -355,8 +355,8 @@ private struct ProgramControlsBody<Middle: View>: View {
 
     private func suspendTitle(_ reason: JobStreamer.SuspendReason) -> String {
         switch reason {
-        case .toolChange(let message): message.isEmpty ? "Tool change" : "Tool change: \(message)"
-        case .programPause: "Program pause (M0)"
+        case .toolChange(let message): message.isEmpty ? String(localized: "Tool change") : String(localized: "Tool change: \(message)")
+        case .programPause: String(localized: "Program pause (M0)")
         }
     }
 
@@ -558,12 +558,12 @@ private struct ProgramControlsBody<Middle: View>: View {
 
     private func issueText(_ issue: HeightMap.Issue) -> String {
         switch issue {
-        case .sideMismatch: "Probed on the other side of the board"
-        case .wcoUnknown: "The machine's work offset is not known yet"
-        case .originUnknown: "The map does not record where the board was when it was probed"
-        case .xyMoved(let dx, let dy): "The work origin moved on the board by X\(formatMM(dx)) Y\(formatMM(dy)) mm since probing"
+        case .sideMismatch: String(localized: "Probed on the other side of the board")
+        case .wcoUnknown: String(localized: "The machine's work offset is not known yet")
+        case .originUnknown: String(localized: "The map does not record where the board was when it was probed")
+        case .xyMoved(let dx, let dy): String(localized: "The work origin moved on the board by X\(formatMM(dx)) Y\(formatMM(dy)) mm since probing")
         case .zRezeroed(let dz): "Z was re-zeroed by \(formatMM(dz)) mm since probing"
-        case .incomplete: "The map is incomplete"
+        case .incomplete: String(localized: "The map is incomplete")
         }
     }
 
@@ -574,7 +574,7 @@ private struct ProgramControlsBody<Middle: View>: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = ["ngc", "nc", "gcode", "tap"].compactMap { UTType(filenameExtension: $0) } + [.plainText]
-        panel.message = "Choose a G-code file to send (absolute metric G0/G1/G2/G3)."
+        panel.message = String(localized: "Choose a G-code file to send (absolute metric G0/G1/G2/G3).")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         awaitingExternal = true
         preview.loadExternal(url: url, toolDiameter: parseNumber(model.parameters.millDiameter))

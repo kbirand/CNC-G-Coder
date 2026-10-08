@@ -2,11 +2,11 @@ import SwiftUI
 
 /// Progress and transport for the program being streamed: progress bar,
 /// "line a / b", elapsed / remaining, Hold–Resume, Stop and E-STOP; the full
-/// variant (Program tab) adds Send, Verify, Send from line… and Continue
-/// while the job is suspended for a tool change. The compact variant
-/// replaces the playback controls over the main canvas while `player.job`
-/// is set. Continue resumes at once unless `machine.confirmContinue` is on;
-/// Send from line… always shows its preamble first.
+/// variant (Program tab) adds Send, Verify and Send from line…. Continue
+/// for a suspended job lives in the tool-change banner above the full bar
+/// (`ProgramControls`), not here. The compact variant replaces the playback
+/// controls over the main canvas while `player.job` is set. Send from line…
+/// always shows its preamble first.
 struct JobBar: View {
     @Bindable var machine: MachineController
     var compact: Bool = false
@@ -18,7 +18,6 @@ struct JobBar: View {
     @State private var fromLineText = ""
     @State private var resumePlan: ResumePlan?
     @State private var actionError: String?
-    @AppStorage(MachineSettings.Keys.confirmContinue) private var confirmContinue = MachineSettings.Defaults.confirmContinue
 
     private var streamer: JobStreamer { machine.streamer }
 
@@ -111,7 +110,6 @@ struct JobBar: View {
 
     @ViewBuilder
     private var transportButtons: some View {
-        continueButton
         holdResumeButton
         stopButton
         EmergencyStopButton(machine: machine, compact: true)
@@ -152,29 +150,13 @@ struct JobBar: View {
             .lineLimit(1)
     }
 
-    private var progressBar: some View {
-        ProgressView(value: min(max(streamer.progressFraction, 0), 1))
-            .progressViewStyle(.linear)
-            .frame(minWidth: 120)
-    }
-
-    private var lineCounter: some View {
-        let total = streamer.program?.lines.count ?? 0
-        return Text("line \(streamer.ackedLine) / \(total)")
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .help("Lines acknowledged by the controller / lines in the program")
-    }
-
-    private var timeLabel: some View {
-        let elapsed = formatDuration(Double(streamer.elapsedSeconds))
-        let remaining = streamer.remaining.map { "−" + formatDuration(max($0, 0)) }
-            ?? (streamer.program.map { formatDuration($0.parsed.totalTime) } ?? "–:––")
-        return Text("\(elapsed) · \(remaining)")
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .help("Elapsed · remaining (estimated from the program's feed rates)")
-    }
+    // The three live pieces are views of their own so that only they
+    // re-render per acknowledgement / second: when the bar's body read
+    // `ackedLine` and `elapsedSeconds` itself, every ack re-laid out the
+    // whole bar — buttons included, ~27 ms a time — and starved the sender.
+    private var progressBar: some View { JobProgressBar(streamer: streamer) }
+    private var lineCounter: some View { JobLineCounter(streamer: streamer) }
+    private var timeLabel: some View { JobTimeLabel(streamer: streamer) }
 
     private var holdResumeButton: some View {
         Group {
@@ -218,17 +200,6 @@ struct JobBar: View {
         .help("Resume a stopped program from a line, with a safe approach preamble")
     }
 
-    @ViewBuilder
-    private var continueButton: some View {
-        if case .suspended = streamer.state {
-            Button("Continue", systemImage: "forward.fill") { continueSuspended() }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .disabled(!machine.isConnected || machine.machineState != .idle || machine.alarmCode != nil)
-                .help("Spindle on, approach the next segment safely and carry on")
-        }
-    }
-
     // MARK: State
 
     private var canStart: Bool {
@@ -242,7 +213,7 @@ struct JobBar: View {
         // The pre-flight walks every move of the program and reads the live
         // status: never on a running job's re-renders.
         guard !streamer.isActive else { return "A job is in progress" }
-        return machine.preflight(program) ?? "Stream \(program.name) to the machine"
+        return machine.preflight(program) ?? String(localized: "Stream \(program.name) to the machine")
     }
 
     /// Why Send is disabled while a program is loaded — shown in full in
@@ -254,19 +225,19 @@ struct JobBar: View {
 
     private var stateText: String {
         switch streamer.state {
-        case .idle: streamer.program == nil ? "No program" : (idleProblem == nil ? "Ready" : "Not ready")
-        case .verifying: "Verifying"
-        case .running: "Running"
-        case .pausedByUser: "Held"
+        case .idle: streamer.program == nil ? String(localized: "No program") : (idleProblem == nil ? String(localized: "Ready") : String(localized: "Not ready"))
+        case .verifying: String(localized: "Verifying")
+        case .running: String(localized: "Running")
+        case .pausedByUser: String(localized: "Held")
         case .suspended(let reason):
             switch reason {
-            case .toolChange: "Tool change"
-            case .programPause: "Paused (M0)"
+            case .toolChange: String(localized: "Tool change")
+            case .programPause: String(localized: "Paused (M0)")
             }
-        case .probing: "Probing"
-        case .stopping: "Stopping…"
-        case .completed: "Completed"
-        case .failed(let why): "Failed: \(why)"
+        case .probing: String(localized: "Probing")
+        case .stopping: String(localized: "Stopping…")
+        case .completed: String(localized: "Completed")
+        case .failed(let why): String(localized: "Failed: \(why)")
         }
     }
 
@@ -290,14 +261,6 @@ struct JobBar: View {
             return
         }
         Task { await streamer.start() }
-    }
-
-    private func continueSuspended() {
-        if confirmContinue {
-            resumePlan = ResumePlan.make(mode: .continueSuspended, line: streamer.resumeLine ?? 1, machine: machine)
-        } else {
-            Task { await machine.continueJob() }
-        }
     }
 
     private var fromLineSheet: some View {
@@ -436,5 +399,38 @@ struct ResumePreambleSheet: View {
             case .continueSuspended: await machine.streamer.continueAfterSuspend(preamble: plan.preamble)
             }
         }
+    }
+}
+
+private struct JobProgressBar: View {
+    var streamer: JobStreamer
+    var body: some View {
+        ProgressView(value: min(max(streamer.progressFraction, 0), 1))
+            .progressViewStyle(.linear)
+            .frame(minWidth: 120)
+    }
+}
+
+private struct JobLineCounter: View {
+    var streamer: JobStreamer
+    var body: some View {
+        let total = streamer.program?.lines.count ?? 0
+        Text("line \(streamer.ackedLine) / \(total)")
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .help("Lines acknowledged by the controller / lines in the program")
+    }
+}
+
+private struct JobTimeLabel: View {
+    var streamer: JobStreamer
+    var body: some View {
+        let elapsed = formatDuration(Double(streamer.elapsedSeconds))
+        let remaining = streamer.remaining.map { "−" + formatDuration(max($0, 0)) }
+            ?? (streamer.program.map { formatDuration($0.parsed.totalTime) } ?? "–:––")
+        Text("\(elapsed) · \(remaining)")
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .help("Elapsed · remaining (estimated from the program's feed rates)")
     }
 }

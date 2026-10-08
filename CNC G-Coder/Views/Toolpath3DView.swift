@@ -18,13 +18,13 @@ enum ViewDirection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .top: "Top"
-        case .bottom: "Bottom"
-        case .front: "Front"
-        case .back: "Back"
-        case .right: "Right"
-        case .left: "Left"
-        case .iso: "Isometric"
+        case .top: String(localized: "Top")
+        case .bottom: String(localized: "Bottom")
+        case .front: String(localized: "Front")
+        case .back: String(localized: "Back")
+        case .right: String(localized: "Right")
+        case .left: String(localized: "Left")
+        case .iso: String(localized: "Isometric")
         }
     }
 

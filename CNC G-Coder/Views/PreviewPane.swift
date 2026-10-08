@@ -39,6 +39,15 @@ struct PreviewPane: View {
         case gcode = "G-code"
         case log = "Log"
         case console = "Console"
+
+        var title: LocalizedStringKey {
+            switch self {
+            case .toolpath: "Toolpath"
+            case .gcode: "G-code"
+            case .log: "Log"
+            case .console: "Console"
+            }
+        }
     }
     /// A failure the user closed; its card stays hidden until the next failure.
     @State private var dismissedFailure: String?
@@ -136,7 +145,7 @@ struct PreviewPane: View {
 
     private var tabPicker: some View {
         Picker("", selection: $tab) {
-            ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            ForEach(Tab.allCases, id: \.self) { Text($0.title).tag($0) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -443,7 +452,7 @@ struct PreviewPane: View {
             ProgressView(value: progress?.fraction ?? 0)
                 .progressViewStyle(.linear)
                 .animation(.easeOut(duration: 0.3), value: progress?.fraction)
-            Text(progress?.label ?? "Starting")
+            Text(progress?.label ?? String(localized: "Starting"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

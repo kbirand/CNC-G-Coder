@@ -62,7 +62,7 @@ struct UserButtonsSection: View {
         .buttonStyle(.bordered)
         .tint(macro.allowWhileRunning ? .orange : .accentColor)
         .disabled(!isEnabled(macro))
-        .help(macro.lines.joined(separator: "  ·  ") + (macro.allowWhileRunning ? "  (allowed while a program runs)" : ""))
+        .help(macro.lines.joined(separator: String(localized: "  ·  ")) + (macro.allowWhileRunning ? String(localized: "  (allowed while a program runs)") : String(localized: "")))
     }
 
     private func isEnabled(_ macro: MachineSettings.Macro) -> Bool {

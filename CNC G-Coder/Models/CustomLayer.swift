@@ -67,9 +67,9 @@ nonisolated enum ShapeGeometry: Codable, Hashable, Sendable {
 
     var kindName: String {
         switch self {
-        case .line(_, let closed): closed ? "Polygon" : "Line"
-        case .rect: "Rectangle"
-        case .circle: "Circle"
+        case .line(_, let closed): closed ? String(localized: "Polygon") : String(localized: "Line")
+        case .rect: String(localized: "Rectangle")
+        case .circle: String(localized: "Circle")
         case .text: "Text"
         }
     }
@@ -255,9 +255,9 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .engrave: "Engrave centreline"
-            case .outside: "Cut outside"
-            case .inside: "Cut inside"
+            case .engrave: String(localized: "Engrave centreline")
+            case .outside: String(localized: "Cut outside")
+            case .inside: String(localized: "Cut inside")
             }
         }
     }
@@ -277,10 +277,10 @@ nonisolated struct CustomLayer: Codable, Hashable, Identifiable, Sendable {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .milling: "Milling"
-            case .engraving: "Engraving"
-            case .silkscreen: "Silkscreen"
-            case .drill: "Drill"
+            case .milling: String(localized: "Milling")
+            case .engraving: String(localized: "Engraving")
+            case .silkscreen: String(localized: "Silkscreen")
+            case .drill: String(localized: "Drill")
             }
         }
         /// The library tools offered for it.

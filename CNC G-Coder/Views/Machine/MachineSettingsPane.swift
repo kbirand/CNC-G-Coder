@@ -33,6 +33,8 @@ struct MachineSettingsPane: View {
     @AppStorage(MachineSettings.Keys.applyBacklash) private var applyBacklash = MachineSettings.Defaults.applyBacklash
     @AppStorage(MachineSettings.Keys.heightMapApplyBelowZ) private var applyBelowZ = MachineSettings.Defaults.heightMapApplyBelowZ
     @AppStorage(MachineSettings.Keys.confirmContinue) private var confirmContinue = MachineSettings.Defaults.confirmContinue
+    @AppStorage(MachineSettings.Keys.autoSaveWorkZero) private var autoSaveWorkZero = MachineSettings.Defaults.autoSaveWorkZero
+    @AppStorage(MachineSettings.Keys.streamWindowBytes) private var streamWindowBytes = MachineSettings.Defaults.streamWindowBytes
 
     var body: some View {
         Form {
@@ -133,6 +135,16 @@ struct MachineSettingsPane: View {
             Text("Off: Continue in the tool-change banner resumes at once (the banner shows the lines it will send). Send from line… always shows its preamble first.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle("Save the work zero when a program is sent", isOn: $autoSaveWorkZero)
+                .help("Each Send adds a Work entry to the Positions tab, named after the program and the time, with the machine coordinates of the work origin")
+            Text("After a crash, reset or re-homing, Use as zero on that entry re-establishes the same origin without touching off again. The newest \(SavedPositionsStore.automaticLimit) are kept; entries you save yourself are never removed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("Stream window (bytes, 0 = automatic):", value: $streamWindowBytes, format: .number.grouping(.never))
+                .help("How many unacknowledged bytes stay in flight while a program streams; 0 picks 128 on USB serial and 512 over Wi‑Fi, or the receive buffer the controller reports if larger")
+            Text("Short segments around corners and holes need many lines per second: on a Wi‑Fi link a small window waits for an acknowledgement every few lines and the cut crawls. Raise it if arcs run slower than the feed; a Grbl board on USB must stay at 128.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             TextField("Height map applies to moves at or below Z (mm):", value: $applyBelowZ, format: numberFormat)
                 .help("Moves below this work Z are warped by the probed surface; travel above it stays flat")
             Text("Rapids above this Z (safe-height travel) are left alone; everything at or below it is warped by the probed surface.")
@@ -173,7 +185,7 @@ private struct AxisCalibrationSection: View {
                     .foregroundStyle(.secondary)
             }
             HStack {
-                TextField("Config file:", text: $configFilename, prompt: Text(reportedFilename.isEmpty ? "as reported by the controller" : reportedFilename))
+                TextField(String(localized: "Config file:"), text: $configFilename, prompt: Text(reportedFilename.isEmpty ? String(localized: "as reported by the controller") : reportedFilename))
                     .help("The FluidNC config file to save into; empty = the one the controller reports with Read")
                 Button("Read") { Task { await readAll() } }
                     .disabled(!available || busy)
@@ -245,9 +257,9 @@ private struct AxisCalibrationSection: View {
                 let value = try await machine.readStepsPerMM(axis)
                 rows[axis, default: CalibrationRow()].current = value
             }
-            message = "Read from the controller (config file \(reportedFilename))."
+            message = String(localized: "Read from the controller (config file \(reportedFilename)).")
         } catch {
-            message = "Error: \(error.localizedDescription)"
+            message = String(localized: "Error: \(error.localizedDescription)")
         }
     }
 
@@ -260,10 +272,10 @@ private struct AxisCalibrationSection: View {
             rows[axis, default: CalibrationRow()].current = change.current
             // The correction has been applied: the next measurement starts from scratch.
             rows[axis, default: CalibrationRow()].measured = rows[axis]?.commanded ?? 100
-            message = "\(axis.rawValue): \(GRBLCommand.number(change.previous)) → \(GRBLCommand.number(change.current)) steps/mm"
+            message = String(localized: "\(axis.rawValue): \(GRBLCommand.number(change.previous)) → \(GRBLCommand.number(change.current)) steps/mm")
                 + (change.savedTo.map { ", saved to \($0)." } ?? ". Running config only — it resets at the next reboot.")
         } catch {
-            message = "Error: \(error.localizedDescription)"
+            message = String(localized: "Error: \(error.localizedDescription)")
         }
     }
 

@@ -29,9 +29,9 @@ struct HeightMapOverlay {
     var legend: String {
         if probing {
             if probingReference { return "Probing the reference at X0/Y0" }
-            return "Probing \(min(map.probedCount + 1, map.totalCount)) / \(map.totalCount)"
+            return String(localized: "Probing \(min(map.probedCount + 1, map.totalCount)) / \(map.totalCount)")
         }
-        var text = "Height map: \(map.nx)×\(map.ny)"
+        var text = String(localized: "Height map: \(map.nx)×\(map.ny)")
         if let range = HeightMapSurface.range(map) {
             text += String(format: " · min %+.3f · max %+.3f mm", range.low, range.high)
         } else {

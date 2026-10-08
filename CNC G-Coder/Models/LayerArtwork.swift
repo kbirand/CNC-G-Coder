@@ -263,8 +263,8 @@ nonisolated struct GerberAperture: Hashable, Sendable {
         func l(_ v: Double) -> String { units.length(v * unit, decimals: units.lengthDecimals + 1) }
         switch shape {
         case .circle: return "Round ⌀\(l(params.first ?? 0))"
-        case .rectangle: return params.count >= 2 ? "Rect \(l(params[0])) × \(l(params[1]))" : "Rect"
-        case .obround: return params.count >= 2 ? "Oval \(l(params[0])) × \(l(params[1]))" : "Oval"
+        case .rectangle: return params.count >= 2 ? String(localized: "Rect \(l(params[0])) × \(l(params[1]))") : String(localized: "Rect")
+        case .obround: return params.count >= 2 ? String(localized: "Oval \(l(params[0])) × \(l(params[1]))") : String(localized: "Oval")
         case .polygon: return "Polygon ⌀\(l(params.first ?? 0))"
         case .macro: return "Macro \(template)"
         }

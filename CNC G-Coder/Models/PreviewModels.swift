@@ -19,17 +19,17 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
 
     var displayName: String {
         switch self {
-        case .front: "Front copper"
-        case .back: "Back copper"
-        case .outline: "Outline"
+        case .front: String(localized: "Front copper")
+        case .back: String(localized: "Back copper")
+        case .outline: String(localized: "Outline")
         case .drill(_, let name): name
         case .millDrill(_, let name): name + " milled"
-        case .maskTop: "Top mask etch"
-        case .maskBottom: "Bottom mask etch"
-        case .silkTop: "Top silkscreen"
-        case .silkBottom: "Bottom silkscreen"
+        case .maskTop: String(localized: "Top mask etch")
+        case .maskBottom: String(localized: "Bottom mask etch")
+        case .silkTop: String(localized: "Top silkscreen")
+        case .silkBottom: String(localized: "Bottom silkscreen")
         case .custom(let ref): ref.name
-        case .test: "Test board"
+        case .test: String(localized: "Test board")
         }
     }
 

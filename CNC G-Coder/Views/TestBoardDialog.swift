@@ -10,9 +10,9 @@ enum TestKind: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .parameters: "Parameter test board"
-        case .backlash: "Backlash test"
-        case .holes: "Hole fit test"
+        case .parameters: String(localized: "Parameter test board")
+        case .backlash: String(localized: "Backlash test")
+        case .holes: String(localized: "Hole fit test")
         }
     }
 
@@ -27,11 +27,11 @@ enum TestKind: String, CaseIterable, Identifiable {
     var explanation: String {
         switch self {
         case .parameters:
-            "Finds the cut depth and feed for production isolation. A grid of patches — rows sweep depth, columns sweep feed — each with 0.2 / 0.3 / 0.4 mm traces. Every trace runs between two probe pads inside a closed isolation moat, so a multimeter tells you whether the trace survived (pad to pad beeps) and whether the isolation is complete (pad to surrounding copper stays silent)."
+            String(localized: "Finds the cut depth and feed for production isolation. A grid of patches — rows sweep depth, columns sweep feed — each with 0.2 / 0.3 / 0.4 mm traces. Every trace runs between two probe pads inside a closed isolation moat, so a multimeter tells you whether the trace survived (pad to pad beeps) and whether the isolation is complete (pad to surrounding copper stays silent).")
         case .backlash:
-            "Measures play in the X and Y axes (75 × 75 mm). Per axis, one straight line is cut in two halves reached from opposite directions: a step where the halves meet is that axis's backlash. A 50 mm square and a Ø30 circle show it too — short sides, an oval. Enter the step in Machine setup → Backlash compensation and cut it again until both lines are straight."
+            String(localized: "Measures play in the X and Y axes (75 × 75 mm). Per axis, one straight line is cut in two halves reached from opposite directions: a step where the halves meet is that axis's backlash. A 50 mm square and a Ø30 circle show it too — short sides, an oval. Enter the step in Machine setup → Backlash compensation and cut it again until both lines are straight.")
         case .holes:
-            "Finds the hole size that fits a pin. Each hole size you list is milled in several variants — the size plus a clearance — the way production mills holes: a spiral down from the surface, then a clean-up circle. Push the pin into each hole of its row and keep the variant that fits the way you want; design the hole at that size. Mill it with the same bit as the real board."
+            String(localized: "Finds the hole size that fits a pin. Each hole size you list is milled in several variants — the size plus a clearance — the way production mills holes: a spiral down from the surface, then a clean-up circle. Push the pin into each hole of its row and keep the variant that fits the way you want; design the hole at that size. Mill it with the same bit as the real board.")
         }
     }
 }
@@ -332,16 +332,16 @@ struct TestBoardDialog: View {
 
     private var summary: String {
         guard let rows = Int(rowsText), let cols = Int(colsText) else {
-            return "Grid values must be whole numbers."
+            return String(localized: "Grid values must be whole numbers.")
         }
         guard let spec, let cell = TestBoardGenerator.cellSize(for: spec) else {
             if rows < 2 || cols < 2 {
-                return "Grid needs at least 2 × 2 combinations."
+                return String(localized: "Grid needs at least 2 × 2 combinations.")
             }
             if rows > TestBoardGenerator.maxRows || cols > TestBoardGenerator.maxCols {
-                return "Grid is limited to \(TestBoardGenerator.maxCols) feeds × \(TestBoardGenerator.maxRows) depths."
+                return String(localized: "Grid is limited to \(TestBoardGenerator.maxCols) feeds × \(TestBoardGenerator.maxRows) depths.")
             }
-            return "Grid doesn't fit this board — patches need at least ≈8.5 × 8 mm each, with room for a full cut around every trace. Reduce steps or enlarge the board (Suggest fills in what fits)."
+            return String(localized: "Grid doesn't fit this board — patches need at least ≈8.5 × 8 mm each, with room for a full cut around every trace. Reduce steps or enlarge the board (Suggest fills in what fits).")
         }
         let lastLetter = Character(UnicodeScalar(64 + spec.cols)!)
         return String(format: "Grid: %d feeds (A–%@) × %d depths (1–%d) = %d patches, each %.1f × %.1f mm.",
@@ -417,7 +417,7 @@ struct TestBoardDialog: View {
     private var holeSummary: String {
         let s = holeSpec
         if numbers(holeSizes) == nil || numbers(holeVariants) == nil {
-            return "Separate the values with spaces and use a point for decimals, e.g. 2 3 4 and -0.05 0 0.05 0.10."
+            return String(localized: "Separate the values with spaces and use a point for decimals, e.g. 2 3 4 and -0.05 0 0.05 0.10.")
         }
         if let problem = s.problem { return problem }
         let count = s.diameters.count * s.offsets.count

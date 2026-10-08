@@ -75,8 +75,8 @@ struct ImportLayersSheet: View {
         guard let slot = item.slot else { return "Not imported" }
         if slot == .drill { return "Added as a drill program" }
         if let current = model.detectedFiles[slot] {
-            return current == item.url ? "Already the \(slot.title.lowercased()) file" : "Replaces \(current.lastPathComponent)"
+            return current == item.url ? String(localized: "Already the \(slot.title.lowercased()) file") : String(localized: "Replaces \(current.lastPathComponent)")
         }
-        return "New \(slot.title.lowercased()) layer"
+        return String(localized: "New \(slot.title.lowercased()) layer")
     }
 }

@@ -17,12 +17,12 @@ final class ShapeEditor: ObservableObject {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .select: "Select"
-            case .line: "Line"
-            case .rectangle: "Rectangle"
-            case .circle: "Circle"
-            case .hole: "Hole"
-            case .text: "Text"
+            case .select: String(localized: "Select")
+            case .line: String(localized: "Line")
+            case .rectangle: String(localized: "Rectangle")
+            case .circle: String(localized: "Circle")
+            case .hole: String(localized: "Hole")
+            case .text: String(localized: "Text")
             }
         }
         var icon: String {
@@ -47,12 +47,12 @@ final class ShapeEditor: ObservableObject {
         }
         var help: String {
             switch self {
-            case .select: "Select (V): click a shape, shift-click to add, drag a box to select several; drag shapes to move them and their handles to resize."
-            case .line: "Line (L): click each point; double-click or Return finishes, clicking the first point closes it into a polygon. Shift constrains to 45° steps."
-            case .rectangle: "Rectangle (R): click or drag from one corner to the opposite one. Shift makes a square."
-            case .circle: "Circle (C): click or drag from the centre out to the radius."
-            case .hole: "Hole (H): click to place a hole of the diameter set in the bar — a filled circle: drilled at its centre on a Drill layer, milled out to its size on a Milling layer cutting inside."
-            case .text: "Text (T): set the text and its height in the bar, then click where the baseline starts."
+            case .select: String(localized: "Select (V): click a shape, shift-click to add, drag a box to select several; drag shapes to move them and their handles to resize.")
+            case .line: String(localized: "Line (L): click each point; double-click or Return finishes, clicking the first point closes it into a polygon. Shift constrains to 45° steps.")
+            case .rectangle: String(localized: "Rectangle (R): click or drag from one corner to the opposite one. Shift makes a square.")
+            case .circle: String(localized: "Circle (C): click or drag from the centre out to the radius.")
+            case .hole: String(localized: "Hole (H): click to place a hole of the diameter set in the bar — a filled circle: drilled at its centre on a Drill layer, milled out to its size on a Milling layer cutting inside.")
+            case .text: String(localized: "Text (T): set the text and its height in the bar, then click where the baseline starts.")
             }
         }
     }
@@ -69,12 +69,12 @@ final class ShapeEditor: ObservableObject {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .left: "Align Left"
-            case .centerX: "Align Horizontal Centres"
-            case .right: "Align Right"
-            case .top: "Align Top"
-            case .centerY: "Align Vertical Centres"
-            case .bottom: "Align Bottom"
+            case .left: String(localized: "Align Left")
+            case .centerX: String(localized: "Align Horizontal Centres")
+            case .right: String(localized: "Align Right")
+            case .top: String(localized: "Align Top")
+            case .centerY: String(localized: "Align Vertical Centres")
+            case .bottom: String(localized: "Align Bottom")
             }
         }
         var icon: String {
@@ -94,8 +94,8 @@ final class ShapeEditor: ObservableObject {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .horizontal: "Distribute Horizontally"
-            case .vertical: "Distribute Vertically"
+            case .horizontal: String(localized: "Distribute Horizontally")
+            case .vertical: String(localized: "Distribute Vertically")
             }
         }
         var icon: String {
@@ -236,7 +236,7 @@ final class ShapeEditor: ObservableObject {
         undoManager?.registerUndo(withTarget: self) { editor in
             editor.setLayer(old, actionName: actionName)
         }
-        undoManager?.setActionName(actionName)
+        undoManager?.setActionName(String(localized: String.LocalizationValue(actionName)))
     }
 
     func updateLayer(_ actionName: String, _ change: (inout CustomLayer) -> Void) {

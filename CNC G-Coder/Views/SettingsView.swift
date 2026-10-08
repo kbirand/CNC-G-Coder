@@ -63,8 +63,42 @@ private struct GeneralSettingsPane: View {
     @AppStorage(SettingsKeys.debounceSeconds) private var debounceSeconds = 1.0
     @AppStorage(SettingsKeys.unitSystem) private var unitSystem = UnitSystem.metric.rawValue
 
+    /// The app language override: "" follows the system, else a language code.
+    /// Stored as macOS's own `AppleLanguages` list, so it applies at the next launch.
+    @State private var appLanguage: String = {
+        let saved = UserDefaults.standard.stringArray(forKey: "AppleLanguages")?.first ?? ""
+        return UserDefaults.standard.bool(forKey: "app.languageOverride") ? String(saved.prefix(2)) : ""
+    }()
+    @State private var languageChanged = false
+
+    private static let languages: [(code: String, name: String)] = [("en", "English"), ("fr", "Français"), ("es", "Español"), ("tr", "Türkçe")]
+
     var body: some View {
         Form {
+            Picker("Language:", selection: $appLanguage) {
+                Text("System").tag("")
+                ForEach(Self.languages, id: \.code) { language in
+                    Text(language.name).tag(language.code)
+                }
+            }
+            .onChange(of: appLanguage) { _, code in
+                if code.isEmpty {
+                    UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+                    UserDefaults.standard.set(false, forKey: "app.languageOverride")
+                } else {
+                    UserDefaults.standard.set([code], forKey: "AppleLanguages")
+                    UserDefaults.standard.set(true, forKey: "app.languageOverride")
+                }
+                languageChanged = true
+            }
+            .help("Language of the app's interface and of the built-in guide. System follows macOS (System Settings → General → Language & Region).")
+            Text(languageChanged ? "Takes effect the next time CNC G-Coder is opened." : "English, French, Spanish and Turkish. Changing it takes effect at the next launch.")
+                .font(.caption)
+                .foregroundStyle(languageChanged ? .orange : .secondary)
+
+            Divider()
+                .padding(.vertical, 4)
+
             Picker("Units:", selection: $unitSystem) {
                 ForEach(UnitSystem.allCases) { unit in
                     Text(unit.title).tag(unit.rawValue)

@@ -13,9 +13,9 @@ nonisolated enum TransportKind: String, Codable, Sendable, CaseIterable {
 
     var title: String {
         switch self {
-        case .tcp: "Wi‑Fi"
-        case .serial: "USB serial"
-        case .simulator: "Simulator"
+        case .tcp: String(localized: "Wi‑Fi")
+        case .serial: String(localized: "USB serial")
+        case .simulator: String(localized: "Simulator")
         }
     }
 }

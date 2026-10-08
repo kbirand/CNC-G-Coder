@@ -1,17 +1,21 @@
 import SwiftUI
 
-/// Named machine positions (port of the pendant's list): Save current…, Save
-/// work zero (the current work origin as a machine point, so it can be
-/// restored after a reset or re-homing), Go with confirmation, Use as zero
-/// (`G10 L2 P0` at the stored point — no motion, confirmed first), Rename /
-/// Overwrite / Delete in the context menu, drag to reorder, plus "Go to
-/// coordinates…" for a typed target. The panel's Positions tab shows it
-/// `tall`; the Machine window's pendant column keeps the short list.
+/// Named machine positions (port of the pendant's list), in two lists chosen
+/// by the Machine / Work switch: **Machine** spots the spindle goes back to
+/// (Save current…, Go with confirmation, Go to coordinates… for a typed
+/// target) and **Work** zeros — the work origin as a machine point, saved by
+/// hand (Save work zero) or by the app whenever a program is sent (Settings →
+/// Machine), so the same origin can be re-established after a reset or
+/// re-homing with Use as zero (`G10 L2 P0` at the stored point — no motion,
+/// confirmed first). Rename / Overwrite / Delete in the context menu, drag to
+/// reorder. The panel's Positions tab shows it `tall`; the Machine window's
+/// pendant column keeps the short list.
 struct PositionsSection: View {
     @Bindable var machine: MachineController
     var tall: Bool = false
 
     @AppStorage(MachineSettings.Keys.jogFeed) private var feed = MachineSettings.Defaults.jogFeed
+    @AppStorage(MachineSettings.Keys.positionsKind) private var kindRaw = SavedPosition.Kind.machine.rawValue
 
     @State private var savePrompt: SavePrompt?
     @State private var newName = ""
@@ -23,10 +27,13 @@ struct PositionsSection: View {
     @State private var notice: Notice?
 
     private var store: SavedPositionsStore { machine.positions }
+    private var kind: SavedPosition.Kind { SavedPosition.Kind(rawValue: kindRaw) ?? .machine }
+    private var shown: [SavedPosition] { store.positions(of: kind) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            kindPicker
             hint
             list
             if let error = store.lastSaveError {
@@ -47,57 +54,89 @@ struct PositionsSection: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            MachineSectionLabel(title: "Positions", detail: store.positions.isEmpty ? nil : "\(store.positions.count)")
-            Button("Save current…", systemImage: "plus") {
-                guard let mpos = machine.status.machinePosition else { return }
-                newName = "Position \(store.positions.count + 1)"
-                savePrompt = SavePrompt(title: "Save position", position: mpos)
+            MachineSectionLabel(title: "Positions", detail: shown.isEmpty ? nil : "\(shown.count)")
+            switch kind {
+            case .machine:
+                Button("Save current…", systemImage: "plus") {
+                    guard let mpos = machine.status.machinePosition else { return }
+                    newName = "Position \(shown.count + 1)"
+                    savePrompt = SavePrompt(title: String(localized: "Save position"), position: mpos)
+                }
+                .disabled(!machine.isConnected || machine.status.machinePosition == nil)
+                .help("Store the machine coordinates the spindle is at now")
+                Button("Go to…", systemImage: "location") { showGoTo = true }
+                    .help("Type a machine coordinate and move there")
+                    .disabled(!machine.isConnected)
+            case .workZero:
+                Button("Save work zero", systemImage: "scope") { saveWorkZero() }
+                    .disabled(!machine.isConnected)
+                    .help("Store where work X0 Y0 Z0 is in machine coordinates, so the zero can be restored later with Use as zero")
             }
-            .disabled(!machine.isConnected || machine.status.machinePosition == nil)
-            .help("Store the machine coordinates the spindle is at now")
-            Button("Save work zero", systemImage: "scope") { saveWorkZero() }
-                .disabled(!machine.isConnected)
-                .help("Store where work X0 Y0 Z0 is in machine coordinates, so the zero can be restored later with Use as zero")
-            Button("Go to…", systemImage: "location") { showGoTo = true }
-                .help("Type a machine coordinate and move there")
-                .disabled(!machine.isConnected)
         }
     }
 
+    private var kindPicker: some View {
+        Picker("Positions list", selection: $kindRaw) {
+            Text("Machine").tag(SavedPosition.Kind.machine.rawValue)
+            Text("Work").tag(SavedPosition.Kind.workZero.rawValue)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .help("Machine: spots the spindle returns to. Work: saved work origins, to restore a zero after a reset or re-homing")
+    }
+
     private var hint: some View {
-        Text("Positions are machine coordinates. Save the work zero so it can be restored after a reset or re-homing.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        Group {
+            switch kind {
+            case .machine:
+                Text("Spots in machine coordinates the spindle can go back to — a parking place, the tool-change spot, the probe clip.")
+            case .workZero:
+                Text(MachineSettings.autoSaveWorkZero
+                     ? "Where work X0 Y0 Z0 was, in machine coordinates. Every Send records one, named after the program and the time (Settings → Machine); Use as zero restores that origin after a reset or re-homing."
+                     : "Where work X0 Y0 Z0 was, in machine coordinates. Use as zero restores that origin after a reset or re-homing. Settings → Machine can record one automatically whenever a program is sent.")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
     private var list: some View {
-        if store.positions.isEmpty {
-            Text("No positions saved yet. Jog to a spot and click Save current, or Save work zero.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+        if shown.isEmpty {
+            Group {
+                switch kind {
+                case .machine:
+                    Text("No machine positions yet. Jog to a spot and click Save current.")
+                case .workZero:
+                    Text("No work zeros yet. Zero the machine on the board and click Save work zero — or send a program with the automatic save on.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
         } else {
             List {
-                ForEach(store.positions) { saved in
+                ForEach(shown) { saved in
                     row(for: saved)
                         .listRowInsets(EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4))
                 }
-                .onMove { source, destination in store.move(fromOffsets: source, toOffset: destination) }
-                .onDelete { offsets in store.delete(at: offsets) }
+                .onMove { source, destination in store.move(fromOffsets: source, toOffset: destination, in: kind) }
+                .onDelete { offsets in store.delete(at: offsets, in: kind) }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .frame(height: min(CGFloat(store.positions.count) * 36 + 8, tall ? 420 : 150))
+            .frame(height: min(CGFloat(shown.count) * 36 + 8, tall ? 420 : 150))
+            .id(kind)
         }
     }
 
     private func row(for saved: SavedPosition) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: saved.name.lowercased().hasPrefix("work zero") ? "scope" : "mappin.circle.fill")
+            Image(systemName: saved.kind == .workZero ? (saved.automatic ? "clock.badge.checkmark" : "scope") : "mappin.circle.fill")
                 .foregroundStyle(Color.accentColor)
+                .help(saved.automatic ? "Recorded by the app when this program was sent" : "")
             VStack(alignment: .leading, spacing: 0) {
                 Text(saved.name)
                     .font(.callout.weight(.semibold))
@@ -108,32 +147,43 @@ struct PositionsSection: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
-            Button("Use as zero", systemImage: "scope") { pendingZero = saved }
-                .disabled(!canSetZero)
-                .help("Make this machine point the work origin (G10 L2) — the machine does not move")
-            Button("Go") { pendingGoTo = saved }
-                .buttonStyle(.borderedProminent)
-                .disabled(!machine.positioningEnabled)
-                .help(machine.positioningEnabled
-                      ? "Move there at the jog feed, after a confirmation — Z first when rising, last when descending. Right-click the row to rename, overwrite or delete it."
-                      : "Needs the machine connected, idle, not in alarm, and a trusted (homed) position")
+            switch saved.kind {
+            case .machine:
+                Button("Go") { pendingGoTo = saved }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!machine.positioningEnabled)
+                    .help(machine.positioningEnabled
+                          ? "Move there at the jog feed, after a confirmation — Z first when rising, last when descending. Right-click the row to rename, overwrite or delete it."
+                          : "Needs the machine connected, idle, not in alarm, and a trusted (homed) position")
+            case .workZero:
+                Button("Use as zero", systemImage: "scope") { pendingZero = saved }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSetZero)
+                    .help("Make this machine point the work origin again (G10 L2) — the machine does not move. Right-click the row to rename, overwrite or delete it.")
+            }
         }
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Use as Work Zero…", systemImage: "scope") { pendingZero = saved }
-                .disabled(!canSetZero)
+            switch saved.kind {
+            case .machine:
+                Button("Use as Work Zero…", systemImage: "scope") { pendingZero = saved }
+                    .disabled(!canSetZero)
+                Button("Overwrite with Current Position", systemImage: "arrow.triangle.2.circlepath") {
+                    if let mpos = machine.status.machinePosition { store.overwrite(saved.id, with: mpos) }
+                }
+                .disabled(machine.status.machinePosition == nil)
+            case .workZero:
+                Button("Go There…", systemImage: "location") { pendingGoTo = saved }
+                    .disabled(!machine.positioningEnabled)
+                Button("Overwrite with Current Work Zero", systemImage: "scope") {
+                    if let wco = machine.workOffset { store.overwrite(saved.id, with: wco) }
+                }
+                .disabled(machine.workOffset == nil)
+            }
             Button("Rename…", systemImage: "pencil") {
                 renameText = saved.name
                 renaming = saved
             }
-            Button("Overwrite with Current Position", systemImage: "arrow.triangle.2.circlepath") {
-                if let mpos = machine.status.machinePosition { store.overwrite(saved.id, with: mpos) }
-            }
-            .disabled(machine.status.machinePosition == nil)
-            Button("Overwrite with Current Work Zero", systemImage: "scope") {
-                if let wco = machine.workOffset { store.overwrite(saved.id, with: wco) }
-            }
-            .disabled(machine.workOffset == nil)
             Divider()
             Button("Delete", systemImage: "trash", role: .destructive) { store.delete(saved.id) }
         }
@@ -153,8 +203,8 @@ struct PositionsSection: View {
                             text: "The controller has not reported its work offset yet. Wait for a status report (or query $#) and try again.")
             return
         }
-        newName = "Work zero " + Date.now.formatted(date: .abbreviated, time: .shortened)
-        savePrompt = SavePrompt(title: "Save work zero", position: wco)
+        newName = String(localized: "Work zero") + " " + Date.now.formatted(date: .abbreviated, time: .shortened)
+        savePrompt = SavePrompt(title: String(localized: "Save work zero"), position: wco, kind: .workZero)
     }
 
     private func goTo(_ position: MachinePosition) {
@@ -188,12 +238,12 @@ private struct PositionAlerts: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .alert(savePrompt?.title ?? "Save position", isPresented: present($savePrompt), presenting: savePrompt) { prompt in
+            .alert(savePrompt?.title ?? String(localized: "Save position"), isPresented: present($savePrompt), presenting: savePrompt) { prompt in
                 TextField("Name", text: $newName)
-                Button("Save") { store.add(name: newName, position: prompt.position) }
+                Button("Save") { store.add(name: newName, position: prompt.position, kind: prompt.kind) }
                 Button("Cancel", role: .cancel) {}
             } message: { prompt in
-                Text("Machine " + prompt.position.summary)
+                Text(String(localized: "Machine ") + prompt.position.summary)
             }
             .alert("Rename position", isPresented: present($renaming)) {
                 TextField("Name", text: $renameText)
@@ -233,6 +283,7 @@ private struct SavePrompt: Identifiable {
     let id = UUID()
     var title: String
     var position: MachinePosition
+    var kind: SavedPosition.Kind = .machine
 }
 
 private struct Notice: Identifiable {

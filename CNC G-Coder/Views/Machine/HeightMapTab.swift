@@ -92,7 +92,7 @@ private struct HeightMapControlsBody: View {
 
     private var gridSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            MachineSectionLabel(title: "Probe grid", detail: "board mm (design frame)")
+            MachineSectionLabel(title: "Probe grid", detail: String(localized: "board mm (design frame)"))
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
                 GridRow {
                     Text("Border X / Y")
@@ -163,7 +163,7 @@ private struct HeightMapControlsBody: View {
         return "mm · work X\(formatMM(p.x, decimals: 1)) Y\(formatMM(p.y, decimals: 1))"
     }
 
-    private func field(_ text: Binding<String>, help: String) -> some View {
+    private func field(_ text: Binding<String>, help: LocalizedStringKey) -> some View {
         TextField("", text: text)
             .textFieldStyle(.roundedBorder)
             .frame(width: 64)
@@ -183,7 +183,7 @@ private struct HeightMapControlsBody: View {
                 set: { interpolationY = HeightMapSurface.clampedLines(max($0, 1)) })
     }
 
-    private func linesField(_ value: Binding<Int>, help: String) -> some View {
+    private func linesField(_ value: Binding<Int>, help: LocalizedStringKey) -> some View {
         TextField("", value: value, format: .number)
             .textFieldStyle(.roundedBorder)
             .frame(width: 64)
@@ -260,7 +260,7 @@ private struct HeightMapControlsBody: View {
     private func progressText(_ map: HeightMap) -> String {
         guard map.referenceZ != nil else { return "Probing the reference at X0/Y0…" }
         let next = min(map.probedCount + 1, map.totalCount)
-        var text = "Probing point \(next) of \(map.totalCount)"
+        var text = String(localized: "Probing point \(next) of \(map.totalCount)")
         if let last = HeightMapSurface.lastProbed(map) {
             text += String(format: " — last Z %+.3f mm", last.z)
         }
@@ -332,7 +332,7 @@ private struct HeightMapControlsBody: View {
     private var useBinding: Binding<Bool> {
         Binding(get: { machine.applyHeightMap }, set: { on in
             if on, let map = model.heightMaps[side], !map.isComplete {
-                message = "The map is incomplete (\(map.probedCount) of \(map.totalCount) points) — probe it again before sending with it."
+                message = String(localized: "The map is incomplete (\(map.probedCount) of \(map.totalCount) points) — probe it again before sending with it.")
             }
             machine.applyHeightMap = on
             Task {
@@ -369,7 +369,7 @@ private struct HeightMapControlsBody: View {
             map.feedSlow = current.feedSlow
         }
         draft = HeightMapDraft(map: map)
-        message = "Border around \(formatMM(bounds.width, decimals: 1))×\(formatMM(bounds.height, decimals: 1)) mm plus 1 mm margin."
+        message = String(localized: "Border around \(formatMM(bounds.width, decimals: 1))×\(formatMM(bounds.height, decimals: 1)) mm plus 1 mm margin.")
     }
 
     private var canProbe: Bool {
@@ -381,7 +381,7 @@ private struct HeightMapControlsBody: View {
         if !machine.canProbe { return "Needs: connected, idle, no alarm, trusted position, known work offset" }
         if streamer.isActive { return "A job is active" }
         let n = draft.map(side: side)?.totalCount ?? 0
-        return "Probe the reference at X0/Y0, then \(n) grid points"
+        return String(localized: "Probe the reference at X0/Y0, then \(n) grid points")
     }
 
     private func probe() {
@@ -399,7 +399,7 @@ private struct HeightMapControlsBody: View {
             try? FileManager.default.removeItem(at: HeightMap.storageURL(projectKey: key, side: side))
         }
         Task { await machine.reprepareLoadedProgram() }
-        message = "Cleared."
+        message = String(localized: "Cleared.")
     }
 
     private func load() {
@@ -413,13 +413,13 @@ private struct HeightMapControlsBody: View {
             model.saveHeightMap(map)
             if map.side == side {
                 draft = HeightMapDraft(map: map)
-                message = "Loaded \(url.lastPathComponent)."
+                message = String(localized: "Loaded \(url.lastPathComponent).")
             } else {
-                message = "Loaded \(url.lastPathComponent) — a \(map.side.title.lowercased())-side map, stored for the \(map.side.title.lowercased()) side. The preview shows the \(side.title.lowercased())."
+                message = String(localized: "Loaded \(url.lastPathComponent) — a \(map.side.title.lowercased())-side map, stored for the \(map.side.title.lowercased()) side. The preview shows the \(side.title.lowercased()).")
             }
             Task { await machine.reprepareLoadedProgram() }
         } catch {
-            message = "Could not load: \(error.localizedDescription)"
+            message = String(localized: "Could not load: \(error.localizedDescription)")
         }
     }
 
@@ -432,9 +432,9 @@ private struct HeightMapControlsBody: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try map.write(to: url)
-            message = "Saved to \(url.lastPathComponent)."
+            message = String(localized: "Saved to \(url.lastPathComponent).")
         } catch {
-            message = "Could not save: \(error.localizedDescription)"
+            message = String(localized: "Could not save: \(error.localizedDescription)")
         }
     }
 
@@ -496,7 +496,7 @@ private struct HeightMapTable: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            MachineSectionLabel(title: "Values", detail: "mm relative to the reference at X0/Y0")
+            MachineSectionLabel(title: "Values", detail: String(localized: "mm relative to the reference at X0/Y0"))
             ScrollView(.horizontal) {
                 Grid(horizontalSpacing: 6, verticalSpacing: 3) {
                     ForEach((0..<map.ny).reversed(), id: \.self) { row in

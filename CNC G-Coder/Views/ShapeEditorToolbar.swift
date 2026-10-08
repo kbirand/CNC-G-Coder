@@ -198,7 +198,7 @@ struct FontMenu: View {
                 ))
             }
         } label: {
-            Text(style.isStrokeFont ? "Single stroke" : style.family)
+            Text(style.isStrokeFont ? String(localized: "Single stroke") : style.family)
                 .lineLimit(1)
                 .frame(maxWidth: 150)
         }

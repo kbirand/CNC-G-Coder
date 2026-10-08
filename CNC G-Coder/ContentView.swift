@@ -32,7 +32,7 @@ struct ContentView: View {
                 .onChange(of: geometry.size.width, initial: true) { _, width in windowPolicy.setContentWidth(width) }
         }
         .animation(.easeInOut(duration: 0.2), value: model.showMachineInspector)
-        .background(WindowAccessor { windowPolicy.attach($0) })
+        .background(WindowAccessor { windowPolicy.attach($0); DebugWindowSnapshot.arm() })
         .onAppear {
             // Dev hook: `-debugOpenSettings 1` opens Settings after launch.
             if UserDefaults.standard.bool(forKey: "debugOpenSettings") {
@@ -97,6 +97,10 @@ struct ContentView: View {
             case "window": openWindow(id: "machine")
             case "1", "true", "YES": model.showMachineInspector = true
             default: break
+            }
+            // Dev hook: `-debugOpenWindow tools|machine|help` opens that window at launch.
+            if let id = UserDefaults.standard.string(forKey: "debugOpenWindow"), !id.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { openWindow(id: id) }
             }
             if let delay = Double(UserDefaults.standard.string(forKey: "debugMachineWindowAfter") ?? ""), delay > 0 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -241,9 +245,9 @@ struct ContentView: View {
 
     private var windowSubtitle: String {
         let base = model.projectURL == nil
-            ? (model.projectFolder?.lastPathComponent ?? "No project")
+            ? (model.projectFolder?.lastPathComponent ?? String(localized: "No project"))
             : (model.projectFolder?.lastPathComponent ?? "")
-        return model.isProjectEdited ? base + " — Edited" : base
+        return model.isProjectEdited ? base + String(localized: " — Edited") : base
     }
 
     @ToolbarContentBuilder

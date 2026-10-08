@@ -89,19 +89,19 @@ struct CustomLayerSections: View {
     private func operationFooter(_ layer: CustomLayer) -> String {
         switch layer.type {
         case .drill:
-            return "Every circle is drilled at its centre with the drill below, pecking by Depth per pass. Other shapes are ignored. Place holes with the Hole tool."
+            return String(localized: "Every circle is drilled at its centre with the drill below, pecking by Depth per pass. Other shapes are ignored. Place holes with the Hole tool.")
         case .engraving, .silkscreen:
-            return "The tool centre runs along every drawn line. A stroke width wider than the tool is cleared with overlapping passes; filled shapes are pocketed."
+            return String(localized: "The tool centre runs along every drawn line. A stroke width wider than the tool is cleared with overlapping passes; filled shapes are pocketed.")
         case .milling:
             break
         }
         switch layer.operation {
         case .engrave:
-            return "The tool centre runs along every drawn line. A shape's stroke width wider than the tool is cleared with overlapping passes; filled shapes are pocketed."
+            return String(localized: "The tool centre runs along every drawn line. A shape's stroke width wider than the tool is cleared with overlapping passes; filled shapes are pocketed.")
         case .outside:
-            return "Closed shapes are cut around the outside, so the piece inside comes out at the drawn size (a cutout, an island). Open lines are engraved."
+            return String(localized: "Closed shapes are cut around the outside, so the piece inside comes out at the drawn size (a cutout, an island). Open lines are engraved.")
         case .inside:
-            return "Closed shapes are cut around the inside, so the hole comes out at the drawn size. Open lines are engraved."
+            return String(localized: "Closed shapes are cut around the inside, so the hole comes out at the drawn size. Open lines are engraved.")
         }
     }
 
@@ -129,7 +129,7 @@ struct CustomLayerSections: View {
                     ))
                     Button("Edit Tool Library…", action: openLibrary)
                 } label: {
-                    Text(current?.name ?? "Custom")
+                    Text(current?.name ?? String(localized: "Custom"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -187,8 +187,8 @@ struct CustomLayerSections: View {
         return tool.shape == .vBit ? "V \(ParametersStore.format(tool.tipAngle))° → \(size)" : "Ø \(size)"
     }
 
-    private func valueRow(_ label: String, _ keyPath: WritableKeyPath<CustomLayer, Double>, _ kind: ParamKind,
-                          minimum: Double? = nil, help: String) -> some View {
+    private func valueRow(_ label: LocalizedStringKey, _ keyPath: WritableKeyPath<CustomLayer, Double>, _ kind: ParamKind,
+                          minimum: Double? = nil, help: LocalizedStringKey) -> some View {
         ParamRowLayout(label) {
             MeasureField(value: field(keyPath, action: "Edit \(label)"), kind: kind, minimum: minimum, plain: true)
         }
@@ -324,8 +324,8 @@ struct ShapeInspector: View {
         )
     }
 
-    private func row(_ label: String, _ id: UUID, _ keyPath: WritableKeyPath<DrawnShape, Double>, _ kind: ParamKind,
-                     minimum: Double? = nil, help: String = "") -> some View {
+    private func row(_ label: LocalizedStringKey, _ id: UUID, _ keyPath: WritableKeyPath<DrawnShape, Double>, _ kind: ParamKind,
+                     minimum: Double? = nil, help: LocalizedStringKey = "") -> some View {
         ParamRowLayout(label) {
             MeasureField(value: value(id, keyPath), kind: kind, minimum: minimum, plain: true)
         }

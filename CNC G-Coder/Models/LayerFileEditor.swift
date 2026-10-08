@@ -34,7 +34,7 @@ nonisolated enum LayerEditTarget: Hashable, Sendable {
     var title: String {
         switch self {
         case .layer(let slot): slot.title
-        case .drill: "Drill file"
+        case .drill: String(localized: "Drill file")
         }
     }
 }
@@ -173,7 +173,7 @@ final class LayerFileEditor: ObservableObject {
                 app.appendLog("\nCannot edit \(url.lastPathComponent): \(error.localizedDescription)\n")
                 let alert = NSAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "\(url.lastPathComponent) cannot be edited"
+                alert.messageText = String(localized: "\(url.lastPathComponent) cannot be edited")
                 alert.informativeText = error.localizedDescription
                 alert.runModal()
                 return

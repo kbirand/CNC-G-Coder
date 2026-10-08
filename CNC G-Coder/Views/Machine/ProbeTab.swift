@@ -93,7 +93,7 @@ struct ProbeControls: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canProbe)
-                .help(refusal ?? "Probe down twice (fast, back off, slow) and set work Z at the trigger point — immune to overshoot. Keep a hand near the stop: the probe lead must be clipped on.")
+                .help(refusal ?? String(localized: "Probe down twice (fast, back off, slow) and set work Z at the trigger point — immune to overshoot. Keep a hand near the stop: the probe lead must be clipped on."))
                 if probing { ProgressView().controlSize(.small) }
                 if machine.status.pins.contains("P") {
                     Label("Probe input closed", systemImage: "bolt.horizontal.circle.fill")
@@ -115,7 +115,7 @@ struct ProbeControls: View {
         .machinePanel()
     }
 
-    private func numberField(_ value: Binding<Double>, unit: String, help: String) -> some View {
+    private func numberField(_ value: Binding<Double>, unit: LocalizedStringKey, help: LocalizedStringKey) -> some View {
         HStack(spacing: 4) {
             TextField("", value: value, format: .number.precision(.fractionLength(0...3)).grouping(.never))
                 .textFieldStyle(.roundedBorder)
