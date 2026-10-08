@@ -217,6 +217,7 @@ private struct ProgramControlsBody<Middle: View>: View {
         }
         .frame(minWidth: 160, maxWidth: 280)
         .disabled(streamer.isActive)
+        .help("The generated program to send — the same list as the sidebar's layer menu. Choosing one prepares it at once (height map, backlash, clamp), so the preview shows what will be sent.")
     }
 
     @ViewBuilder
@@ -339,13 +340,17 @@ private struct ProgramControlsBody<Middle: View>: View {
             if originProbing { ProgressView().controlSize(.small) }
         } else {
             Button("Probe Z", systemImage: "arrow.down.to.line") { navigate(.probe) }
+                .help("Open the Probe tab to touch the new bit off on the copper before continuing")
         }
         Button("Continue", systemImage: "forward.fill") { continueSuspended() }
             .buttonStyle(.borderedProminent)
             .tint(.green)
             .disabled(machine.machineState != .idle || machine.alarmCode != nil)
+            .help(confirmContinue ? "Show the resume preamble, then spindle on, approach the next segment safely and carry on"
+                                  : "Spindle on, approach the next segment safely (the lines listed above) and carry on at once")
         Button("Stop", systemImage: "stop.fill") { Task { await streamer.stop() } }
             .tint(.red)
+            .help("Abandon the job: reset, spindle off. Send from line… can pick it up later.")
     }
 
     private func suspendTitle(_ reason: JobStreamer.SuspendReason) -> String {
@@ -530,17 +535,21 @@ private struct ProgramControlsBody<Middle: View>: View {
             }
             HStack {
                 Button("Re-probe") { reprobe() }
+                    .help("Go to the Height Map tab and probe the board again where it is now")
                 Spacer()
                 if showRunWithoutMap {
                     Button("Run Without Map") { runWithoutMap() }
                         .keyboardShortcut(.cancelAction)
+                        .help("Send the program flat, without the height map")
                 } else {
                     Button("Cancel") { reprobe() }
                         .keyboardShortcut(.cancelAction)
+                        .help("Do not start; the job stays as it is")
                 }
                 Button("Apply Anyway") { applyAnyway() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
+                    .help("Use the map as it is — only if you are sure the board has not moved on the bed since it was probed")
             }
         }
         .padding(20)

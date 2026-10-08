@@ -114,6 +114,9 @@ struct PositionsSection: View {
             Button("Go") { pendingGoTo = saved }
                 .buttonStyle(.borderedProminent)
                 .disabled(!machine.positioningEnabled)
+                .help(machine.positioningEnabled
+                      ? "Move there at the jog feed, after a confirmation — Z first when rising, last when descending. Right-click the row to rename, overwrite or delete it."
+                      : "Needs the machine connected, idle, not in alarm, and a trusted (homed) position")
         }
         .contentShape(Rectangle())
         .contextMenu {

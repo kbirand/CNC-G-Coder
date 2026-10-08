@@ -309,6 +309,7 @@ struct JobBar: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 90)
                     .onSubmit { confirmFromLine() }
+                    .help("The first program line to send (1-based, as in the Program tab). Starts at the line a stopped job reached.")
                 Text("of \(streamer.program?.lines.count ?? 0)")
                     .foregroundStyle(.secondary)
             }
@@ -319,10 +320,12 @@ struct JobBar: View {
                 Spacer()
                 Button("Cancel") { showFromLine = false }
                     .keyboardShortcut(.cancelAction)
+                    .help("Close without sending")
                 Button("Preview Preamble…") { confirmFromLine() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(fromLine == nil)
+                    .help("Show the lines that would be sent before that line — nothing moves until you confirm there")
             }
         }
         .padding(20)
@@ -397,10 +400,12 @@ struct ResumePreambleSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .help("Close without sending; a suspended job stays suspended")
                 Button(plan.mode == .fromLine ? "Send" : "Continue") { run() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(!machine.isConnected || machine.machineState != .idle || machine.alarmCode != nil || !machine.positionTrusted)
+                    .help("Send the preamble above, then the program from line \(plan.line). Needs the machine idle, not in alarm, with a trusted position.")
             }
         }
         .padding(20)

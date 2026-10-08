@@ -67,6 +67,8 @@ struct HelpView: View {
 
                 Bridges: on passes deeper than Bridge Z, the cutter lifts and leaves tabs of material (white in the preview) so the board can't break loose on the final lap. Tab thickness = board bottom − Bridge Z. After machining, snap the board out and file the tabs flush.
 
+                Every drill file has its own settings: select a drill program (or its "… milled" program) and the Drilling, Bits on hand, Hole milling and Heights & direction groups show that file's values — the header names the file. Turning on Mill large holes for the NPTH file changes nothing for the other drill files. A file added to the project starts from the drilling defaults and keeps its own values from then on; they are saved in the project with the file. Applying a preset puts every drill file on the preset's values.
+
                 Peck depth drills in pecks, clearing chips between them (0 = one stroke). Bits on hand: every hole inside a checked bit's range is drilled with that bit, so a job needs only the bits you own; holes no bit covers keep their designed size and the Log names them. Hole milling: turn on Mill large holes and holes from the given size up are cut in circles, spiralling down, with their own end mill (e.g. a 2 mm corn bit — its own tool, depth, pass depth, feeds, spindle and dwell) into a separate "… milled" program. The bit must be smaller than the holes it mills.
                 """)
 
@@ -89,7 +91,7 @@ struct HelpView: View {
                 section("Parameters — solder mask etch", """
                 The .GTS/.GBS layers describe the OPENINGS — pads and vias that must stay exposed. In CNC etch mode the app inverts the layer and pockets each opening with 40% overlapping passes: top-mask-etch.ngc and bottom-mask-etch.ngc.
 
-                The mask tool must be no larger than your smallest opening (smaller openings are skipped — watch the Log). Clear width must be at least half the widest opening; larger values slow G-code generation dramatically. Etch depth only needs to remove cured paint, not copper.
+                The mask tool must be no larger than your smallest opening (smaller openings are skipped — watch the Log). Clear width is measured from the mask layers by default (half the widest opening, plus a little), so every opening is cleared to its centre; entered by hand it must be at least half the widest opening, and larger values slow G-code generation dramatically. Etch depth only needs to remove cured paint, not copper.
                 """)
 
                 section("Preview — layers & colors", """
@@ -164,7 +166,7 @@ struct HelpView: View {
                 • \(ToolLocator.isAppStoreBuild ? "Toolpaths are computed in the app — nothing to install." : "pcb2gcode is built into the app — nothing to install. The native engine (Machine setup → Toolpath engine) does not need it at all.")
                 • Preview failed: the Log tab holds the full output with per-step timings — the error is at the bottom.
                 • Uncut gaps between close traces: the tool is too wide to fit between them. Use a smaller effective tool diameter or increase design clearance.
-                • Mask openings not cleared: opening smaller than the mask tool, or Clear width less than half the opening.
+                • Mask openings not cleared: opening smaller than the mask tool, or a hand-entered Clear width less than half the opening (turn "Clear width from the mask layers" back on).
                 • Long generation times: mask Clear width too large, or very wide isolation width.
                 """)
             }

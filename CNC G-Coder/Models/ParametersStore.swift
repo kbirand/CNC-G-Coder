@@ -39,6 +39,22 @@ nonisolated struct ParameterSnapshot: Sendable {
     var rapidFeed = "2000"
     /// "pcb2gcode" or "native".
     var engine = "pcb2gcode"
+    /// Drill files with settings of their own (by file name): a complete
+    /// snapshot each, with that file's drilling and hole-milling values.
+    var drillLayers: [String: ParameterSnapshot] = [:]
+
+    /// The settings that drive the drill file `file` (its name): its own
+    /// where it has them, otherwise these.
+    func forDrill(file: String) -> ParameterSnapshot {
+        drillLayers[file] ?? self
+    }
+
+    /// The settings behind one program: a drill program (drilled or milled
+    /// holes) uses its drill file's own; every other program uses these.
+    func forLayer(_ kind: LayerKind, files: DetectedFiles) -> ParameterSnapshot {
+        guard let index = kind.drillIndex, files.drills.indices.contains(index) else { return self }
+        return forDrill(file: files.drills[index].lastPathComponent)
+    }
 
     /// The group's travel height, or Machine setup's Safe Z.
     func zSafe(_ group: ParametersStore.MotionGroup) -> String {
@@ -62,6 +78,25 @@ nonisolated struct ParameterSnapshot: Sendable {
 
     func spindleCCW(_ group: ParametersStore.MotionGroup) -> Bool {
         spindleDir[group.rawValue] == "ccw"
+    }
+}
+
+/// A complete set of parameter values: the defaults under their preset
+/// keys, and every drill file's own values (see
+/// ParametersStore.drillLayerValues). What the undo history steps between.
+nonisolated struct ParameterState: Equatable, Sendable {
+    var values: [String: String] = [:]
+    var drillLayers: [String: [String: String]] = [:]
+
+    /// The keys whose value differs from `other`'s: preset keys, and
+    /// "file/key" for a drill file's own value.
+    func changedKeys(from other: ParameterState) -> [String] {
+        var keys = Array(Set(values.keys).union(other.values.keys).filter { values[$0] != other.values[$0] })
+        for file in Set(drillLayers.keys).union(other.drillLayers.keys) {
+            let mine = drillLayers[file] ?? [:], theirs = other.drillLayers[file] ?? [:]
+            keys += Set(mine.keys).union(theirs.keys).filter { mine[$0] != theirs[$0] }.map { "\(file)/\($0)" }
+        }
+        return keys.sorted()
     }
 }
 
@@ -139,6 +174,13 @@ final class ParametersStore: ObservableObject {
     // How far inward each opening is cleared. Must be at least half the widest
     // mask opening. Generation time explodes with larger values, so keep small.
     @AppStorage("param.maskClearWidth") var maskClearWidth = "1.2"
+    // On: the clear width is half the widest opening of the mask layers
+    // (plus a little), so every opening is cleared to its centre and no
+    // wider — maskClearWidth is then only the fallback with no mask files.
+    @AppStorage("param.maskClearAuto") var maskClearAuto = true
+    /// The widest opening of the project's mask layers (mm), measured by
+    /// AppModel whenever the files change; nil without mask layers.
+    @Published var widestMaskOpening: Double?
     @AppStorage("param.maskOverlap") var maskOverlap = "40"
     @AppStorage("param.maskFeed") var maskFeed = "120"
     @AppStorage("param.maskVertFeed") var maskVertFeed = "60"
@@ -211,6 +253,76 @@ final class ParametersStore: ObservableObject {
     /// app) or "native" (NativeToolpathEngine).
     @AppStorage("param.engine") var engine = "pcb2gcode"
 
+    // MARK: - Per drill file
+
+    /// Every drill file's own drilling and hole-milling settings, by file
+    /// name: preset key → value, for the keys it has set itself. A key a
+    /// file has not set follows the drilling defaults above (the values a
+    /// drill file starts from). The sidebar edits the selected drill
+    /// program's file here, never the defaults, so two drill files never
+    /// share a setting. Saved with the project next to its drill files,
+    /// not in UserDefaults.
+    @Published var drillLayerValues: [String: [String: String]] = [:]
+
+    /// The keys a drill file sets for itself: everything in the Drilling
+    /// and Hole milling groups, their heights and spindle directions.
+    static let drillLayerKeys: Set<String> = {
+        var keys = Set(stringFields.map(\.0).filter { $0.hasPrefix("drill") || $0.hasPrefix("holeMill") || $0 == "zDrill" })
+        keys.insert("drillMillLarge")
+        return keys
+    }()
+
+    /// `key` as it applies to the drill file `file` (nil: the default).
+    /// Switches read "true" / "false".
+    func drillValue(_ key: String, file: String?) -> String {
+        if let file, let own = drillLayerValues[file]?[key] { return own }
+        return value(forKey: key) ?? ""
+    }
+
+    func drillBool(_ key: String, file: String?) -> Bool {
+        drillValue(key, file: file) == "true"
+    }
+
+    /// Sets `key` for the drill file `file` only; without a file (or for a
+    /// key no drill file owns) the default itself.
+    func setDrillValue(_ key: String, _ value: String, file: String?) {
+        guard let file, Self.drillLayerKeys.contains(key) else {
+            setValue(value, forKey: key)
+            return
+        }
+        guard drillLayerValues[file]?[key] != value else { return }
+        drillLayerValues[file, default: [:]][key] = value
+    }
+
+    func drillBinding(_ key: String, file: String?) -> Binding<String> {
+        Binding(get: { self.drillValue(key, file: file) }, set: { self.setDrillValue(key, $0, file: file) })
+    }
+
+    func drillBoolBinding(_ key: String, file: String?) -> Binding<Bool> {
+        Binding(get: { self.drillBool(key, file: file) }, set: { self.setDrillValue(key, String($0), file: file) })
+    }
+
+    /// Carries a drill file's settings over to the file replacing it.
+    func renameDrillLayer(_ old: String, to new: String) {
+        guard old != new, let own = drillLayerValues.removeValue(forKey: old) else { return }
+        drillLayerValues[new] = own
+    }
+
+    /// A default's value under its preset key ("true" / "false" for switches).
+    func value(forKey key: String) -> String? {
+        if let path = Self.stringPaths[key] { return self[keyPath: path] }
+        if let path = Self.boolPaths[key] { return String(self[keyPath: path]) }
+        return nil
+    }
+
+    private func setValue(_ value: String, forKey key: String) {
+        if let path = Self.stringPaths[key] {
+            self[keyPath: path] = value
+        } else if let path = Self.boolPaths[key] {
+            self[keyPath: path] = (value == "true")
+        }
+    }
+
     /// The settings groups that have their own heights, extra cut and
     /// directions; the raw value prefixes their parameter keys.
     nonisolated enum MotionGroup: String, CaseIterable, Sendable {
@@ -259,9 +371,12 @@ final class ParametersStore: ObservableObject {
     }
 
     /// The parameter behind one of a group's motion settings, if it has it.
-    func motionBinding(_ field: String, _ group: MotionGroup) -> Binding<String>? {
+    /// The drilling and hole-milling groups' belong to the drill file
+    /// `drill` when one is given.
+    func motionBinding(_ field: String, _ group: MotionGroup, drill file: String? = nil) -> Binding<String>? {
         let key = group.rawValue + field
-        guard let path = Self.stringFields.first(where: { $0.0 == key })?.1 else { return nil }
+        guard let path = Self.stringPaths[key] else { return nil }
+        if let file, Self.drillLayerKeys.contains(key) { return drillBinding(key, file: file) }
         return Binding(get: { self[keyPath: path] }, set: { self[keyPath: path] = $0 })
     }
 
@@ -314,8 +429,12 @@ final class ParametersStore: ObservableObject {
     ]
 
     private static let boolFields: [(String, ReferenceWritableKeyPath<ParametersStore, Bool>)] = [
-        ("drillMillLarge", \.drillMillLarge), ("mirrorYAxis", \.mirrorYAxis), ("zeroStart", \.zeroStart)
+        ("drillMillLarge", \.drillMillLarge), ("mirrorYAxis", \.mirrorYAxis), ("zeroStart", \.zeroStart),
+        ("maskClearAuto", \.maskClearAuto)
     ]
+
+    private static let stringPaths = Dictionary(uniqueKeysWithValues: stringFields)
+    private static let boolPaths = Dictionary(uniqueKeysWithValues: boolFields)
 
     // MARK: - Effective diameters
 
@@ -339,6 +458,17 @@ final class ParametersStore: ObservableObject {
         Self.effectiveDiameter(shape: silkShape, diameter: silkTool, tip: silkVTip, angle: silkVAngle, depth: silkDepth)
     }
 
+    /// The automatic mask clear width: half the widest opening plus 0.05 mm,
+    /// rounded up to 0.01 mm. Nil while no mask layer has been measured.
+    var automaticMaskClearWidth: String? {
+        widestMaskOpening.map { Self.format(ceil(($0 / 2 + 0.05) * 100) / 100) }
+    }
+
+    /// The clear width the mask programs are made with.
+    var effectiveMaskClearWidth: String {
+        (maskClearAuto ? automaticMaskClearWidth : nil) ?? maskClearWidth.trimmingCharacters(in: .whitespaces)
+    }
+
     // MARK: - Isolation passes
 
     /// pcb2gcode cuts n passes when the isolation width is exactly
@@ -359,19 +489,20 @@ final class ParametersStore: ObservableObject {
 
     // MARK: - Drill bits on hand
 
-    var drillBitIDSet: Set<String> {
-        Set(drillBitIDs.split(separator: ",").map(String.init))
+    /// The bits checked for the drill file `file` (nil: the default).
+    func drillBitIDSet(file: String? = nil) -> Set<String> {
+        Set(drillValue("drillBitIDs", file: file).split(separator: ",").map(String.init))
     }
 
-    func setDrillBit(_ id: UUID, onHand: Bool) {
-        var ids = drillBitIDSet
+    func setDrillBit(_ id: UUID, onHand: Bool, file: String? = nil) {
+        var ids = drillBitIDSet(file: file)
         if onHand { ids.insert(id.uuidString) } else { ids.remove(id.uuidString) }
-        drillBitIDs = ids.sorted().joined(separator: ",")
+        setDrillValue("drillBitIDs", ids.sorted().joined(separator: ","), file: file)
     }
 
     /// The checked library drills that still exist, smallest first.
-    var drillBitsOnHand: [MachineTool] {
-        let ids = drillBitIDSet
+    func drillBitsOnHand(file: String? = nil) -> [MachineTool] {
+        let ids = drillBitIDSet(file: file)
         return (library?.drills ?? []).filter { ids.contains($0.id.uuidString) }
     }
 
@@ -379,9 +510,10 @@ final class ParametersStore: ObservableObject {
     /// without one pcb2gcode rounds EVERY hole to the nearest bit — a 3 mm
     /// mounting hole silently becomes a 1 mm one. With ranges, a hole no bit
     /// covers keeps its own size (and shows up in the Log).
-    private var drillBitSpecs: [String] {
-        let tolerance = Double(drillBitTolerance.trimmingCharacters(in: .whitespaces)) ?? 0.1
-        return drillBitsOnHand.map { bit in
+    private func drillBitSpecs(ids: String, tolerance: String) -> [String] {
+        let tolerance = Double(tolerance.trimmingCharacters(in: .whitespaces)) ?? 0.1
+        let checked = Set(ids.split(separator: ",").map(String.init))
+        return (library?.drills ?? []).filter { checked.contains($0.id.uuidString) }.map { bit in
             let range = bit.drillRange(defaultTolerance: tolerance)
             return String(format: "%@mm:-%@mm:+%@mm",
                           Self.format(bit.diameter),
@@ -390,52 +522,91 @@ final class ParametersStore: ObservableObject {
         }
     }
 
+    private var drillBitSpecs: [String] {
+        drillBitSpecs(ids: drillBitIDs, tolerance: drillBitTolerance)
+    }
+
     // MARK: - Snapshot
 
+    /// The defaults, with every drill file that has settings of its own
+    /// under `drillLayers`.
     func snapshot() -> ParameterSnapshot {
-        func t(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces) }
-        var snapshot = baseSnapshot()
-        let values = exportValues()
-        for group in MotionGroup.allCases {
-            let g = group.rawValue
-            if let v = values[g + "TravelZ"] { snapshot.travelZ[g] = t(v) }
-            if let v = values[g + "ChangeZ"] { snapshot.changeZ[g] = t(v) }
-            if let v = values[g + "ExtraCut"] { snapshot.extraCut[g] = t(v) }
-            if let v = values[g + "Direction"] { snapshot.direction[g] = v }
-            if let v = values[g + "SpindleDir"] { snapshot.spindleDir[g] = v }
+        let defaults = exportValues()
+        var snapshot = makeSnapshot(defaults)
+        for (file, own) in drillLayerValues where !own.isEmpty {
+            snapshot.drillLayers[file] = makeSnapshot(defaults.merging(own) { _, own in own })
         }
-        snapshot.rapidFeed = t(rapidFeed)
-        snapshot.engine = engine
         return snapshot
     }
 
-    private func baseSnapshot() -> ParameterSnapshot {
-        func t(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces) }
-        func eff(_ d: Double?, _ fallback: String) -> String { d.map(Self.format) ?? t(fallback) }
-        return ParameterSnapshot(
-            millDiameter: eff(effectiveMillDiameter, millDiameter), isolationWidth: t(isolationWidth), zWork: t(zWork),
-            millFeed: t(millFeed), millVertFeed: t(millVertFeed), millSpeed: t(millSpeed),
-            millOverlap: t(millOverlap), millInfeed: t(millInfeed),
-            zDrill: t(zDrill), drillFeed: t(drillFeed), drillSpeed: t(drillSpeed), drillPeck: t(drillPeck),
-            drillBits: drillBitSpecs, drillHoleAllowance: t(drillHoleAllowance), drillMillLarge: drillMillLarge, drillMillFrom: t(drillMillFrom),
-            holeMillDiameter: t(holeMillDiameter), holeMillDepth: t(holeMillDepth), holeMillInfeed: t(holeMillInfeed),
-            holeMillFeed: t(holeMillFeed), holeMillVertFeed: t(holeMillVertFeed), holeMillSpeed: t(holeMillSpeed),
-            millDwell: t(millDwell), drillDwell: t(drillDwell), holeMillDwell: t(holeMillDwell),
-            cutDwell: t(cutDwell), maskDwell: t(maskDwell), silkDwell: t(silkDwell),
-            cutterDiameter: t(cutterDiameter), zCut: t(zCut), cutFeed: t(cutFeed),
-            cutVertFeed: t(cutVertFeed), cutSpeed: t(cutSpeed), cutInfeed: t(cutInfeed),
-            bridgeWidth: t(bridgeWidth), bridgeCount: t(bridgeCount), zBridge: t(zBridge),
-            maskMode: maskMode,
-            maskTool: eff(effectiveMaskTool, maskTool), maskDepth: t(maskDepth), maskClearWidth: t(maskClearWidth),
-            maskFeed: t(maskFeed), maskVertFeed: t(maskVertFeed), maskSpeed: t(maskSpeed), maskOverlap: t(maskOverlap),
-            silkMode: silkMode,
-            silkTool: eff(effectiveSilkTool, silkTool), silkDepth: t(silkDepth), silkClearWidth: t(silkClearWidth),
-            silkFeed: t(silkFeed), silkVertFeed: t(silkVertFeed), silkSpeed: t(silkSpeed), silkOverlap: t(silkOverlap),
-            zSafe: t(zSafe), zChange: t(zChange), mirrorAxis: t(mirrorAxis),
-            plungeClearance: t(plungeClearance), millDirection: millDirection,
-            originMode: originMode, originX: t(originX), originY: t(originY),
-            mirrorYAxis: mirrorYAxis, zeroStart: zeroStart
+    /// One snapshot from a complete set of values (preset keys).
+    private func makeSnapshot(_ values: [String: String]) -> ParameterSnapshot {
+        func raw(_ key: String) -> String { values[key] ?? "" }
+        func t(_ key: String) -> String { raw(key).trimmingCharacters(in: .whitespaces) }
+        func flag(_ key: String) -> Bool { values[key] == "true" }
+        func eff(_ prefix: String, _ diameterKey: String, depth: String) -> String {
+            Self.effectiveDiameter(shape: raw(prefix + "Shape"), diameter: raw(diameterKey), tip: raw(prefix + "VTip"),
+                                   angle: raw(prefix + "VAngle"), depth: raw(depth)).map(Self.format) ?? t(diameterKey)
+        }
+        var snapshot = ParameterSnapshot(
+            millDiameter: eff("mill", "millDiameter", depth: "zWork"), isolationWidth: t("isolationWidth"), zWork: t("zWork"),
+            millFeed: t("millFeed"), millVertFeed: t("millVertFeed"), millSpeed: t("millSpeed"),
+            millOverlap: t("millOverlap"), millInfeed: t("millInfeed"),
+            zDrill: t("zDrill"), drillFeed: t("drillFeed"), drillSpeed: t("drillSpeed"), drillPeck: t("drillPeck"),
+            drillBits: drillBitSpecs(ids: raw("drillBitIDs"), tolerance: raw("drillBitTolerance")),
+            drillHoleAllowance: t("drillHoleAllowance"), drillMillLarge: flag("drillMillLarge"), drillMillFrom: t("drillMillFrom"),
+            holeMillDiameter: t("holeMillDiameter"), holeMillDepth: t("holeMillDepth"), holeMillInfeed: t("holeMillInfeed"),
+            holeMillFeed: t("holeMillFeed"), holeMillVertFeed: t("holeMillVertFeed"), holeMillSpeed: t("holeMillSpeed"),
+            millDwell: t("millDwell"), drillDwell: t("drillDwell"), holeMillDwell: t("holeMillDwell"),
+            cutDwell: t("cutDwell"), maskDwell: t("maskDwell"), silkDwell: t("silkDwell"),
+            cutterDiameter: t("cutterDiameter"), zCut: t("zCut"), cutFeed: t("cutFeed"),
+            cutVertFeed: t("cutVertFeed"), cutSpeed: t("cutSpeed"), cutInfeed: t("cutInfeed"),
+            bridgeWidth: t("bridgeWidth"), bridgeCount: t("bridgeCount"), zBridge: t("zBridge"),
+            maskMode: raw("maskMode"),
+            maskTool: eff("mask", "maskTool", depth: "maskDepth"), maskDepth: t("maskDepth"),
+            maskClearWidth: (flag("maskClearAuto") ? automaticMaskClearWidth : nil) ?? t("maskClearWidth"),
+            maskFeed: t("maskFeed"), maskVertFeed: t("maskVertFeed"), maskSpeed: t("maskSpeed"), maskOverlap: t("maskOverlap"),
+            silkMode: raw("silkMode"),
+            silkTool: eff("silk", "silkTool", depth: "silkDepth"), silkDepth: t("silkDepth"), silkClearWidth: t("silkClearWidth"),
+            silkFeed: t("silkFeed"), silkVertFeed: t("silkVertFeed"), silkSpeed: t("silkSpeed"), silkOverlap: t("silkOverlap"),
+            zSafe: t("zSafe"), zChange: t("zChange"), mirrorAxis: t("mirrorAxis"),
+            plungeClearance: t("plungeClearance"), millDirection: raw("millDirection"),
+            originMode: raw("originMode"), originX: t("originX"), originY: t("originY"),
+            mirrorYAxis: flag("mirrorYAxis"), zeroStart: flag("zeroStart")
         )
+        for group in MotionGroup.allCases {
+            let g = group.rawValue
+            if let v = values[g + "TravelZ"] { snapshot.travelZ[g] = v.trimmingCharacters(in: .whitespaces) }
+            if let v = values[g + "ChangeZ"] { snapshot.changeZ[g] = v.trimmingCharacters(in: .whitespaces) }
+            if let v = values[g + "ExtraCut"] { snapshot.extraCut[g] = v.trimmingCharacters(in: .whitespaces) }
+            if let v = values[g + "Direction"] { snapshot.direction[g] = v }
+            if let v = values[g + "SpindleDir"] { snapshot.spindleDir[g] = v }
+        }
+        snapshot.rapidFeed = t("rapidFeed")
+        snapshot.engine = raw("engine")
+        return snapshot
+    }
+
+    /// The drilling fields that must be numbers, as they apply to the drill
+    /// file `file` (nil: the defaults). Heights may be empty (= Machine setup).
+    private func drillNumberFields(file: String?) -> [(String, String)] {
+        func v(_ key: String) -> String { drillValue(key, file: file) }
+        var fields: [(String, String)] = [
+            ("Drill depth", v("zDrill")), ("Drill feed", v("drillFeed")), ("Drill spindle", v("drillSpeed")),
+            ("Peck depth", v("drillPeck")), ("Drill bit tolerance", v("drillBitTolerance")),
+            ("Hole tolerance", v("drillHoleAllowance")), ("Drill dwell", v("drillDwell"))
+        ]
+        if drillBool("drillMillLarge", file: file) {
+            fields += [("Mill holes from", v("drillMillFrom")), ("Hole mill diameter", v("holeMillDiameter")),
+                       ("Hole mill depth", v("holeMillDepth")), ("Hole mill pass depth", v("holeMillInfeed")),
+                       ("Hole mill XY feed", v("holeMillFeed")), ("Hole mill Z feed", v("holeMillVertFeed")),
+                       ("Hole mill spindle", v("holeMillSpeed")), ("Hole mill dwell", v("holeMillDwell"))]
+        }
+        for (field, name) in [("drillTravelZ", "Drilling travel Z"), ("drillChangeZ", "Drilling tool-change Z")] {
+            let height = v(field).trimmingCharacters(in: .whitespaces)
+            if !height.isEmpty { fields.append((name, height)) }
+        }
+        return fields
     }
 
     /// Display name of the first field whose value does not parse as a number, or nil if all are valid.
@@ -447,29 +618,26 @@ final class ParametersStore: ObservableObject {
             ("Isolation width", isolationWidth), ("Cut depth", zWork), ("Isolation depth per pass", millInfeed),
             ("Isolation overlap", millOverlap),
             ("Isolation XY feed", millFeed), ("Isolation Z feed", millVertFeed), ("Isolation spindle", millSpeed),
-            ("Drill depth", zDrill), ("Drill feed", drillFeed), ("Drill spindle", drillSpeed),
-            ("Peck depth", drillPeck), ("Drill bit tolerance", drillBitTolerance),
-            ("Hole tolerance", drillHoleAllowance),
             ("Cutter diameter", cutterDiameter), ("Cutout depth", zCut), ("Cutout XY feed", cutFeed),
             ("Cutout Z feed", cutVertFeed), ("Cutout spindle", cutSpeed), ("Cutout pass depth", cutInfeed),
             ("Bridge width", bridgeWidth), ("Bridge Z", zBridge),
             ("Safe Z", zSafe), ("Tool-change Z", zChange), ("Mirror axis", mirrorAxis),
             ("Plunge clearance", plungeClearance),
-            ("Isolation dwell", millDwell), ("Drill dwell", drillDwell), ("Cutout dwell", cutDwell)
+            ("Isolation dwell", millDwell), ("Cutout dwell", cutDwell)
         ]
         doubles += millShape == "vbit"
             ? [("V-bit tip", millVTip), ("V-bit angle", millVAngle)]
             : [("Tool diameter", millDiameter)]
-        if drillMillLarge {
-            doubles += [("Mill holes from", drillMillFrom), ("Hole mill diameter", holeMillDiameter),
-                        ("Hole mill depth", holeMillDepth), ("Hole mill pass depth", holeMillInfeed),
-                        ("Hole mill XY feed", holeMillFeed), ("Hole mill Z feed", holeMillVertFeed),
-                        ("Hole mill spindle", holeMillSpeed), ("Hole mill dwell", holeMillDwell)]
+        doubles += drillNumberFields(file: nil)
+        // Each drill file's own values, named after the file.
+        for file in drillLayerValues.keys.sorted() where !(drillLayerValues[file] ?? [:]).isEmpty {
+            doubles += drillNumberFields(file: file).map { ("\(file): \($0.0)", $0.1) }
         }
         if zeroStart, originMode == "custom" { doubles += [("Origin X", originX), ("Origin Y", originY)] }
         doubles.append(("Rapid feed", rapidFeed))
         // Per-group heights may be empty (= Machine setup); extra cuts may not.
-        for group in MotionGroup.allCases {
+        // (The drilling group's heights are checked above, per drill file.)
+        for group in MotionGroup.allCases where group != .drill {
             let label = group.label
             if group.hasHeights {
                 for (field, name) in [("TravelZ", "travel Z"), ("ChangeZ", "tool-change Z")] {
@@ -485,7 +653,7 @@ final class ParametersStore: ObservableObject {
         if Int(bridgeCount.trimmingCharacters(in: .whitespaces)) == nil { return "Bridge count" }
         if maskMode == "gcode" {
             var maskFields: [(String, String)] = [
-                ("Mask etch depth", maskDepth), ("Mask clear width", maskClearWidth), ("Mask overlap", maskOverlap),
+                ("Mask etch depth", maskDepth), ("Mask clear width", effectiveMaskClearWidth), ("Mask overlap", maskOverlap),
                 ("Mask XY feed", maskFeed), ("Mask Z feed", maskVertFeed), ("Mask spindle", maskSpeed),
                 ("Mask dwell", maskDwell)
             ]
@@ -519,8 +687,9 @@ final class ParametersStore: ObservableObject {
         return values
     }
 
-    /// Applies a preset dictionary; keys absent from the dictionary keep their
-    /// current value, so presets stay compatible across app versions.
+    /// Applies a preset dictionary to the defaults; keys absent from the
+    /// dictionary keep their current value, so presets stay compatible
+    /// across app versions. Drill files' own values are left alone.
     func apply(_ values: [String: String]) {
         for (key, path) in Self.stringFields {
             if let value = values[key] { self[keyPath: path] = value }
@@ -530,14 +699,32 @@ final class ParametersStore: ObservableObject {
         }
     }
 
+    /// Everything the undo history records: the defaults and every drill
+    /// file's own values.
+    func exportState() -> ParameterState {
+        ParameterState(values: exportValues(), drillLayers: drillLayerValues)
+    }
+
+    func restoreState(_ state: ParameterState) {
+        apply(state.values)
+        if drillLayerValues != state.drillLayers { drillLayerValues = state.drillLayers }
+    }
+
     /// Changes whenever any parameter changes; used for preview staleness checks.
     /// Includes the resolved drill bits, so editing a bit in the library
-    /// refreshes the preview too.
+    /// refreshes the preview too, and every drill file's own values.
     var signature: String {
-        (Self.stringFields.map { self[keyPath: $0.1] }
-         + Self.boolFields.map { String(self[keyPath: $0.1]) }
-         + drillBitSpecs)
-            .joined(separator: "|")
+        var parts = Self.stringFields.map { self[keyPath: $0.1] }
+            + Self.boolFields.map { String(self[keyPath: $0.1]) }
+            + drillBitSpecs
+        parts.append(automaticMaskClearWidth ?? "")
+        for file in drillLayerValues.keys.sorted() {
+            let own = drillLayerValues[file] ?? [:]
+            guard !own.isEmpty else { continue }
+            parts.append(file + "{" + own.keys.sorted().map { "\($0)=\(own[$0] ?? "")" }.joined(separator: ",") + "}")
+            parts += drillBitSpecs(ids: drillValue("drillBitIDs", file: file), tolerance: drillValue("drillBitTolerance", file: file))
+        }
+        return parts.joined(separator: "|")
     }
 
     // MARK: - Tools
@@ -631,16 +818,20 @@ final class ParametersStore: ObservableObject {
         return v
     }
 
-    /// Copies a library tool's cutting data into a settings group.
-    func applyTool(_ tool: MachineTool, to section: SettingsSection) {
-        apply(toolValues(tool, for: section))
+    /// Copies a library tool's cutting data into a settings group — for the
+    /// drilling and hole-milling groups, into the drill file `drill` when
+    /// one is given.
+    func applyTool(_ tool: MachineTool, to section: SettingsSection, drill file: String? = nil) {
+        let values = toolValues(tool, for: section)
+        guard let file, section.isDrilling else { return apply(values) }
+        for (key, value) in values { setDrillValue(key, value, file: file) }
     }
 
     /// Whether the group's fields still hold exactly what `tool` would set.
-    func matches(_ tool: MachineTool, for section: SettingsSection) -> Bool {
-        let current = exportValues()
+    func matches(_ tool: MachineTool, for section: SettingsSection, drill file: String? = nil) -> Bool {
+        let file = section.isDrilling ? file : nil
         return toolValues(tool, for: section).allSatisfy { key, value in
-            guard let now = current[key] else { return false }
+            let now = drillValue(key, file: file)
             if let a = Double(now.trimmingCharacters(in: .whitespaces)), let b = Double(value) {
                 return abs(a - b) < 1e-9
             }
@@ -648,29 +839,29 @@ final class ParametersStore: ObservableObject {
         }
     }
 
-    /// The ID field recording which library tool a group was set from.
-    func toolID(for section: SettingsSection) -> String {
+    /// The preset key recording which library tool a group was set from.
+    private static func toolIDKey(_ section: SettingsSection) -> String? {
         switch section {
-        case .isolation: millToolID
-        case .drilling: drillToolID
-        case .holeMill: holeMillToolID
-        case .cutout: cutToolID
-        case .mask: maskToolID
-        case .silk: silkToolID
-        case .custom, .setup: ""
+        case .isolation: "millToolID"
+        case .drilling: "drillToolID"
+        case .holeMill: "holeMillToolID"
+        case .cutout: "cutToolID"
+        case .mask: "maskToolID"
+        case .silk: "silkToolID"
+        case .custom, .setup: nil
         }
     }
 
-    func clearToolID(for section: SettingsSection) {
-        switch section {
-        case .isolation: millToolID = ""
-        case .drilling: drillToolID = ""
-        case .holeMill: holeMillToolID = ""
-        case .cutout: cutToolID = ""
-        case .mask: maskToolID = ""
-        case .silk: silkToolID = ""
-        case .custom, .setup: break
-        }
+    /// The library tool a group was set from (drilling groups: for the drill
+    /// file `drill`, or the defaults).
+    func toolID(for section: SettingsSection, drill file: String? = nil) -> String {
+        guard let key = Self.toolIDKey(section) else { return "" }
+        return drillValue(key, file: section.isDrilling ? file : nil)
+    }
+
+    func clearToolID(for section: SettingsSection, drill file: String? = nil) {
+        guard let key = Self.toolIDKey(section) else { return }
+        setDrillValue(key, "", file: section.isDrilling ? file : nil)
     }
 
     /// Machine setup's Safe Z / Tool-change Z, shown where a group leaves them empty.

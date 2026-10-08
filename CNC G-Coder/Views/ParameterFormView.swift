@@ -44,6 +44,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .setup: .gray
         }
     }
+
+    /// The groups whose settings belong to a drill file (each has its own).
+    var isDrilling: Bool { self == .drilling || self == .holeMill }
 }
 
 extension LayerKind {
@@ -136,10 +139,18 @@ struct ParameterFormView: View {
     }
 
     private func select(section: SettingsSection) {
+        let layers = preview.document?.layers ?? []
+        // Drilled ↔ milled holes of the SAME drill file: its other program,
+        // when there is one (the settings stay that file's either way).
+        if let sibling = playback.selectedLayer?.drillSibling, sibling.settingsSection == section,
+           layers.contains(where: { $0.id == sibling }) {
+            select(layer: sibling)
+            return
+        }
         sectionOverride = section.rawValue
         // If a program for this group exists, bring it into the preview too.
-        if section != .setup,
-           let match = preview.document?.layers.first(where: { $0.id.settingsSection == section }) {
+        if section != .setup, !(section.isDrilling && playback.selectedLayer?.drillIndex != nil),
+           let match = layers.first(where: { $0.id.settingsSection == section }) {
             playback.selectedLayer = match.id
         }
     }
@@ -150,8 +161,59 @@ struct ParameterFormView: View {
         let covered = Set((preview.document?.layers ?? []).compactMap { $0.id.settingsSection })
         // Hole milling only exists as a group while it is switched on.
         return SettingsSection.allCases.filter {
-            $0 != .setup && $0 != .custom && !covered.contains($0) && ($0 != .holeMill || params.drillMillLarge)
+            $0 != .setup && $0 != .custom && !covered.contains($0) && ($0 != .holeMill || anyDrillMillLarge)
         }
+    }
+
+    // MARK: - The selected drill file
+
+    /// The drill file whose settings the Drilling and Hole milling groups
+    /// show: the one behind the selected drill program (drilled or milled
+    /// holes), also while its Hole milling group is opened without a milled
+    /// program. Nil: the defaults a new drill file starts from. Every drill
+    /// file has its own settings (ParametersStore.drillLayerValues).
+    private var drillFile: String? {
+        guard currentSection.isDrilling, let kind = playback.selectedLayer else { return nil }
+        return model.drillFile(for: kind)
+    }
+
+    /// A drilling or hole-milling value of the selected drill file.
+    private func drill(_ key: String) -> Binding<String> {
+        params.drillBinding(key, file: drillFile)
+    }
+
+    private func drillValue(_ key: String) -> String {
+        params.drillValue(key, file: drillFile).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// "Mill large holes" of the selected drill file.
+    private var millLarge: Bool {
+        params.drillBool("drillMillLarge", file: drillFile)
+    }
+
+    /// Whether any drill file of the project mills its large holes.
+    private var anyDrillMillLarge: Bool {
+        let files = model.detectedFiles.drills.map(\.lastPathComponent)
+        guard !files.isEmpty else { return params.drillMillLarge }
+        return files.contains { params.drillBool("drillMillLarge", file: $0) }
+    }
+
+    /// The group's header, naming the drill file the settings belong to.
+    private func drillHeader(_ section: SettingsSection) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            sectionHeader(section)
+            Text(drillFile ?? "Defaults for new drill files")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    /// Whose settings these are, for the groups' footers.
+    private var drillScopeText: String {
+        drillFile.map { "These settings belong to \($0) alone — every drill file has its own." }
+            ?? "Defaults — a drill file added to the project starts from these, then keeps its own settings."
     }
 
     // MARK: - Project
@@ -350,9 +412,11 @@ struct ParameterFormView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(currentSection.title)
                         .font(.headline)
-                    Text(preview.document == nil ? "No preview yet" : "Settings group")
+                    Text(drillFile.map { "Settings of \($0)" } ?? (preview.document == nil ? "No preview yet" : "Settings group"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
             Spacer()
@@ -396,7 +460,7 @@ struct ParameterFormView: View {
             case .drilling: drillingSections; motionSection(.drill)
             case .holeMill:
                 holeMillSections
-                if params.drillMillLarge { motionSection(.holeMill) }
+                if millLarge { motionSection(.holeMill) }
             case .cutout: cutoutSections; motionSection(.cut)
             case .mask:
                 maskSections
@@ -415,9 +479,11 @@ struct ParameterFormView: View {
     /// Empty heights and "Machine default" follow Machine setup.
     @ViewBuilder
     private func motionSection(_ group: ParametersStore.MotionGroup) -> some View {
+        // The drilling groups' heights and spindle are the drill file's own.
+        let file = group == .drill || group == .holeMill ? drillFile : nil
         Section {
-            if group.hasHeights, let travel = params.motionBinding("TravelZ", group),
-               let change = params.motionBinding("ChangeZ", group) {
+            if group.hasHeights, let travel = params.motionBinding("TravelZ", group, drill: file),
+               let change = params.motionBinding("ChangeZ", group, drill: file) {
                 ParamRow("Travel Z", value: travel, kind: .length,
                          help: "Height for moves between cuts in this program. Empty = Machine setup's Safe Z (shown greyed).",
                          placeholder: params.zSafe)
@@ -425,11 +491,11 @@ struct ParameterFormView: View {
                          help: "Height for the tool-change pause and the end of this program. Empty = Machine setup's Tool-change Z (shown greyed).",
                          placeholder: params.zChange)
             }
-            if group.hasExtraCut, let extra = params.motionBinding("ExtraCut", group) {
+            if group.hasExtraCut, let extra = params.motionBinding("ExtraCut", group, drill: file) {
                 ParamRow("Extra cut", value: extra, kind: .length,
                          help: "Every closed contour runs on past its start by this much, so the spot where the loop closes is cut twice and no copper sliver is left there. 0 = off. FlatCAM's default is 0.1–0.2 mm.")
             }
-            if group.hasDirection, let direction = params.motionBinding("Direction", group) {
+            if group.hasDirection, let direction = params.motionBinding("Direction", group, drill: file) {
                 Picker("Milling direction", selection: direction) {
                     Text("Machine default").tag("")
                     Text("Any").tag("any")
@@ -438,7 +504,7 @@ struct ParameterFormView: View {
                 }
                 .help("Climb or conventional milling for this program. Machine default follows Machine setup → Milling direction.")
             }
-            if let spindle = params.motionBinding("SpindleDir", group) {
+            if let spindle = params.motionBinding("SpindleDir", group, drill: file) {
                 Picker("Spindle", selection: spindle) {
                     Text("Clockwise (M3)").tag("cw")
                     Text("Counter-clockwise (M4)").tag("ccw")
@@ -520,64 +586,71 @@ struct ParameterFormView: View {
     private var drillingSections: some View {
         Section {
             toolPicker(.drilling)
-            ParamRow("Drill depth", value: params.$zDrill, kind: .length,
+            ParamRow("Drill depth", value: drill("zDrill"), kind: .length,
                      help: "Final Z for every hole. Board thickness plus a small margin into the spoilboard: 1.6 mm stock → −1.8 mm.")
             holeToleranceRow
-            ParamRow("Peck depth", value: params.$drillPeck, kind: .length,
+            ParamRow("Peck depth", value: drill("drillPeck"), kind: .length,
                      help: "Drill in steps of this depth instead of one plunge: after each step the bit rapids up out of the hole to clear chips, rapids back to just above where it stopped, and feeds on (0.6 on −1.8 mm: −0.6, −1.2, −1.8). Stops chips packing the flutes and snapping small drills in FR4. 0 = one stroke. Drilled holes only — milled holes use their own pass depth.")
-            ParamRow("Drill feed", value: params.$drillFeed, kind: .feed,
+            ParamRow("Drill feed", value: drill("drillFeed"), kind: .feed,
                      help: "Downward feed while drilling. Carbide PCB drills like fast RPM and moderate feed; 60–120 mm/min is typical.")
-            ParamRow("Spindle", value: params.$drillSpeed, kind: .plain("rpm"),
+            ParamRow("Spindle", value: drill("drillSpeed"), kind: .plain("rpm"),
                      help: "Spindle speed while drilling. As high as your spindle allows for clean small holes.")
-            ParamRow("Spindle dwell", value: params.$drillDwell, kind: .plain("s"),
+            ParamRow("Spindle dwell", value: drill("drillDwell"), kind: .plain("s"),
                      help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
         } header: {
-            sectionHeader(.drilling)
+            drillHeader(.drilling)
         } footer: {
-            Text("Each drill file becomes its own program — change bits at the M0 pauses.")
+            Text("\(drillScopeText) Each drill file becomes its own program — change bits at the M0 pauses.")
         }
-        DrillBitsSection(params: params, library: model.tools, openLibrary: { openWindow(id: "tools") })
+        DrillBitsSection(params: params, library: model.tools, drill: drillFile, openLibrary: { openWindow(id: "tools") })
         Section {
             millLargeHolesToggle
-            if params.drillMillLarge {
+            if millLarge {
                 millHolesFromRow
                 LabeledContent("Milled with") {
                     Button(holeMillSummary) { select(section: .holeMill) }
                         .buttonStyle(.link)
-                        .help("Open the hole-milling settings: bit, depth, feeds, spindle and dwell.")
+                        .help("Open this drill file's hole-milling settings: bit, depth, feeds, spindle and dwell.")
                 }
             }
         } header: {
             Label("Hole milling", systemImage: "circle.dashed")
         } footer: {
-            if params.drillMillLarge {
+            if millLarge {
                 holeSplitText
             } else {
-                Text("Off: every hole is drilled.")
+                Text("Off: every hole in this file is drilled.")
             }
         }
     }
 
     private var millLargeHolesToggle: some View {
-        Toggle("Mill large holes", isOn: params.$drillMillLarge)
-            .help("Holes at or above \"Mill holes from\" are not drilled: an end mill cuts them in circles, spiralling down (helical G2 moves), into a separate \"… milled\" program. For holes larger than any drill you own — e.g. 3–4 mm mounting holes with a 2 mm end mill. Smaller holes in the same file are still drilled.")
+        Toggle("Mill large holes", isOn: params.drillBoolBinding("drillMillLarge", file: drillFile))
+            .help("Holes at or above \"Mill holes from\" are not drilled: an end mill cuts them in circles, spiralling down (helical G2 moves), into a separate \"… milled\" program. For holes larger than any drill you own — e.g. 3–4 mm mounting holes with a 2 mm end mill. Smaller holes in the same file are still drilled. This switch belongs to this drill file; other drill files keep their own setting.")
     }
 
     private var holeToleranceRow: some View {
-        ParamRow("Hole tolerance", value: params.$drillHoleAllowance, kind: .length,
+        ParamRow("Hole tolerance", value: drill("drillHoleAllowance"), kind: .length,
                  help: "Added to every hole's designed diameter before bits are picked and large holes are milled: 0.125 on a 0.8 mm hole drills 0.925 mm. Drilled FR4 closes up a little, so leads and pins still fit. 0 = holes exactly as designed.")
     }
 
     private var millHolesFromRow: some View {
-        ParamRow("Mill holes from", value: params.$drillMillFrom, kind: .length,
+        ParamRow("Mill holes from", value: drill("drillMillFrom"), kind: .length,
                  help: "Smallest hole diameter that is milled instead of drilled. At least the milling bit's diameter — a hole the bit's own size is simply plunged.")
     }
 
-    /// This project's hole sizes on either side of "Mill holes from".
+    /// The selected drill file's hole sizes (every drill file's, for the
+    /// defaults) on either side of "Mill holes from".
     private var holeSplit: (milled: [Double], drilled: [Double]) {
-        let allowance = Double(params.drillHoleAllowance.trimmingCharacters(in: .whitespaces)) ?? 0
-        let sizes = Set(model.drillHoleSizes.values.joined().map { (($0 + allowance) * 1000).rounded() / 1000 }).sorted()
-        guard let from = Double(params.drillMillFrom.trimmingCharacters(in: .whitespaces)) else { return ([], sizes) }
+        let allowance = Double(drillValue("drillHoleAllowance")) ?? 0
+        let holes: [Double]
+        if let drillFile, let url = model.detectedFiles.drills.first(where: { $0.lastPathComponent == drillFile }) {
+            holes = model.drillHoleSizes[url] ?? []
+        } else {
+            holes = Array(model.drillHoleSizes.values.joined())
+        }
+        let sizes = Set(holes.map { (($0 + allowance) * 1000).rounded() / 1000 }).sorted()
+        guard let from = Double(drillValue("drillMillFrom")) else { return ([], sizes) }
         return (sizes.filter { $0 >= from - 1e-6 }, sizes.filter { $0 < from - 1e-6 })
     }
 
@@ -594,7 +667,7 @@ struct ParameterFormView: View {
         }
         var text = Text(split.milled.isEmpty ? "No holes are large enough to mill." : "Milled: \(list(split.milled)).")
         if !split.drilled.isEmpty { text = Text("\(text) Drilled: \(list(split.drilled)).") }
-        if let bit = Double(params.holeMillDiameter.trimmingCharacters(in: .whitespaces)) {
+        if let bit = Double(drillValue("holeMillDiameter")) {
             let tooSmall = split.milled.filter { $0 < bit - 1e-6 }
             if !tooSmall.isEmpty {
                 let warning = Text(" The \(units.length(bit)) \(units.lengthSymbol) bit is larger than the \(list(tooSmall)) holes — they would come out too big. Raise \"Mill holes from\" or pick a smaller bit.")
@@ -609,8 +682,8 @@ struct ParameterFormView: View {
 
     private var holeMillSummary: String {
         let units = UnitSystem(rawValue: unitRaw) ?? .metric
-        let tool = model.tools.tool(id: params.holeMillToolID)?.name
-        let size = Double(params.holeMillDiameter).map { "\(units.length($0)) \(units.lengthSymbol) bit" } ?? "bit"
+        let tool = model.tools.tool(id: drillValue("holeMillToolID"))?.name
+        let size = Double(drillValue("holeMillDiameter")).map { "\(units.length($0)) \(units.lengthSymbol) bit" } ?? "bit"
         return tool ?? size
     }
 
@@ -619,35 +692,35 @@ struct ParameterFormView: View {
     private var holeMillSections: some View {
         Section {
             millLargeHolesToggle
-            if params.drillMillLarge {
+            if millLarge {
                 millHolesFromRow
                 holeToleranceRow
                 toolPicker(.holeMill)
-                ParamRow("Bit diameter", value: params.$holeMillDiameter, kind: .length,
+                ParamRow("Bit diameter", value: drill("holeMillDiameter"), kind: .length,
                          help: "Diameter of the end mill (e.g. a 2 mm 2-flute corn bit). The circle is offset inward by half of it, so the hole comes out at its designed size.")
-                ParamRow("Depth", value: params.$holeMillDepth, kind: .length,
+                ParamRow("Depth", value: drill("holeMillDepth"), kind: .length,
                          help: "Final Z of the milled holes — board thickness plus a little: 1.6 mm stock → −1.8 mm.")
-                ParamRow("Pass depth", value: params.$holeMillInfeed, kind: .length,
+                ParamRow("Pass depth", value: drill("holeMillInfeed"), kind: .length,
                          help: "Depth added per turn of the spiral. 0.3–0.6 mm for a 2 mm end mill in FR4. The depth is spread evenly, so the real step may be a little smaller.")
             }
         } header: {
-            sectionHeader(.holeMill)
+            drillHeader(.holeMill)
         } footer: {
-            if params.drillMillLarge {
-                holeSplitText
+            if millLarge {
+                Text("\(drillScopeText) \(holeSplitText)")
             } else {
-                Text("Off: every hole is drilled. Turn this on to mill holes larger than any drill you own.")
+                Text("\(drillScopeText) Off: every hole in this file is drilled. Turn this on to mill holes larger than any drill you own.")
             }
         }
-        if params.drillMillLarge {
+        if millLarge {
             Section("Feeds & spindle") {
-                ParamRow("XY feed", value: params.$holeMillFeed, kind: .feed,
+                ParamRow("XY feed", value: drill("holeMillFeed"), kind: .feed,
                          help: "Speed around the circle.")
-                ParamRow("Z feed", value: params.$holeMillVertFeed, kind: .feed,
+                ParamRow("Z feed", value: drill("holeMillVertFeed"), kind: .feed,
                          help: "Plunge speed down to the start of each hole.")
-                ParamRow("Spindle", value: params.$holeMillSpeed, kind: .plain("rpm"),
+                ParamRow("Spindle", value: drill("holeMillSpeed"), kind: .plain("rpm"),
                          help: "Spindle speed for the hole-milling bit.")
-                ParamRow("Spindle dwell", value: params.$holeMillDwell, kind: .plain("s"),
+                ParamRow("Spindle dwell", value: drill("holeMillDwell"), kind: .plain("s"),
                          help: "Pause after the spindle starts so it is at full speed before the bit touches the board (and after it stops, before a tool change). Written as G4 P in seconds, as GRBL and LinuxCNC expect. 0 = no pause.")
             }
         }
@@ -714,8 +787,15 @@ struct ParameterFormView: View {
                 }
                 ParamRow("Etch depth", value: params.$maskDepth, kind: .length,
                          help: "How deep to mill the cured mask. It only needs to remove the paint layer, not copper: −0.05…−0.15 mm.")
-                ParamRow("Clear width", value: params.$maskClearWidth, kind: .length,
-                         help: "How far inward each opening is pocketed. Must be at least HALF the widest opening on the board. Larger values make G-code generation dramatically slower.")
+                if params.maskClearAuto {
+                    derivedRow("Clear width", params.automaticMaskClearWidth.map { display(length: $0) } ?? "—",
+                               help: "How far inward each opening is pocketed: half the widest opening in the mask layers plus a little, so every opening is cleared right to its centre and no wider (wider makes generation dramatically slower).")
+                } else {
+                    ParamRow("Clear width", value: params.$maskClearWidth, kind: .length,
+                             help: "How far inward each opening is pocketed. Must be at least HALF the widest opening on the board, or the middle of large openings stays covered. Larger values make G-code generation dramatically slower.")
+                }
+                Toggle("Clear width from the mask layers", isOn: params.$maskClearAuto)
+                    .help("Measure the widest opening in the mask layers and clear by half of it, so every opening is cleared to its centre. Off: enter the clear width yourself.")
                 ParamRow("Pass overlap", value: params.$maskOverlap, kind: .plain("%"),
                          help: "Overlap between the pocketing passes inside each opening. Higher leaves fewer paint ridges; 40% is a good default.")
             }
@@ -724,7 +804,11 @@ struct ParameterFormView: View {
         } footer: {
             switch params.maskMode {
             case "gcode":
-                Text("After painting and curing the mask, top-mask-etch.ngc / bottom-mask-etch.ngc mill the pad and via openings clear with overlapping pocketing passes.")
+                if params.maskClearAuto, let widest = params.widestMaskOpening {
+                    Text("Widest opening \(display(length: ParametersStore.format(widest))). After painting and curing the mask, top-mask-etch.ngc / bottom-mask-etch.ngc mill the pad and via openings clear with overlapping pocketing passes.")
+                } else {
+                    Text("After painting and curing the mask, top-mask-etch.ngc / bottom-mask-etch.ngc mill the pad and via openings clear with overlapping pocketing passes.")
+                }
             case "svg":
                 Text("Mask openings are exported as 1:1 SVGs for laser ablation instead of milling.")
             default:
@@ -1101,6 +1185,7 @@ struct ParameterFormView: View {
 
     private func toolPicker(_ section: SettingsSection) -> some View {
         ToolPickerRow(section: section, params: params, library: model.tools,
+                      drill: section.isDrilling ? drillFile : nil,
                       openLibrary: { openWindow(id: "tools") })
     }
 
@@ -1117,6 +1202,13 @@ struct ParameterFormView: View {
     private func derivedRow(_ label: String, _ value: String?, help: String) -> some View {
         ParamRowLayout(label) { ParamReadout(value: value ?? "—", unit: "") }
             .help(help)
+    }
+
+    /// A stored millimetre value in the chosen unit system, with its unit.
+    private func display(length mm: String) -> String {
+        let units = UnitSystem(rawValue: unitRaw) ?? .metric
+        guard let value = Double(mm) else { return mm }
+        return "\(units.length(value, decimals: units.lengthDecimals + 1)) \(units.lengthSymbol)"
     }
 
     private func effectiveDiameterRow(_ diameter: Double?) -> some View {
@@ -1185,17 +1277,19 @@ private struct ToolPickerRow: View {
     let section: SettingsSection
     @ObservedObject var params: ParametersStore
     @ObservedObject var library: ToolLibrary
+    /// Drilling groups: the drill file whose settings the tool fills in.
+    var drill: String? = nil
     let openLibrary: () -> Void
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
 
     var body: some View {
-        let current = library.tool(id: params.toolID(for: section))
-        let edited = current.map { !params.matches($0, for: section) } ?? false
+        let current = library.tool(id: params.toolID(for: section, drill: drill))
+        let edited = current.map { !params.matches($0, for: section, drill: drill) } ?? false
         LabeledContent("Tool") {
             HStack(spacing: 6) {
                 if let current, edited {
-                    Button("Edited") { params.applyTool(current, to: section) }
+                    Button("Edited") { params.applyTool(current, to: section, drill: drill) }
                         .buttonStyle(.borderless)
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -1209,7 +1303,7 @@ private struct ToolPickerRow: View {
                     ForEach(choices) { tool in
                         Toggle(isOn: Binding(
                             get: { current?.id == tool.id },
-                            set: { _ in params.applyTool(tool, to: section) }
+                            set: { _ in params.applyTool(tool, to: section, drill: drill) }
                         )) {
                             Text("\(tool.name)  ·  \(detail(tool))")
                         }
@@ -1217,7 +1311,7 @@ private struct ToolPickerRow: View {
                     Divider()
                     Toggle("Custom", isOn: Binding(
                         get: { current == nil },
-                        set: { _ in params.clearToolID(for: section) }
+                        set: { _ in params.clearToolID(for: section, drill: drill) }
                     ))
                     Button("Edit Tool Library…", action: openLibrary)
                 } label: {
@@ -1244,14 +1338,16 @@ private struct ToolPickerRow: View {
 private struct DrillBitsSection: View {
     @ObservedObject var params: ParametersStore
     @ObservedObject var library: ToolLibrary
+    /// The drill file these bits are for (nil: the defaults).
+    let drill: String?
     let openLibrary: () -> Void
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
 
     var body: some View {
         let units = UnitSystem(rawValue: unitRaw) ?? .metric
-        let tolerance = Double(params.drillBitTolerance.trimmingCharacters(in: .whitespaces)) ?? 0.1
-        let onHand = params.drillBitIDSet
+        let tolerance = Double(params.drillValue("drillBitTolerance", file: drill).trimmingCharacters(in: .whitespaces)) ?? 0.1
+        let onHand = params.drillBitIDSet(file: drill)
         Section {
             if library.drills.isEmpty {
                 Button("Add drill bits in the Tool Library…", action: openLibrary)
@@ -1261,7 +1357,7 @@ private struct DrillBitsSection: View {
                 let range = bit.drillRange(defaultTolerance: tolerance)
                 Toggle(isOn: Binding(
                     get: { onHand.contains(bit.id.uuidString) },
-                    set: { params.setDrillBit(bit.id, onHand: $0) }
+                    set: { params.setDrillBit(bit.id, onHand: $0, file: drill) }
                 )) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(bit.name)
@@ -1272,15 +1368,15 @@ private struct DrillBitsSection: View {
                 }
             }
             if !onHand.isEmpty {
-                ParamRow("Bit tolerance", value: params.$drillBitTolerance, kind: .length,
+                ParamRow("Bit tolerance", value: params.drillBinding("drillBitTolerance", file: drill), kind: .length,
                          help: "For bits without a hole range of their own in the library: the bit drills designed holes up to this much smaller or larger than itself.")
             }
         } header: {
             Text("Bits on hand")
         } footer: {
             Text(onHand.isEmpty
-                 ? "None checked: every hole is drilled at its designed size, one bit per size."
-                 : "Holes are drilled with the checked bit whose range covers them. Holes no bit covers keep their designed size — the Log names them.")
+                 ? "None checked: every hole in this file is drilled at its designed size, one bit per size."
+                 : "Holes in this file are drilled with the checked bit whose range covers them. Holes no bit covers keep their designed size — the Log names them.")
         }
     }
 }

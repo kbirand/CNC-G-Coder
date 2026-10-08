@@ -424,7 +424,13 @@ struct PresetsMenu: View {
                 Text("No presets saved")
             } else {
                 ForEach(presets.keys.sorted(), id: \.self) { name in
-                    Button(name) { params.apply(presets[name] ?? [:]) }
+                    Button(name) {
+                        // A preset is a complete set: every drill file takes
+                        // its drilling values too (one undo step puts the
+                        // files' own values back).
+                        params.drillLayerValues = [:]
+                        params.apply(presets[name] ?? [:])
+                    }
                 }
             }
             Divider()
@@ -442,7 +448,7 @@ struct PresetsMenu: View {
         } label: {
             Label("Presets", systemImage: "slider.horizontal.3")
         }
-        .help("Save and recall complete parameter sets (tools, feeds, depths). Useful per material or per machine.")
+        .help("Save and recall complete parameter sets (tools, feeds, depths). Useful per material or per machine. Applying one also puts every drill file on the preset's drilling settings.")
         .alert("Save Preset", isPresented: $showingSavePreset) {
             TextField("Preset name", text: $presetName)
             Button("Save") {

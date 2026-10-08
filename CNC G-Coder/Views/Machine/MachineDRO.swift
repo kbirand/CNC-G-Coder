@@ -91,6 +91,7 @@ struct MachineDRO: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 100)
                     .onSubmit { applySetAxis(axis) }
+                    .help("The work \(axis.gcodeLetter) the current position should read — 0 makes it the origin, any other value offsets the zero by that much (G10 L20)")
                 Text("mm").foregroundStyle(.secondary)
             }
             HStack {
@@ -100,6 +101,7 @@ struct MachineDRO: View {
                 Button("Set") { applySetAxis(axis) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(parseNumber(editText) == nil)
+                    .help("Apply — the machine does not move; only its idea of work \(axis.gcodeLetter) changes")
             }
         }
         .padding(14)

@@ -323,6 +323,8 @@ nonisolated enum Pcb2GcodeService {
         let products: [Product]
         /// Drill programs: the file to check against the bits on hand.
         var bitCheck: URL?
+        /// Drill programs: that drill file's bits on hand.
+        var bitsOnHand: [String] = []
     }
 
     /// Replaces the value following `flag` (used to send a by-product to scratch).
@@ -356,7 +358,9 @@ nonisolated enum Pcb2GcodeService {
                             products: [product(.outline, p.cutterDiameter)]))
         }
 
+        // Every drill file runs with its own settings.
         for (index, drill) in files.drills.enumerated() {
+            let p = p.forDrill(file: drill.lastPathComponent)
             let stem = drill.deletingPathExtension().lastPathComponent
             let out = drillOutputURL(for: drill, index: index, outputDir: outputDir)
             let milled = millDrillOutputURL(for: drill, index: index, outputDir: outputDir)
@@ -367,7 +371,8 @@ nonisolated enum Pcb2GcodeService {
             jobs.append(Job(label: "Drilling — \(stem)",
                             args: drillArgs(p, drill: allowedDrillInput(drill, p), output: out, millOutput: milled),
                             products: products,
-                            bitCheck: p.drillBits.isEmpty ? nil : out))
+                            bitCheck: p.drillBits.isEmpty ? nil : out,
+                            bitsOnHand: p.drillBits))
         }
 
         // Mask and legend keep top and bottom in ONE run each: pcb2gcode
@@ -516,7 +521,7 @@ nonisolated enum Pcb2GcodeService {
             result.log += native.log
             if !native.succeeded { result.succeeded = false }
             for output in native.outputs where output.layer.isDrill {
-                warnAboutMissingBits(in: output.url, bits: p.drillBits, log: &result.log)
+                warnAboutMissingBits(in: output.url, bits: p.forLayer(output.layer, files: files).drillBits, log: &result.log)
             }
             onStep?(.finished(id: 0), total)
             step = 1
@@ -531,14 +536,15 @@ nonisolated enum Pcb2GcodeService {
             onStep?(.finished(id: id), total)
         }
 
-        // Local rewrites, before the plunge pass (pecks produce plunges it splits).
-        setDwells(p, outputs: result.outputs, log: &result.log)
-        setSpindleDirections(p, outputs: result.outputs, log: &result.log)
+        // Local rewrites, before the plunge pass (pecks produce plunges it
+        // splits). Each program is rewritten with its own settings: a drill
+        // program's are its drill file's.
+        let params: (LayerKind) -> ParameterSnapshot = { p.forLayer($0, files: files) }
+        setDwells(params, outputs: result.outputs, log: &result.log)
+        setSpindleDirections(params, outputs: result.outputs, log: &result.log)
         addExtraCuts(p, outputs: result.outputs, log: &result.log)
-        if let peck = Double(p.drillPeck), peck > 0 {
-            peckDrill(peck: peck, clearance: Double(p.plungeClearance) ?? 0,
-                      outputs: result.outputs.filter { $0.layer.isDrill }, log: &result.log)
-        }
+        peckDrill(params, clearance: Double(p.plungeClearance) ?? 0,
+                  outputs: result.outputs.filter { $0.layer.isDrill }, log: &result.log)
 
         if let clearance = Double(p.plungeClearance), clearance > 0,
            result.succeeded, !result.outputs.isEmpty {
@@ -605,7 +611,7 @@ nonisolated enum Pcb2GcodeService {
         if let cache { pruneCache(cache) }
 
         for job in jobs {
-            if let check = job.bitCheck { warnAboutMissingBits(in: check, bits: p.drillBits, log: &result.log) }
+            if let check = job.bitCheck { warnAboutMissingBits(in: check, bits: job.bitsOnHand, log: &result.log) }
             for product in job.products where fm.fileExists(atPath: product.url.path) {
                 result.outputs.append(GeneratedOutput(layer: product.layer, url: product.url,
                                                       toolDiameter: product.tool.flatMap(Double.init)))
@@ -653,11 +659,11 @@ nonisolated enum Pcb2GcodeService {
     /// gets its own layer's dwell instead: the G4 right after every M3
     /// (spin-up) and M5 (spin-down) is rewritten in seconds, or dropped for 0.
     /// Any other non-zero dwell is converted from milliseconds.
-    private static func setDwells(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) {
+    private static func setDwells(_ params: (LayerKind) -> ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) {
         var summary: [String] = []
         for output in outputs {
             guard let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
-            let seconds = dwellSeconds(for: output.layer, p)
+            let seconds = dwellSeconds(for: output.layer, params(output.layer))
             var out: [String] = []
             // Code lines since the last M3/M5: pcb2gcode's drill programs put a
             // move between M3 and its dwell, so "right after" allows a little gap.
@@ -708,10 +714,10 @@ nonisolated enum Pcb2GcodeService {
 
     /// pcb2gcode always starts the spindle clockwise (M3). Groups set to
     /// counter-clockwise get M4 instead.
-    private static func setSpindleDirections(_ p: ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) {
+    private static func setSpindleDirections(_ params: (LayerKind) -> ParameterSnapshot, outputs: [GeneratedOutput], log: inout String) {
         var reversed: [String] = []
         for output in outputs {
-            guard let group = ParametersStore.MotionGroup(output.layer), p.spindleCCW(group),
+            guard let group = ParametersStore.MotionGroup(output.layer), params(output.layer).spindleCCW(group),
                   let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
             var changed = false
             let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
@@ -855,16 +861,19 @@ nonisolated enum Pcb2GcodeService {
     // MARK: - Peck drilling
 
     /// pcb2gcode drills each hole in one stroke (G1 down, G1 up). Split every
-    /// stroke that enters the board into pecks of `peck` depth: after each
-    /// peck the bit rapids up out of the hole to clear chips, rapids back to
-    /// just above the previous bottom, and feeds on. The final stroke and the
-    /// retract are pcb2gcode's own.
-    private static func peckDrill(peck: Double, clearance: Double, outputs: [GeneratedOutput], log: inout String) {
+    /// stroke that enters the board into pecks of the drill file's peck
+    /// depth: after each peck the bit rapids up out of the hole to clear
+    /// chips, rapids back to just above the previous bottom, and feeds on.
+    /// The final stroke and the retract are pcb2gcode's own.
+    private static func peckDrill(_ params: (LayerKind) -> ParameterSnapshot, clearance: Double,
+                                  outputs: [GeneratedOutput], log: inout String) {
         let retract = max(clearance, 0.2)
         let reentry = 0.1   // stop this far above the previous bottom before feeding again
-        var holes = 0
+        var summary: [String] = []
         for output in outputs {
-            guard let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
+            guard let peck = Double(params(output.layer).drillPeck), peck > 0,
+                  let text = try? String(contentsOf: output.url, encoding: .utf8) else { continue }
+            var holes = 0
             var out: [String] = []
             var modalG: Int?
             var currentZ: Double?
@@ -900,9 +909,12 @@ nonisolated enum Pcb2GcodeService {
             if changed {
                 try? out.joined(separator: "\n").write(to: output.url, atomically: true, encoding: .utf8)
             }
+            if holes > 0 {
+                summary.append(String(format: "%@ %d holes in %.2f mm pecks", output.layer.displayName, holes, peck))
+            }
         }
-        if holes > 0 {
-            log += String(format: "Peck drilling: %d holes drilled in %.2f mm pecks.\n", holes, peck)
+        if !summary.isEmpty {
+            log += "Peck drilling: " + summary.joined(separator: ", ") + ".\n"
         }
     }
 

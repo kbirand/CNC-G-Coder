@@ -39,6 +39,7 @@ struct ConsoleTab: View {
                 .foregroundStyle(.secondary)
             Button("Clear", systemImage: "trash") { machine.clearConsole() }
                 .disabled(machine.console.isEmpty)
+                .help("Empty the console view — the connection itself is untouched")
         }
         .controlSize(.small)
         .padding(.horizontal, 14)
@@ -59,6 +60,7 @@ struct ConsoleTab: View {
             Button("Send") { submit() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(command.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help("Send the line to the controller (Return). ↑ and ↓ in the field recall earlier commands.")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)

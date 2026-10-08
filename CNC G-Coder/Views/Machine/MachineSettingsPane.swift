@@ -54,14 +54,23 @@ struct MachineSettingsPane: View {
                 Text("USB serial").tag(TransportKind.serial.rawValue)
                 Text("Simulator (built in)").tag(TransportKind.simulator.rawValue)
             }
+            .help("How the app reaches the controller: FluidNC over the network (telnet, port 23), any Grbl-type controller over its USB serial port, or the built-in simulator for trying the panel without a machine.")
             TextField("Host:", text: $host)
+                .help("The controller's host name or IP address on the Wi‑Fi link (e.g. fluidnc.local or 192.168.1.50)")
             TextField("Port:", value: $port, format: .number.grouping(.never))
+                .help("TCP port of the telnet service — 23 on FluidNC")
             TextField("Serial port:", text: $serialPath)
+                .help("The USB serial device (/dev/cu.…); the connection bar lists the ports it finds")
             TextField("Baud:", value: $baud, format: .number.grouping(.never))
+                .help("Serial speed: 115200 for Grbl and FluidNC")
             TextField("Status poll (ms):", value: $pollMs, format: .number.grouping(.never))
+                .help("How often the position is asked for (?) — 200 ms gives 5 reports a second; shorter is smoother but loads the link")
             Toggle("Reconnect automatically when the link drops", isOn: $autoReconnect)
+                .help("Open the connection again after it was lost, e.g. a Wi‑Fi dropout. A running job is not resumed by itself.")
             Toggle("Show status reports in the console", isOn: $consoleShowStatus)
+                .help("Include every ? poll and <…> report in the Console tab — useful for diagnosing, noisy otherwise")
             Toggle("Show the Simulator in the connection picker", isOn: $showSimulator)
+                .help("Offer the built-in FluidNC simulator as a third transport in the connection bar")
             Text("A simulated FluidNC for trying the panel without a machine.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -71,8 +80,11 @@ struct MachineSettingsPane: View {
     private var jogSection: some View {
         Section("Jog") {
             TextField("Default feed (mm/min):", value: $jogFeed, format: numberFormat)
+                .help("Jog speed the panel starts with; also used by Go to and saved positions")
             TextField("Default step (mm, 0 = continuous):", value: $jogStep, format: numberFormat)
+                .help("Distance of one click on a jog button when the panel starts")
             TextField("Continuous jog segment (ms):", value: $jogSegmentMs, format: .number.grouping(.never))
+                .help("Length of the short jog commands sent one after another while a button is held, on firmware that cannot cancel a long jog")
             Text("Segment feeding is used when the firmware cannot cancel a long jog in flight (Grbl, or FluidNC without soft limits); shorter segments stop sooner but load the link more.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -82,10 +94,15 @@ struct MachineSettingsPane: View {
     private var probeSection: some View {
         Section("Z probe") {
             TextField("Fast feed (mm/min):", value: $probeFeedFast, format: numberFormat)
+                .help("Speed of the first probe pass, which only has to find the surface")
             TextField("Slow feed (mm/min):", value: $probeFeedSlow, format: numberFormat)
+                .help("Speed of the second pass, which sets the Z — slower is more precise")
             TextField("Max travel (mm):", value: $probeMaxTravel, format: numberFormat)
+                .help("How far down a probe may go before it gives up; the probe fails (no alarm) if nothing is touched")
             TextField("Retract after probe (mm):", value: $probeRetract, format: numberFormat)
+                .help("How far the bit backs off between the passes and after the last one")
             TextField("Plate thickness (mm):", value: $probePlateThickness, format: numberFormat)
+                .help("What work Z reads at the trigger point: 0 for the bit touching the copper, the plate's thickness when probing on a touch plate")
             Text("0 when the bit touches the copper itself (clip on the board); the plate's thickness when probing through a touch plate on the mask side.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -95,21 +112,29 @@ struct MachineSettingsPane: View {
     private var motionSection: some View {
         Section("Motion") {
             TextField("Safe work Z for Go to Work Zero (mm):", value: $safeZWork, format: numberFormat)
+                .help("Go to Work Zero first rises to this work Z, then moves over X0 Y0 — high enough to clear clamps")
             TextField("Safe Z below top of travel (mm):", value: $safeZBelowTop, format: numberFormat)
+                .help("Safe Z and the parked height for tool changes: this far below the top of the Z travel, so the move never hits the limit switch")
             TextField("Spindle minimum (rpm):", value: $spindleMin, format: numberFormat)
+                .help("Lowest speed the panel's Spindle button will send — the speed your spindle actually starts at")
             TextField("Spindle maximum (rpm):", value: $spindleMax, format: numberFormat)
+                .help("Highest speed the panel's Spindle button will send")
             TextField("Spindle warm-up before resuming (s):", value: $spindleWarmup, format: numberFormat)
+                .help("Pause after the spindle is switched on in a resume preamble (Continue, Send from line) before the bit moves")
         }
     }
 
     private var programSection: some View {
         Section("Programs") {
             Toggle("Apply backlash compensation when sending", isOn: $applyBacklash)
+                .help("Rewrite every program sent to the machine for the play set in Machine setup (the program files on disk are not changed)")
             Toggle("Confirm before continuing after a tool change", isOn: $confirmContinue)
+                .help("Show the resume preamble in a sheet before Continue sends it, instead of resuming at once")
             Text("Off: Continue in the tool-change banner resumes at once (the banner shows the lines it will send). Send from line… always shows its preamble first.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("Height map applies to moves at or below Z (mm):", value: $applyBelowZ, format: numberFormat)
+                .help("Moves below this work Z are warped by the probed surface; travel above it stays flat")
             Text("Rapids above this Z (safe-height travel) are left alone; everything at or below it is warped by the probed surface.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -149,11 +174,13 @@ private struct AxisCalibrationSection: View {
             }
             HStack {
                 TextField("Config file:", text: $configFilename, prompt: Text(reportedFilename.isEmpty ? "as reported by the controller" : reportedFilename))
+                    .help("The FluidNC config file to save into; empty = the one the controller reports with Read")
                 Button("Read") { Task { await readAll() } }
                     .disabled(!available || busy)
                     .help("Reads the config filename and the current steps/mm of X and Y from the controller")
             }
             Toggle("Save to the config file after applying (survives a reboot)", isOn: $saveToFile)
+                .help("Also run $CD=<config file> after Apply, which writes the running configuration to that file; off, the new steps/mm last until the controller reboots")
             ForEach([Axis.x, Axis.y], id: \.self) { axis in
                 axisRows(axis)
             }
@@ -181,7 +208,9 @@ private struct AxisCalibrationSection: View {
                 .monospacedDigit()
         }
         TextField("\(axis.rawValue) jog commanded (mm):", value: binding(axis, \.commanded), format: distanceFormat)
+            .help("The distance you told the machine to move along \(axis.rawValue) (after taking up the backlash)")
         TextField("\(axis.rawValue) travel measured (mm):", value: binding(axis, \.measured), format: distanceFormat)
+            .help("The distance the \(axis.rawValue) axis really moved, by indicator or ruler")
         HStack {
             LabeledContent("New \(axis.rawValue) steps/mm:") {
                 Text(corrected.map { GRBLCommand.number($0) } ?? "—")
@@ -193,6 +222,7 @@ private struct AxisCalibrationSection: View {
                 Task { await apply(axis, corrected) }
             }
             .disabled(!available || busy || corrected == nil || row.current == nil || abs(row.commanded - row.measured) < 1e-6)
+            .help("Write the new steps/mm to the controller ($/axes/\(axis.rawValue.lowercased())/steps_per_mm=) and, with the toggle above, save it to the config file")
         }
     }
 

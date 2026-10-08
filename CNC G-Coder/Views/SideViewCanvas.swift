@@ -95,10 +95,10 @@ struct SideViewCanvas: View {
         case .outline:
             add("zcut", p.zCut)
             add("zbridge", p.zBridge)
-        case .drill:
-            add("zdrill", p.zDrill)
-        case .millDrill:
-            add("zmill", p.holeMillDepth)
+        case .drill(let index, let name):
+            add("zdrill", p.drillValue("zDrill", file: model.drillFile(for: .drill(index: index, name: name))))
+        case .millDrill(let index, let name):
+            add("zmill", p.drillValue("holeMillDepth", file: model.drillFile(for: .millDrill(index: index, name: name))))
         case .maskTop, .maskBottom:
             add("etch", p.maskDepth)
         case .silkTop, .silkBottom:

@@ -374,7 +374,7 @@ extension AppModel {
         case .outline:
             return ToolGeometry(kind: .endMill, diameter: value(p.cutterDiameter, 1))
         case .millDrill:
-            return ToolGeometry(kind: .endMill, diameter: value(p.holeMillDiameter, 1))
+            return ToolGeometry(kind: .endMill, diameter: value(p.drillValue("holeMillDiameter", file: drillFile(for: kind)), 1))
         case .drill(let index, _):
             // The smallest hole in that drill file — the first bit it asks for.
             let file = index < detectedFiles.drills.count ? detectedFiles.drills[index] : nil

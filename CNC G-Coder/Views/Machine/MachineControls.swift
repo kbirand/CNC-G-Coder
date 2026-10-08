@@ -129,5 +129,6 @@ struct MachineControls: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(!machine.isConnected || machine.jobLocksControls)
+        .help("More: Sleep ($SLP — steppers and spindle off until a reset), Safety Door (the door-open hold), and queries whose answers appear in the console: parser state ($G), work offsets ($#), build info ($I)")
     }
 }

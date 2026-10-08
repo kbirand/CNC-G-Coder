@@ -115,6 +115,7 @@ private struct MachineWindowBody: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .help("Program: choose and send a program, with its text. Probe: Z touch-off. Height Map: probe the board surface for autolevel. Console: the raw conversation with the controller. Macros: named command lists.")
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             Divider()

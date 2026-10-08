@@ -16,12 +16,12 @@ extension AppModel {
     /// Typing "0.25" changes a field four times; consecutive edits of the
     /// same single parameter within a short while are one undo step.
     func noteParameterChange() {
-        let current = parameters.exportValues()
+        let current = parameters.exportState()
         let previous = lastParameterValues
         guard current != previous else { return }
         lastParameterValues = current
 
-        let changed = current.keys.filter { current[$0] != previous[$0] }
+        let changed = current.changedKeys(from: previous)
         let now = Date()
         if changed.count == 1, let key = changed.first, let last = lastParameterEdit,
            last.key == key, now.timeIntervalSince(last.date) < 1.5,
@@ -37,13 +37,13 @@ extension AppModel {
     private static let parameterActionName = "Change Parameter"
 
     /// Puts a whole set of parameter values back (undo / redo).
-    func restoreParameters(_ values: [String: String]) {
-        let current = parameters.exportValues()
+    func restoreParameters(_ state: ParameterState) {
+        let current = parameters.exportState()
         undoManager?.registerUndo(withTarget: self) { model in model.restoreParameters(current) }
         resignTextFieldFocus()   // a focused field would keep showing what was typed
         lastParameterEdit = nil
-        lastParameterValues = values   // so the change observer does not record this as a new edit
-        parameters.apply(values)
+        lastParameterValues = state   // so the change observer does not record this as a new edit
+        parameters.restoreState(state)
     }
 
     // MARK: - Layer files
@@ -67,7 +67,7 @@ extension AppModel {
     /// undone into this one.
     func clearUndoHistory() {
         undoManager?.removeAllActions()
-        lastParameterValues = parameters.exportValues()
+        lastParameterValues = parameters.exportState()
         lastParameterEdit = nil
     }
 }

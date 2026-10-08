@@ -16,8 +16,11 @@ struct OverridesView: View {
             overrideRow("Rapid", value: machine.status.overrides?.rapid, range: "25/50/100 %") {
                 HStack(spacing: 4) {
                     Button("25") { machine.overrideRapid(25) }
+                        .help("Rapids (G0) at a quarter speed — for the first run of a program, or to watch a move closely")
                     Button("50") { machine.overrideRapid(50) }
+                        .help("Rapids (G0) at half speed")
                     Button("100") { machine.overrideRapid(100) }
+                        .help("Rapids (G0) at full speed")
                 }
             }
             overrideRow("Spindle", value: machine.status.overrides?.spindle, range: "50–200 %") {
@@ -42,18 +45,30 @@ struct OverridesView: View {
             Spacer(minLength: 0)
             buttons()
         }
-        .help("\(title) override, \(range)")
+        .help(overrideHelp(title, range: range))
+    }
+
+    private func overrideHelp(_ title: String, range: String) -> String {
+        switch title {
+        case "Feed": "Scales every cutting feed (G1/G2/G3) of the running program, \(range). Slow down when the cut sounds laboured; the program itself is not changed."
+        case "Rapid": "Scales the rapid (G0) moves, \(range). Lower it to watch a program's first run at a safe pace."
+        default: "Scales the spindle speed (S), \(range) — the controller reports the percentage in use."
+        }
     }
 
     private func stepButtons(minus10: @escaping () -> Void, minus1: @escaping () -> Void, reset: @escaping () -> Void,
                              plus1: @escaping () -> Void, plus10: @escaping () -> Void) -> some View {
         HStack(spacing: 4) {
             Button("−10", action: minus10)
+                .help("10 % slower. Takes effect at once, even mid-program — the controller reports the value it is using.")
             Button("−1", action: minus1)
+                .help("1 % slower")
             Button("100") { reset() }
                 .help("Reset to 100 %")
             Button("+1", action: plus1)
+                .help("1 % faster")
             Button("+10", action: plus10)
+                .help("10 % faster. Takes effect at once, even mid-program — the controller reports the value it is using.")
         }
     }
 }

@@ -34,6 +34,10 @@ nonisolated struct ProjectDocument: Codable, Sendable {
         /// Links: a security-scoped bookmark, so the app may use the item
         /// again after a relaunch in the sandbox.
         var bookmark: Data?
+        /// Drill files: the file's own drilling and hole-milling settings
+        /// (ParametersStore.drillLayerValues — preset keys, only the values
+        /// that differ from the project's defaults in `parameters`).
+        var parameters: [String: String]?
 
         /// The linked item, through its bookmark when there is one.
         var linkedURL: URL {
@@ -123,7 +127,7 @@ nonisolated struct ProjectDocument: Codable, Sendable {
     /// `layers`/`drills` are the files to pack, with their original locations.
     static func writePackage(_ document: ProjectDocument, to url: URL,
                              layers: [(slot: String, file: URL, origin: URL?)],
-                             drills: [(file: URL, origin: URL?)]) throws -> ProjectDocument {
+                             drills: [(file: URL, origin: URL?, parameters: [String: String]?)]) throws -> ProjectDocument {
         let fm = FileManager.default
         let scratch = (try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true))
             ?? fm.temporaryDirectory
@@ -141,7 +145,11 @@ nonisolated struct ProjectDocument: Codable, Sendable {
         }
         document.layers = [:]
         for layer in layers { document.layers[layer.slot] = try pack(layer.file, origin: layer.origin) }
-        document.drills = try drills.map { try pack($0.file, origin: $0.origin) }
+        document.drills = try drills.map { drill in
+            var stored = try pack(drill.file, origin: drill.origin)
+            stored.parameters = drill.parameters
+            return stored
+        }
         document.version = 3
 
         let encoder = JSONEncoder()

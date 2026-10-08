@@ -96,35 +96,40 @@ private struct HeightMapControlsBody: View {
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
                 GridRow {
                     Text("Border X / Y")
-                    field($draft.originX); field($draft.originY)
+                    field($draft.originX, help: "Lower-left corner of the probe grid, in the board's design coordinates (the Gerber frame, as in the preview)")
+                    field($draft.originY, help: "Lower-left corner of the probe grid, in the board's design coordinates (the Gerber frame, as in the preview)")
                     Button("Auto", systemImage: "wand.and.stars") { autoGrid() }
                         .help("Border around the shown program's cut area plus 1 mm, points about 10 mm apart")
                         .disabled(autoBounds == nil)
                 }
                 GridRow {
                     Text("Border W / H")
-                    field($draft.width); field($draft.height)
+                    field($draft.width, help: "Size of the probe grid. It should cover everything the program cuts, with a little margin.")
+                    field($draft.height, help: "Size of the probe grid. It should cover everything the program cuts, with a little margin.")
                     Text(workEquivalent).font(.caption).foregroundStyle(.secondary)
                 }
                 GridRow {
                     Text("Points X / Y")
-                    field($draft.nx); field($draft.ny)
+                    field($draft.nx, help: "Probe points along X (2–15). Points about 10 mm apart follow a warped board well; more points take longer to probe.")
+                    field($draft.ny, help: "Probe points along Y (2–15). Points about 10 mm apart follow a warped board well; more points take longer to probe.")
                     Text("2–15 each").font(.caption).foregroundStyle(.secondary)
                 }
                 GridRow {
                     Text("Z clear / Z max depth")
-                    field($draft.zClear); field($draft.zMaxDepth)
+                    field($draft.zClear, help: "Work Z the bit travels at between the points (Candle's Zt) — above the highest spot of the board")
+                    field($draft.zMaxDepth, help: "Lowest work Z a probe may reach (Candle's Zb); the probe gives up there if nothing is touched")
                     Text("Zt / Zb").font(.caption).foregroundStyle(.secondary)
                 }
                 GridRow {
                     Text("Probe feed")
-                    field($draft.feedSlow)
+                    field($draft.feedSlow, help: "Speed of the probing move at every point, mm/min — slow for precision, as in the Z probe")
                     Text("mm/min").font(.caption).foregroundStyle(.secondary)
                         .gridCellColumns(2)
                 }
                 GridRow {
                     Text("Interpolation grid X / Y")
-                    linesField(linesX); linesField(linesY)
+                    linesField(linesX, help: "Lines of the wireframe the preview draws between the probed points (4–60) — display only, the program itself is interpolated continuously")
+                    linesField(linesY, help: "Lines of the wireframe the preview draws between the probed points (4–60) — display only, the program itself is interpolated continuously")
                     Text("4–60 lines").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -152,11 +157,12 @@ private struct HeightMapControlsBody: View {
         return "mm · work X\(formatMM(p.x, decimals: 1)) Y\(formatMM(p.y, decimals: 1))"
     }
 
-    private func field(_ text: Binding<String>) -> some View {
+    private func field(_ text: Binding<String>, help: String) -> some View {
         TextField("", text: text)
             .textFieldStyle(.roundedBorder)
             .frame(width: 64)
             .multilineTextAlignment(.trailing)
+            .help(help)
     }
 
     /// The line counts of the interpolation grid, clamped to 4…60 when a
@@ -171,11 +177,12 @@ private struct HeightMapControlsBody: View {
                 set: { interpolationY = HeightMapSurface.clampedLines(max($0, 1)) })
     }
 
-    private func linesField(_ value: Binding<Int>) -> some View {
+    private func linesField(_ value: Binding<Int>, help: String) -> some View {
         TextField("", value: value, format: .number)
             .textFieldStyle(.roundedBorder)
             .frame(width: 64)
             .multilineTextAlignment(.trailing)
+            .help(help)
     }
 
     private var buttons: some View {
@@ -208,14 +215,17 @@ private struct HeightMapControlsBody: View {
         }
         Button("Clear", systemImage: "trash") { clear() }
             .disabled(model.heightMaps[side] == nil || probing)
+            .help("Forget this side's map (it is deleted from disk too); programs are sent flat again")
     }
 
     @ViewBuilder
     private var fileButtons: some View {
         Button("Load…", systemImage: "folder") { load() }
             .disabled(probing)
+            .help("Read a map saved with Save… — it goes to the side it was probed on")
         Button("Save…", systemImage: "square.and.arrow.down") { save() }
             .disabled(model.heightMaps[side] == nil)
+            .help("Write this side's map to a JSON file, e.g. to keep it with the project or reuse it on the same board")
     }
 
     // MARK: Progress

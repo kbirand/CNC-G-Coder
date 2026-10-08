@@ -51,24 +51,29 @@ struct ProbeControls: View {
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                     Text("Max travel")
-                    numberField($maxTravel, unit: "mm")
+                    numberField($maxTravel, unit: "mm",
+                                help: "How far down the probe may go (G38.2 Z−…) before it gives up. A little more than the gap between the bit and the board; the probe fails without an alarm if nothing is touched.")
                 }
                 GridRow {
                     Text("Retract after")
-                    numberField($retract, unit: "mm")
+                    numberField($retract, unit: "mm",
+                                help: "How far the bit backs off after the fast pass (before the slow one) and after the last pass")
                 }
                 GridRow {
                     Text("Fast feed")
-                    numberField($feedFast, unit: "mm/min")
+                    numberField($feedFast, unit: "mm/min",
+                                help: "Speed of the first pass, which only has to find the surface")
                 }
                 GridRow {
                     Text("Slow feed")
-                    numberField($feedSlow, unit: "mm/min")
+                    numberField($feedSlow, unit: "mm/min",
+                                help: "Speed of the second pass, which sets the Z — slower is more precise (20 mm/min is typical)")
                 }
                 GridRow {
                     Text("Plate thickness")
                     HStack(spacing: 8) {
-                        numberField($plateThickness, unit: "mm")
+                        numberField($plateThickness, unit: "mm",
+                                    help: "What work Z reads at the trigger point: 0 for the bit touching the copper itself, the plate's thickness when probing through a touch plate laid on the board")
                         Text("0 = bit on copper").font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -83,6 +88,7 @@ struct ProbeControls: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canProbe)
+                .help(refusal ?? "Probe down twice (fast, back off, slow) and set work Z at the trigger point — immune to overshoot. Keep a hand near the stop: the probe lead must be clipped on.")
                 if probing { ProgressView().controlSize(.small) }
                 if machine.status.pins.contains("P") {
                     Label("Probe input closed", systemImage: "bolt.horizontal.circle.fill")
@@ -104,7 +110,7 @@ struct ProbeControls: View {
         .machinePanel()
     }
 
-    private func numberField(_ value: Binding<Double>, unit: String) -> some View {
+    private func numberField(_ value: Binding<Double>, unit: String, help: String) -> some View {
         HStack(spacing: 4) {
             TextField("", value: value, format: .number.precision(.fractionLength(0...3)).grouping(.never))
                 .textFieldStyle(.roundedBorder)
@@ -112,6 +118,7 @@ struct ProbeControls: View {
                 .multilineTextAlignment(.trailing)
             Text(unit).font(.caption).foregroundStyle(.secondary)
         }
+        .help(help)
     }
 
     private var spec: ZProbeSpec {

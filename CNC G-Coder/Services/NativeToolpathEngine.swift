@@ -63,8 +63,9 @@ nonisolated enum NativeToolpathEngine {
             result.log += "WARNING: native engine found no closed contour in the board outline.\n"
         }
 
-        // Drilling (and milled holes).
+        // Drilling (and milled holes): every drill file with its own settings.
         for (index, url) in files.drills.enumerated() {
+            let p = p.forDrill(file: url.lastPathComponent)
             let stem = url.deletingPathExtension().lastPathComponent
             let image: ExcellonImage
             do { image = try ExcellonFile.read(url) } catch {
@@ -141,6 +142,31 @@ nonisolated enum NativeToolpathEngine {
             result = dark ? Clipper.union(result + group) : Clipper.difference(result, group)
         }
         return result
+    }
+
+    /// The widest feature of a Gerber layer (mm): the diameter of the largest
+    /// circle that fits inside any of its shapes — a 3 mm round opening
+    /// measures 3, a 1 × 5 mm slot 1. Clearing a shape from its edge inward
+    /// by half of this reaches its centre. Nil for an empty layer.
+    static func widestFeature(in url: URL) -> Double? {
+        guard let image = try? GerberFile.read(url) else { return nil }
+        let polygons = copper(image)
+        guard !polygons.isEmpty else { return nil }
+        var high = 0.0
+        for path in polygons {
+            guard let minX = path.map(\.x).min(), let maxX = path.map(\.x).max(),
+                  let minY = path.map(\.y).min(), let maxY = path.map(\.y).max() else { continue }
+            high = max(high, min(maxX - minX, maxY - minY))
+        }
+        guard high > 0 else { return nil }
+        // The inradius: the largest inward offset that leaves something.
+        var low = 0.0
+        high /= 2
+        for _ in 0..<16 {
+            let mid = (low + high) / 2
+            if Clipper.inflate(polygons, by: -mid).contains(where: { $0.count >= 3 }) { low = mid } else { high = mid }
+        }
+        return 2 * high
     }
 
     /// The board: the region enclosed by the outline's centre lines (as

@@ -25,6 +25,7 @@ struct GoToSheet: View {
                         TextField("0.000", text: binding(axis))
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 110)
+                            .help("Target \(axis.gcodeLetter) in machine coordinates (G53) — the controller's own frame, independent of the work zero. The range shown is the machine's travel, when it reported one.")
                         Text(rangeText(axis))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -33,6 +34,7 @@ struct GoToSheet: View {
                             if let mpos = machine.status.machinePosition { texts[axis] = formatMM(mpos[axis]) }
                         }
                         .disabled(machine.status.machinePosition == nil)
+                        .help("Fill in where \(axis.gcodeLetter) is now, so only the other axes move")
                     }
                 }
                 GridRow {
@@ -40,6 +42,7 @@ struct GoToSheet: View {
                     TextField("500", text: $feedText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 110)
+                        .help("Speed of the move (G1 F…). Starts at the jog feed; the machine's own limits still apply.")
                     Text("mm/min").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -53,10 +56,14 @@ struct GoToSheet: View {
                 Spacer()
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .help("Close without moving")
                 Button("Go") { confirm = true }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(!machine.positioningEnabled || target == nil || feed == nil)
+                    .help(machine.positioningEnabled
+                          ? "Move there after a confirmation. Z goes first when the target is higher than now, otherwise X and Y go first, so the bit never drags across the board."
+                          : "Needs the machine connected, idle, not in alarm, and a trusted (homed) position")
             }
         }
         .padding(20)

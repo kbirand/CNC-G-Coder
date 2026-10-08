@@ -64,10 +64,12 @@ struct MacrosControls: View {
             Button("Add", systemImage: "plus") {
                 editing = MachineSettings.Macro(name: "New macro", lines: [])
             }
+            .help("New macro: a name, an optional icon and the G-code lines it sends. It also becomes a user button on the Control tab.")
             Button("Restore Defaults") {
                 macros = MachineSettings.defaultMacros
                 persist()
             }
+            .help("Replace the list with the built-in examples — your own macros are removed")
             Spacer()
             Text("Lines are sent one after another with the machine idle; `@goto <position>` moves to a saved position.")
                 .font(.caption)
@@ -112,8 +114,10 @@ struct MacrosControls: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(!canRun || macro.lines.isEmpty)
+                .help(canRun ? "Send the lines one after another and wait for each to be acknowledged" : "Needs the machine connected and idle, with no alarm and no program running")
             Button("Edit", systemImage: "pencil") { editing = macro }
                 .controlSize(.small)
+                .help("Change the name, icon or lines. Right-click the row to duplicate or delete it.")
         }
         .padding(.vertical, 3)
         .contextMenu {
@@ -161,6 +165,7 @@ private struct MacroEditSheet: View {
             HStack(spacing: 8) {
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
+                    .help("Shown in the list and on the user button")
                 TextField("SF Symbol (optional)", text: $icon)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 170)
@@ -178,10 +183,12 @@ private struct MacroEditSheet: View {
                 .font(.system(.body, design: .monospaced))
                 .frame(height: 200)
                 .border(.quaternary)
+                .help("One G-code or $ command per line, sent in order with the machine idle. @goto <saved position> expands to a safe move to that position (Z first when rising).")
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .help("Discard the changes")
                 Button("Save") {
                     let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
                         .map { $0.trimmingCharacters(in: .whitespaces) }

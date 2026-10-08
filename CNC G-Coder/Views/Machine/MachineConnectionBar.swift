@@ -124,10 +124,12 @@ struct MachineConnectionBar: View {
                 .frame(minWidth: 90, idealWidth: 150, maxWidth: 220)
                 .disabled(!editable)
                 .onSubmit { if editable { Task { await connect() } } }
+                .help("The controller's host name or IP address (e.g. fluidnc.local or 192.168.1.50). Return connects.")
             TextField("Port", value: $port, format: .number.grouping(.never))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 56)
                 .disabled(!editable)
+                .help("TCP port of the telnet service — 23 on FluidNC")
         } else {
             Picker("", selection: $serialPath) {
                 if serialPath.isEmpty || !ports.contains(serialPath) {
@@ -141,6 +143,7 @@ struct MachineConnectionBar: View {
             .frame(minWidth: 110, idealWidth: 190, maxWidth: 240)
             .disabled(!editable)
             .onHover { if $0 { refreshPorts() } }
+            .help("The USB serial port the controller is on (/dev/cu.…); the list is rescanned when you open it")
             Button {
                 refreshPorts()
             } label: {
@@ -152,6 +155,7 @@ struct MachineConnectionBar: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 70)
                 .disabled(!editable)
+                .help("Serial speed: 115200 for Grbl and FluidNC")
         }
     }
 
@@ -180,6 +184,19 @@ struct MachineConnectionBar: View {
         .tint(machine.phase == .disconnected ? .accentColor : .red)
         .disabled(machine.phase == .disconnected && !endpointValid)
         .keyboardShortcut("k", modifiers: .command)
+        .help(connectHelp)
+    }
+
+    private var connectHelp: String {
+        switch machine.phase {
+        case .disconnected:
+            endpointValid ? "Open the link and identify the controller (⌘K) — status reports start at once"
+                          : "Fill in the host and port, or choose a serial port, first"
+        case .connecting: "Give up the connection attempt"
+        case .unresponsive: "The controller stopped answering — close the link (⌘K)"
+        case .connected: machine.isStreaming ? "Close the link; a running job is stopped first, after a confirmation (⌘K)"
+                                             : "Close the link (⌘K). The controller keeps its state — a spindle left on stays on."
+        }
     }
 
     private var endpointValid: Bool {
@@ -337,8 +354,11 @@ struct MachineAlarmBanner: View {
     private var buttons: some View {
         HStack(spacing: 8) {
             Button("Unlock", systemImage: "lock.open.fill") { Task { await machine.unlock() } }
+                .help("$X — clear the alarm and keep the position the controller has. Fine after an E-stop at rest; after a limit hit the position may be off.")
             Button("Home", systemImage: "house.fill") { Task { await machine.home() } }
+                .help("$H — run the homing cycle: every axis seeks its switch and the machine position is referenced again. The safe choice when the position may be lost.")
             Button("Reset", systemImage: "arrow.counterclockwise") { Task { await machine.softReset() } }
+                .help("Ctrl‑X soft reset of the controller — stops everything; the alarm usually stays until Unlock or Home")
         }
     }
 
@@ -378,6 +398,7 @@ struct MachineSpindleWarning: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
+                .help("M5 — switch the spindle off")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

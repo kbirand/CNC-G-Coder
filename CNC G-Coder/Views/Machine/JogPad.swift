@@ -135,6 +135,7 @@ struct JogPad: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .help("Distance of one click on a jog button (mm). Cont.: the axis moves for as long as the button or key is held. Holding a button for a quarter second jogs continuously in any mode.")
         }
         .font(.callout)
         .controlSize(.small)
@@ -150,6 +151,7 @@ struct JogPad: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .help("Jog speed in mm/min (the $J= F word). Also the speed of Go to and saved positions. Use a low feed near the board or clamps.")
         }
         .font(.callout)
         .controlSize(.small)
@@ -161,6 +163,7 @@ struct JogPad: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .disabled(!machine.isConnected)
+                .help("Jog from the keyboard while the pad has focus (it gets a blue outline): arrows move X and Y, Page Up/Down move Z, ⇧ multiplies the step by ten, holding a key jogs continuously, Esc stops. Switches off by itself when the window loses focus or an alarm comes in.")
             Text("← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · hold = continuous · Esc stops")
                 .font(.caption2)
                 .foregroundStyle(.secondary)

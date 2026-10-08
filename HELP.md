@@ -109,6 +109,7 @@ Both write their programs the same way, so every setting (dwells, pecks, plunge 
 - Traces are never cut into: the first pass is offset outward, isolation eats surrounding waste copper only.
 
 ### Drilling & cutout
+- **Every drill file has its own settings.** Select a drill program (or its `… milled` program) and the Drilling, Bits on hand, Hole milling and Heights & direction groups show that file's values — the header names the file. Turning on Mill large holes for the NPTH file, or giving the via file a shallower depth, changes nothing for the other drill files. A file added to the project starts from the drilling defaults (shown when no drill program is selected) and keeps its own values from then on; they are saved in the project with the file. Applying a preset puts every drill file on the preset's values.
 - Depths = board thickness + ~0.2 mm into the spoilboard (1.6 mm stock → −1.8).
 - **Peck depth** — drill in pecks: after each one the bit rapids out to clear chips, returns to just above the previous bottom and feeds on. 0 = one stroke.
 - **Bits on hand** — check the library drills you own. Every hole inside a checked bit's range is drilled with that bit, so a job needs only those bits (a 0.915 mm hole goes to the 1.0 mm bit). Bits without a range of their own use **Bit tolerance** (± around the bit). Holes no bit covers keep their designed size and the Log names them — ranges are always passed, because without them pcb2gcode would round *every* hole to the nearest bit (a 3 mm mounting hole silently drilled at 1 mm).
@@ -127,7 +128,7 @@ Both write their programs the same way, so every setting (dwells, pecks, plunge 
 ### Solder mask etch
 The `.GTS`/`.GBS` layers describe the *openings* (pads/vias that stay exposed). CNC etch mode inverts the layer and pockets each opening with 40% overlapping passes → `top-mask-etch.ngc` / `bottom-mask-etch.ngc`.
 - Mask tool must be no larger than the smallest opening (smaller ones are skipped — watch the Log).
-- **Clear width** ≥ half the widest opening; larger values slow generation dramatically.
+- **Clear width** — how far inward each opening is pocketed. By default (**Clear width from the mask layers** on) the app measures the widest opening in the mask files and clears by half of it plus a little, so every opening is cleared to its centre and no wider; the footer shows the widest opening. Switched off, enter it yourself: it must be ≥ half the widest opening or the middle of large openings stays covered, and larger values slow generation dramatically.
 - Etch depth only needs to remove cured paint, not copper.
 
 ## Preview
@@ -213,5 +214,5 @@ Turn on **Show the Simulator in the connection picker** in Settings → Machine,
 - **pcb2gcode missing** → only in builds made without it; the native engine takes over (Machine setup → Toolpath engine). Normal builds carry pcb2gcode inside the app — nothing to install.
 - **Preview failed** → the Log tab has the full output with per-step timings; the error is at the bottom.
 - **Uncut gaps between close traces** → tool too wide to fit; pcb2gcode warns in the Log. Reduce effective tool diameter or increase design clearance.
-- **Mask opening not cleared** → opening smaller than the mask tool, or Clear width < half the opening.
+- **Mask opening not cleared** → opening smaller than the mask tool, or a hand-entered Clear width < half the opening (turn "Clear width from the mask layers" back on).
 - **Slow generation** → mask Clear width too large, or very wide isolation width.

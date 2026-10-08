@@ -49,10 +49,28 @@ final class AppModel: ObservableObject {
         didSet {
             guard detectedFiles != oldValue else { return }
             drillHoleSizes = Dictionary(uniqueKeysWithValues: detectedFiles.drills.map { ($0, ExcellonReader.holeSizes(in: $0)) })
+            measureMaskOpenings()
         }
+    }
+
+    /// Finds the widest opening of the mask layers for the automatic mask
+    /// clear width (ParametersStore.widestMaskOpening). Done at once, so a
+    /// snapshot taken right after the files change already has it.
+    private func measureMaskOpenings() {
+        let masks = [detectedFiles.topMask, detectedFiles.bottomMask].compactMap { $0 }
+        let widest = masks.compactMap(NativeToolpathEngine.widestFeature(in:)).max()
+        if parameters.widestMaskOpening != widest { parameters.widestMaskOpening = widest }
     }
     /// Hole diameters (mm) declared by each detected drill file.
     @Published private(set) var drillHoleSizes: [URL: [Double]] = [:]
+
+    /// The drill file (its name, the key of its own settings in
+    /// ParametersStore.drillLayerValues) behind a drill program or its
+    /// milled holes; nil for every other program.
+    func drillFile(for kind: LayerKind) -> String? {
+        guard let index = kind.drillIndex, detectedFiles.drills.indices.contains(index) else { return nil }
+        return detectedFiles.drills[index].lastPathComponent
+    }
     /// Hand-drawn layers from the shape editor; every non-empty one becomes
     /// a program of its own (see CustomLayerGenerator). Saved in the project.
     @Published var customLayers: [CustomLayer] = [] {
@@ -118,7 +136,7 @@ final class AppModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     /// Parameter values as of the last recorded undo step (see AppModel+Undo.swift).
-    var lastParameterValues: [String: String] = [:]
+    var lastParameterValues = ParameterState()
     var lastParameterEdit: (key: String, date: Date)?
     private var generateTask: Task<Void, Never>?
 
@@ -139,7 +157,7 @@ final class AppModel: ObservableObject {
         parameters.library = tools
         // objectWillChange fires before the new value lands; defer one runloop
         // turn so the preview controller reads the updated signature.
-        lastParameterValues = parameters.exportValues()
+        lastParameterValues = parameters.exportState()
         parameters.objectWillChange
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
@@ -225,11 +243,32 @@ final class AppModel: ObservableObject {
         } else if !ToolLocator.isAppStoreBuild {
             appendLog("Note: pcb2gcode is not available; the native toolpath engine is used.\n")
         }
-        // Dev hooks: `-debugProjectFolder /path/to/gerbers` skips the open panel;
+        // Dev hooks: `-debugProjectFolder /path/to/gerbers` skips the open panel
+        // (`-debugOpenProject /path/x.cncproj` opens a saved project instead);
         // adding `-debugGenerate 1` (or `-debugGenerateLaser 1`) also runs that
         // generation straight into a folder beside the project, no panel.
+        var debugOpened = false
         if let debugFolder = UserDefaults.standard.string(forKey: "debugProjectFolder") {
             selectProjectFolder(URL(fileURLWithPath: debugFolder, isDirectory: true))
+            debugOpened = true
+        } else if let path = UserDefaults.standard.string(forKey: "debugOpenProject") {
+            openProject(at: URL(fileURLWithPath: path), confirmed: true)
+            debugOpened = true
+        }
+        if debugOpened {
+            // `-debugDrillSettings "a.drl:drillMillLarge=true,zDrill=-2;b.drl:zDrill=-1.5"`
+            // gives drill files settings of their own, as the sidebar does.
+            if let spec = UserDefaults.standard.string(forKey: "debugDrillSettings") {
+                for entry in spec.split(separator: ";") {
+                    let parts = entry.split(separator: ":", maxSplits: 1).map(String.init)
+                    guard parts.count == 2 else { continue }
+                    for pair in parts[1].split(separator: ",") {
+                        let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                        if kv.count == 2 { parameters.setDrillValue(kv[0], kv[1], file: parts[0]) }
+                    }
+                    appendLog("[debug] \(parts[0]) settings: \(parts[1])\n")
+                }
+            }
             // `-debugGenerateDialog 1` opens the Generate sheet at launch.
             if UserDefaults.standard.bool(forKey: "debugGenerateDialog") { showGenerateDialog = true }
             let target: GenerateTarget? = UserDefaults.standard.bool(forKey: "debugGenerate") ? .cnc
@@ -241,6 +280,19 @@ final class AppModel: ObservableObject {
             if let target, let projectFolder {
                 startGeneration(target: target,
                                 destination: projectFolder.appendingPathComponent(target.folderName, isDirectory: true))
+                // `-debugGenerateLog /path/log.txt` writes the Log there once
+                // that generation has finished, then quits.
+                if let logPath = UserDefaults.standard.string(forKey: "debugGenerateLog") {
+                    Task { [weak self] in
+                        for _ in 0..<1200 {
+                            try? await Task.sleep(for: .milliseconds(500))
+                            guard let self else { return }
+                            if !self.isGenerating, self.generationSummary != nil { break }
+                        }
+                        try? self?.log.write(toFile: logPath, atomically: true, encoding: .utf8)
+                        exit(0)
+                    }
+                }
             }
         }
         // Dev hook: `-debugImport /a.gbr,/b.drl` shows the Import Layers sheet for those files.
@@ -745,6 +797,9 @@ final class AppModel: ObservableObject {
         manualLayerEdits = false
         layerOrigins = [:]
         customLayers = []
+        // EasyEDA names drill files the same in every export: the previous
+        // project's per-file settings must not land on this one's.
+        parameters.drillLayerValues = [:]
         detectedFiles = GerberDetector.detect(in: url)
 
         appendLog("\nSelected project folder: \(url.path)\n")

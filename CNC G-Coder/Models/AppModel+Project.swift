@@ -78,6 +78,7 @@ extension AppModel {
         chosenOutputDir = nil
         layerOrigins = [:]
         customLayers = []
+        parameters.drillLayerValues = [:]
         detectedFiles = DetectedFiles()
         preview.clear()
         editor.layerDidChange()
@@ -189,13 +190,19 @@ extension AppModel {
         for slot in LayerSlot.allCases where slot != .drill {
             if let stored = document.layers[slot.rawValue], let file = take(stored) { files[slot] = file }
         }
+        // Each drill file's own settings travel with its entry.
+        var drillValues: [String: [String: String]] = [:]
         for stored in document.drills {
-            if let file = take(stored) { files.drills.append(file) }
+            guard let file = take(stored) else { continue }
+            files.drills.append(file)
+            let own = (stored.parameters ?? [:]).filter { ParametersStore.drillLayerKeys.contains($0.key) }
+            if !own.isEmpty { drillValues[file.lastPathComponent] = own }
         }
         let packed = document.version >= 3
 
         layerEditor.end()
         parameters.apply(document.parameters)
+        parameters.drillLayerValues = drillValues
         if let x = document.guidesX { UserDefaults.standard.set(x, forKey: "previewGuidesX") }
         if let y = document.guidesY { UserDefaults.standard.set(y, forKey: "previewGuidesY") }
         projectURL = url
@@ -270,7 +277,10 @@ extension AppModel {
         let layers = LayerSlot.allCases.filter { $0 != .drill }.compactMap { slot in
             detectedFiles[slot].map { (slot: slot.rawValue, file: $0, origin: layerOrigins[$0]) }
         }
-        let drills = detectedFiles.drills.map { (file: $0, origin: layerOrigins[$0]) }
+        let drills = detectedFiles.drills.map { file in
+            let own = parameters.drillLayerValues[file.lastPathComponent] ?? [:]
+            return (file: file, origin: layerOrigins[file], parameters: own.isEmpty ? nil : own)
+        }
         do {
             document = try ProjectDocument.writePackage(document, to: url, layers: layers, drills: drills)
         } catch {
@@ -414,6 +424,8 @@ extension AppModel {
         var files = detectedFiles
         if let drill, let index = files.drills.firstIndex(of: drill) {
             files.drills[index] = url
+            // The replacement keeps the settings made for the file it replaces.
+            parameters.renameDrillLayer(drill.lastPathComponent, to: url.lastPathComponent)
         } else {
             files[slot] = url
         }

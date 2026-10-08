@@ -49,6 +49,15 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         return false
     }
 
+    /// The drill file (its position in the project's list) behind a drill
+    /// program or its milled holes.
+    var drillIndex: Int? {
+        switch self {
+        case .drill(let index, _), .millDrill(let index, _): index
+        default: nil
+        }
+    }
+
     /// The same drill file's other program: drilled ↔ milled holes.
     var drillSibling: LayerKind? {
         switch self {
