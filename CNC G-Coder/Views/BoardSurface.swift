@@ -31,7 +31,9 @@ final class BoardSurfaceTexture {
     /// World mm → bitmap pixels.
     private let toPixels: CGAffineTransform
 
-    private var staticLayers: [(layer: ParsedLayer, transform: CGAffineTransform)] = []
+    /// `throughDepth` set: this program cuts the OTHER face and only the
+    /// moves reaching that far below Z0 (through the board) are punched here.
+    private var staticLayers: [(layer: ParsedLayer, transform: CGAffineTransform, throughDepth: Double?)] = []
     /// The progressive program's identity and how many of its moves are in.
     private var progressive: (token: String, painted: Int)?
     /// Bitmap pixels painted since the last upload (CG coordinates, y up).
@@ -75,7 +77,7 @@ final class BoardSurfaceTexture {
 
     /// Replaces the static programs and repaints everything (the
     /// progressive program starts again from nothing).
-    func setStatic(_ layers: [(layer: ParsedLayer, transform: CGAffineTransform)]) {
+    func setStatic(_ layers: [(layer: ParsedLayer, transform: CGAffineTransform, throughDepth: Double?)]) {
         staticLayers = layers
         progressive = nil
         repaintAll()
@@ -91,19 +93,19 @@ final class BoardSurfaceTexture {
     /// `fraction` of the next one. `token` identifies the program; a
     /// different token or a (clearly) smaller count repaints from the start.
     func paintProgressive(layer: ParsedLayer, token: String, transform: CGAffineTransform,
-                          completed: Int, fraction: Double) {
+                          completed: Int, fraction: Double, throughDepth: Double? = nil) {
         let completed = min(max(completed, 0), layer.moves.count)
         var painted = completed
         if let p = progressive, p.token == token, p.painted <= completed + Self.regressionTolerance {
             if p.painted < completed {
-                paint(layer, transform: transform, from: p.painted, to: completed)
+                paint(layer, transform: transform, from: p.painted, to: completed, throughDepth: throughDepth)
             } else {
                 painted = p.painted
             }
         } else {
             let start = CACurrentMediaTime()
             repaintAll()
-            paint(layer, transform: transform, from: 0, to: completed)
+            paint(layer, transform: transform, from: 0, to: completed, throughDepth: throughDepth)
             if UserDefaults.standard.bool(forKey: "debugDumpViews") {
                 print(String(format: "[debug] board surface: repaint with %d progressive moves in %.1f ms (all layers)",
                              completed, (CACurrentMediaTime() - start) * 1000))
@@ -112,7 +114,8 @@ final class BoardSurfaceTexture {
         progressive = (token, painted)
         // The move in progress, up to the tool (idempotent overdraw).
         if fraction > 0, completed < layer.moves.count {
-            paintPartial(layer.moves[completed], fraction: min(fraction, 1), layer: layer, transform: transform)
+            paintPartial(layer.moves[completed], fraction: min(fraction, 1), layer: layer, transform: transform,
+                         throughDepth: throughDepth)
         }
     }
 
@@ -189,7 +192,8 @@ final class BoardSurfaceTexture {
         let start = CACurrentMediaTime()
         fillBase()
         for item in staticLayers {
-            paint(item.layer, transform: item.transform, from: 0, to: item.layer.moves.count)
+            paint(item.layer, transform: item.transform, from: 0, to: item.layer.moves.count,
+                  throughDepth: item.throughDepth)
         }
         progressive = nil
         if UserDefaults.standard.bool(forKey: "debugDumpViews") {
@@ -204,9 +208,12 @@ final class BoardSurfaceTexture {
     private static let cutColor = CGColor(red: 0, green: 0, blue: 0, alpha: 0)
     private static let holeColor = cutColor
 
-    /// Whether a move removes material at the surface.
-    private static func cuts(_ move: ToolpathMove) -> Bool {
-        (move.kind == .cut || move.kind == .plunge) && move.zEnd < -1e-9
+    /// Whether a move removes material at the surface — at the far face
+    /// (`throughDepth` set), only when it reaches through the board.
+    private static func cuts(_ move: ToolpathMove, throughDepth: Double?) -> Bool {
+        guard move.kind == .cut || move.kind == .plunge else { return false }
+        if let throughDepth { return move.zEnd <= -throughDepth + 1e-6 }
+        return move.zEnd < -1e-9
     }
 
     /// Segments per stroked path. CoreGraphics' stroker is superlinear in
@@ -217,7 +224,8 @@ final class BoardSurfaceTexture {
 
     /// Punches moves `from..<to` of `layer` (and the holes that start in
     /// that range) out of the face: joined polyline runs, flushed in chunks.
-    private func paint(_ layer: ParsedLayer, transform: CGAffineTransform, from: Int, to: Int) {
+    private func paint(_ layer: ParsedLayer, transform: CGAffineTransform, from: Int, to: Int,
+                       throughDepth: Double?) {
         guard from < to, from >= 0, to <= layer.moves.count else { return }
         let fullTransform = transform.concatenating(toPixels)
         let drill = layer.id.isDrill
@@ -239,20 +247,51 @@ final class BoardSurfaceTexture {
                 count = 0
                 last = nil
             }
-            for move in layer.moves[from..<to] where Self.cuts(move) {
+            // A run that goes round a loop so small that the stroke leaves
+            // only a speck at its centre (a hole milled as one helix by a bit
+            // of just under half its diameter) is punched whole — the speck
+            // is a post that cannot stand, and GrooveMesh drops it too
+            // (`minimumIslandArea`). "Goes round": at least one perimeter of
+            // its bounding box long, so a short stub is left as stroked.
+            let fillWhole = CGFloat((layer.toolDiameter ?? Self.fallbackToolWidth) + 0.16) * pixelsPerMM
+            var runBox = CGRect.null
+            var runLength: CGFloat = 0
+            func endRun() {
+                defer { runBox = .null; runLength = 0 }
+                let extent = max(runBox.width, runBox.height)
+                guard !runBox.isNull, extent > 0, extent <= fillWhole, runLength >= .pi * extent * 0.9 else { return }
+                let disc = runBox.insetBy(dx: -width / 2, dy: -width / 2)
+                markDirty(disc.insetBy(dx: -2, dy: -2))
+                context.setFillColor(Self.cutColor)
+                context.fillEllipse(in: disc)
+            }
+            for move in layer.moves[from..<to] where Self.cuts(move, throughDepth: throughDepth) {
                 let a = move.start.applying(fullTransform), b = move.end.applying(fullTransform)
-                if last != a { path.move(to: a) }
+                if last != a {
+                    endRun()
+                    path.move(to: a)
+                    runBox = CGRect(origin: a, size: .zero)
+                }
                 path.addLine(to: b)
+                runBox = runBox.union(CGRect(origin: b, size: .zero))
+                runLength += hypot(b.x - a.x, b.y - a.y)
                 last = b
                 count += 1
-                if count >= Self.chunk { flush() }
+                if count >= Self.chunk {
+                    let keep = last
+                    flush()
+                    last = keep
+                    path.move(to: keep!)
+                }
             }
+            endRun()
             flush()
         }
         // Holes: a disc once their first plunge is in the painted range.
         context.setBlendMode(.copy)
         context.setFillColor(Self.holeColor)
-        for hole in layer.drillHoles where hole.moveIndex >= from && hole.moveIndex < to {
+        for hole in layer.drillHoles where hole.moveIndex >= from && hole.moveIndex < to
+            && hole.depth >= (throughDepth ?? 0) - 1e-6 {
             let c = hole.center.applying(fullTransform)
             let r = CGFloat(hole.diameter / 2 * pixelsPerMM)
             let disc = CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
@@ -262,8 +301,9 @@ final class BoardSurfaceTexture {
     }
 
     /// The in-progress move from its start to the tool.
-    private func paintPartial(_ move: ToolpathMove, fraction: Double, layer: ParsedLayer, transform: CGAffineTransform) {
-        guard Self.cuts(move), !layer.id.isDrill else { return }
+    private func paintPartial(_ move: ToolpathMove, fraction: Double, layer: ParsedLayer, transform: CGAffineTransform,
+                              throughDepth: Double?) {
+        guard Self.cuts(move, throughDepth: throughDepth), !layer.id.isDrill else { return }
         let fullTransform = transform.concatenating(toPixels)
         let end = CGPoint(x: move.start.x + (move.end.x - move.start.x) * fraction,
                           y: move.start.y + (move.end.y - move.start.y) * fraction)

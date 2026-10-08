@@ -521,8 +521,8 @@ private struct SceneRepresentable: NSViewRepresentable {
         private var backSurface: BoardSurfaceTexture?
         private var boardTopMaterial: SCNMaterial?
         private var boardBottomMaterial: SCNMaterial?
-        private var progressiveSurface: (surface: BoardSurfaceTexture, layer: ParsedLayer,
-                                         transform: CGAffineTransform, token: String)?
+        private var progressiveSurface: (surface: BoardSurfaceTexture, farSurface: BoardSurfaceTexture?,
+                                         layer: ParsedLayer, transform: CGAffineTransform, token: String)?
         /// The faces' textures, updated in place (`BoardSurfaceTexture.upload`).
         private var topTexture: (any MTLTexture)?
         private var bottomTexture: (any MTLTexture)?
@@ -724,9 +724,15 @@ private struct SceneRepresentable: NSViewRepresentable {
                 hi = simd_max(hi, m)
             }
 
-            var topPrograms: [(layer: ParsedLayer, transform: CGAffineTransform)] = []
-            var bottomPrograms: [(layer: ParsedLayer, transform: CGAffineTransform)] = []
+            // Each face's programs: its own, whole, and the other face's
+            // where they cut through the board (`throughDepth` = t).
+            var topPrograms: [(layer: ParsedLayer, transform: CGAffineTransform, throughDepth: Double?)] = []
+            var bottomPrograms: [(layer: ParsedLayer, transform: CGAffineTransform, throughDepth: Double?)] = []
             var progressivePlan: (layer: ParsedLayer, underside: Bool, transform: CGAffineTransform)?
+            func cutsThrough(_ program: ParsedLayer) -> Bool {
+                program.moves.contains { ($0.kind == .cut || $0.kind == .plunge) && $0.zEnd <= -t + 1e-6 }
+                    || program.drillHoles.contains { $0.depth >= t - 1e-6 }
+            }
 
             // Overlaid: the document's other programs, then the selected one
             // (the job's own geometry replaces its document layer).
@@ -793,9 +799,11 @@ private struct SceneRepresentable: NSViewRepresentable {
                 if isSelected {
                     progressivePlan = (program, onUnderside, paintTransform)
                 } else if onUnderside {
-                    bottomPrograms.append((program, paintTransform))
+                    bottomPrograms.append((program, paintTransform, nil))
+                    if cutsThrough(program) { topPrograms.append((program, paintTransform, t)) }
                 } else {
-                    topPrograms.append((program, paintTransform))
+                    topPrograms.append((program, paintTransform, nil))
+                    if cutsThrough(program) { bottomPrograms.append((program, paintTransform, t)) }
                 }
             }
 
@@ -816,12 +824,17 @@ private struct SceneRepresentable: NSViewRepresentable {
                     boardTopMaterial = board.top
                     boardBottomMaterial = board.bottom
                     frontSurface = BoardSurfaceTexture(rect: rect)
-                    backSurface = bottomPrograms.isEmpty && progressivePlan?.underside != true ? nil : BoardSurfaceTexture(rect: rect)
+                    let progressiveThrough = progressivePlan.map { cutsThrough($0.layer) } ?? false
+                    backSurface = bottomPrograms.isEmpty && progressivePlan?.underside != true && !progressiveThrough
+                        ? nil : BoardSurfaceTexture(rect: rect)
                     frontSurface?.setStatic(topPrograms)
                     backSurface?.setStatic(bottomPrograms)
                     if let plan = progressivePlan, let surface = plan.underside ? backSurface : frontSurface {
                         let token = "\(plan.layer.fileURL.path)|\(plan.layer.moves.count)|\(contentKey)"
-                        progressiveSurface = (surface, plan.layer, plan.transform, token)
+                        // The far face follows the same progress for the
+                        // through-cuts, so a hole opens below as it is bored.
+                        let far = progressiveThrough ? (plan.underside ? frontSurface : backSurface) : nil
+                        progressiveSurface = (surface, far, plan.layer, plan.transform, token)
                     }
                     // One texture per face, handed to the material once; from
                     // here on only the painted rectangle is copied into it.
@@ -965,6 +978,9 @@ private struct SceneRepresentable: NSViewRepresentable {
             profiler.measure("maskPaint") {
                 p.surface.paintProgressive(layer: p.layer, token: p.token, transform: p.transform,
                                            completed: completed, fraction: fraction)
+                p.farSurface?.paintProgressive(layer: p.layer, token: p.token, transform: p.transform,
+                                               completed: completed, fraction: fraction,
+                                               throughDepth: Self.boardThickness)
             }
             uploadSurfaces(throttled: playback.isPlaying || playback.job != nil)
         }

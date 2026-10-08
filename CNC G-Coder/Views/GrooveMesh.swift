@@ -23,6 +23,9 @@ nonisolated enum GrooveMesh {
     /// The invisible opening face sits this far inside the board so it never
     /// fights the copper face at Z0.
     static let faceInset = 0.01
+    /// Islands (inner rings of the removed region) smaller than this are
+    /// left out, mm²: a 0.16 mm post of FR4 or copper does not stand.
+    static let minimumIslandArea = 0.02
 
     struct Result {
         var node: SCNNode
@@ -62,28 +65,36 @@ nonisolated enum GrooveMesh {
         let r = max((layer.toolDiameter ?? fallbackToolWidth) / 2, 0.02)
         let moves = layer.moves
 
-        // Runs of consecutive cutting moves per depth bin (0.01 mm).
+        // Runs of consecutive cutting moves, each binned by the deepest Z it
+        // reaches (0.01 mm bins). A run ends at a rapid, a non-cutting move,
+        // a vertical move (a bridge rising out of an outline cut, or the
+        // descent back into it) or a gap in the path. Binning the whole run
+        // by its deepest Z is what a helix leaves behind: hole milling
+        // spirals down in full turns and its last turn clears everything
+        // above it, whereas binning every tessellated chord on its own Z
+        // shredded one hole into ~180 pill-shaped slabs at as many depths.
         var runs: [Int: [[CGPoint]]] = [:]
         var current: [CGPoint] = []
-        var currentBin: Int?
+        var currentDeepest: Double?
         func flush() {
-            if let bin = currentBin, current.count >= 2 { runs[bin, default: []].append(current) }
+            if let z = currentDeepest, current.count >= 2 {
+                runs[Int((z * 100).rounded()), default: []].append(current)
+            }
             current = []
-            currentBin = nil
+            currentDeepest = nil
         }
         for move in moves {
             let planarLength = hypot(move.end.x - move.start.x, move.end.y - move.start.y) > 1e-6
             guard cuts(move), planarLength else {
-                if move.kind == .rapid || !cuts(move) { flush() }
+                flush()
                 continue
             }
-            let bin = Int((move.zEnd * 100).rounded())
-            if bin != currentBin || current.last != move.start {
+            if current.last != move.start {
                 flush()
-                currentBin = bin
                 current = [move.start]
             }
             current.append(move.end)
+            currentDeepest = min(currentDeepest ?? move.zEnd, move.zEnd)
         }
         flush()
         guard !runs.isEmpty else { return nil }
@@ -100,9 +111,14 @@ nonisolated enum GrooveMesh {
             let z = Double(bin) / 100
             let depth = min(max(-z, 0.01), thickness + 0.6)
             let t0 = CACurrentMediaTime()
-            let region = Clipper.inflate(paths.map { $0.map { $0.applying(frame) } }, by: r,
-                                         join: .round, end: .round, arcTolerance: arcTolerance)
+            let rawRegion = Clipper.inflate(paths.map { $0.map { $0.applying(frame) } }, by: r,
+                                            join: .round, end: .round, arcTolerance: arcTolerance)
             unionTime += CACurrentMediaTime() - t0
+            // Islands too thin to survive are not drawn: a hole milled as one
+            // circle by a bit of less than half its diameter leaves a post at
+            // the centre (4.125 mm hole, 2 mm bit: 0.125 mm across, 0.012 mm²)
+            // that breaks off at the first touch; drawn, it reads as a defect.
+            let region = rawRegion.filter { Clipper.area($0) >= 0 || -Clipper.area($0) >= minimumIslandArea }
             guard !region.isEmpty else { continue }
             rings += region.count
             ringVertices += region.reduce(0) { $0 + $1.count }
