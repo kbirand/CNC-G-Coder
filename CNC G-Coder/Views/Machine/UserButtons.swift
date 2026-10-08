@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Candle-style user buttons on the Control tab: one per macro in
+/// User buttons on the Control tab: one per macro in
 /// `MachineSettings.macros`, wrapped into rows. A button runs its macro with
 /// the machine idle; a macro marked "allow while running" stays enabled
 /// during a job (its lines go out between the program's). "Edit…" switches

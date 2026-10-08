@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Digital read-out: work position large, machine position small ("—" until
 /// the controller has reported one), a status strip with the live feed and
-/// spindle speed, buffer and pin state, and a grid of Candle-style icon
+/// spindle speed, buffer and pin state, and a grid of icon
 /// buttons: Zero XY / Zero Z / Zero All / Probe Z and Go to Work Zero /
 /// Safe Z / Home / Unlock. Clicking a work value opens a popover that sets
 /// that axis (`G10 L20`) — that is where the per-axis zero lives.
@@ -210,8 +210,7 @@ struct MachineDRO: View {
     }
 }
 
-/// Icon above a short label, filling the button's cell — the look of
-/// Candle's icon buttons.
+/// Icon above a short label, filling the button's cell.
 struct DROButtonLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(spacing: 3) {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The height map as the preview shows it (Candle-style): which map is drawn
+// The height map as the preview shows it: which map is drawn
 // for the shown board side, whether it is being probed right now, and the
 // surface colouring shared by the 2D canvas and the 3D scene.
 
@@ -79,7 +79,7 @@ extension AppModel {
     }
 }
 
-/// The interpolated surface between probed points, for drawing — Candle's
+/// The interpolated surface between probed points, for drawing — the
 /// wireframe "interpolation grid": `interpolationX` × `interpolationY`
 /// lines over the border, every segment coloured by the bilinear height at
 /// its midpoint. Cells whose four corners are probed carry the surface;
@@ -174,7 +174,7 @@ nonisolated enum HeightMapSurface {
         return min(max((z - range.low) / span, 0), 1)
     }
 
-    /// Blue (0) through green and yellow to red (1), like Candle's surface.
+    /// Blue (0) through green and yellow to red (1): a rainbow by height.
     static func color(unit t: Double) -> Color {
         Color(hue: 0.66 * (1 - t), saturation: 0.85, brightness: 0.95)
     }

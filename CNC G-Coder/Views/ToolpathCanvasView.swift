@@ -44,7 +44,7 @@ struct ToolpathCanvasView: View {
     @AppStorage("previewShowMachineTravel") private var showMachineTravel = true
     /// One-shot: frame the travel area too (View Options → Fit Machine Travel).
     @State private var fitTravel = false
-    /// Candle's "interpolation grid": lines of the height-map wireframe.
+    /// The "interpolation grid": lines of the height-map wireframe.
     @AppStorage(HeightMapSurface.interpolationXKey) private var heightMapLinesX = HeightMapSurface.interpolationDefault
     @AppStorage(HeightMapSurface.interpolationYKey) private var heightMapLinesY = HeightMapSurface.interpolationDefault
 
@@ -332,8 +332,8 @@ struct ToolpathCanvasView: View {
             drawLayers(&ctx, doc: preview.document, scale: scale)
             // Simulating (playing or scrubbed, no job): the red tool follows
             // playback and the machine, if connected, is the blue marker.
-            // Otherwise the tool follows the machine's live position (as in
-            // Candle) when connected, else playback.
+            // Otherwise the tool follows the machine's live position when
+            // connected, else playback.
             let simulating = playback.job == nil && (playback.isPlaying || playback.currentTime > 0)
             if simulating, let position = playbackToolPosition {
                 drawToolMarker(&ctx, at: position, scale: scale)
@@ -631,7 +631,7 @@ struct ToolpathCanvasView: View {
         return bounds.union(travel.rect)
     }
 
-    /// The height map of the shown side, Candle-style, under the programs:
+    /// The height map of the shown side, under the programs:
     /// the wireframe interpolation grid (every segment coloured by its
     /// height, blue = lowest … red = highest; flat and teal where nothing
     /// is probed yet), the border, every probe point as a hollow (unprobed)

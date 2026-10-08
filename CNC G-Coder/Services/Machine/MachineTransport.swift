@@ -363,7 +363,7 @@ actor SerialTransport: MachineTransport {
         String(cString: strerror(errno))
     }
 
-    /// Opens the device. `O_EXLOCK` keeps Candle/UGS from opening the same
+    /// Opens the device. `O_EXLOCK` keeps other senders from opening the same
     /// port underneath us; a driver that cannot lock gets a warning, not a
     /// failure, while a port that *is* locked by someone else is reported as
     /// in use. `O_NONBLOCK` only so the open itself cannot hang on a modem

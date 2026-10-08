@@ -861,7 +861,7 @@ private struct SceneRepresentable: NSViewRepresentable {
                 content.addChildNode(Self.heightMapNode(heightMap.map, exaggeration: heightMapExaggeration,
                                                         lines: heightMapLines, map: { p, z in toScene(p.applying(frame), z) }))
             }
-            // The machine's travel box, as Candle draws its bounds: the bed
+            // The machine's travel box: the bed
             // (bottom of the Z travel) as a dashed outline, the top outline
             // fainter, and the four vertical edges (not part of the framing).
             if let machineTravel {
@@ -1044,7 +1044,7 @@ private struct SceneRepresentable: NSViewRepresentable {
         }
 
         /// Connected: the tool model follows the machine's reported position
-        /// (as in Candle) through the same mapping as the planned marker, so
+        /// through the same mapping as the planned marker, so
         /// it lands on the underside for an overlaid back-side program too;
         /// the small blue marker is redundant then. Returns whether the
         /// spindle should turn (the machine reports it running).
@@ -1228,7 +1228,7 @@ private struct SceneRepresentable: NSViewRepresentable {
             return (node, element)
         }
 
-        /// The height map as Candle's wireframe interpolation grid: line
+        /// The height map as a wireframe interpolation grid: line
         /// primitives with vertex colours (rainbow by height, the neutral
         /// colour where nothing is probed), flat at Z 0 over unprobed cells,
         /// Z stretched by `exaggeration`; plus the border.

@@ -3,7 +3,7 @@ import AppKit
 import CoreGraphics
 import UniformTypeIdentifiers
 
-/// Height map (autolevel), laid out like Candle: the border and grid of the
+/// Height map (autolevel): the border and grid of the
 /// probe (or Auto from the program), the Z limits and probe feed, Probe /
 /// Stop / Clear / Load / Save, the "use for sending" switch, a live
 /// progress line while probing, the summary and the value table. The tab
@@ -42,7 +42,7 @@ private struct HeightMapControlsBody: View {
 
     @State private var draft = HeightMapDraft()
     @State private var message: String?
-    /// Candle's "interpolation grid": lines of the wireframe the preview draws.
+    /// The "interpolation grid": lines of the wireframe the preview draws.
     @AppStorage(HeightMapSurface.interpolationXKey) private var interpolationX = HeightMapSurface.interpolationDefault
     @AppStorage(HeightMapSurface.interpolationYKey) private var interpolationY = HeightMapSurface.interpolationDefault
 

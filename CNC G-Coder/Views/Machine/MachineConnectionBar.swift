@@ -265,7 +265,7 @@ struct MachineConnectionBar: View {
         }
     }
 
-    /// Candle's colours: green idle, blue moving, orange held/door/check, red alarm.
+    /// State colours: green idle, blue moving, orange held/door/check, red alarm.
     private var stateColor: Color {
         switch machine.phase {
         case .disconnected: return .secondary

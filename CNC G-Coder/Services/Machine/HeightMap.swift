@@ -4,8 +4,8 @@ import CryptoKit
 
 // Height map (autolevel): a grid of probed surface heights over the board,
 // used to warp a program's Z so the etch depth stays even on a board that is
-// not flat. Candle's algorithm, kept bilinear: the bicubic variant was
-// deliberately not ported.
+// not flat. Bilinear interpolation between the probed points; a bicubic
+// variant was deliberately left out.
 
 /// Which side of the board a program is machined on. The board is flipped
 /// and re-clamped between the sides, so a map probed on one side says

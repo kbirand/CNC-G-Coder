@@ -174,8 +174,8 @@ nonisolated enum Pcb2GcodeService {
     }
 
     /// pcb2gcode otherwise emits `G64 P…` (LinuxCNC path blending), which
-    /// Grbl/FluidNC reject with error:20 — and senders like Candle abort the
-    /// job on it.
+    /// Grbl/FluidNC reject with error:20 — and most senders abort the job
+    /// on it.
     private static let noG64 = "--nog64"
 
     /// pcb2gcode's spin-up time is per invocation (isolation and outline
