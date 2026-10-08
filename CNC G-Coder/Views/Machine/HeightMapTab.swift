@@ -116,8 +116,8 @@ private struct HeightMapControlsBody: View {
                 }
                 GridRow {
                     Text("Z clear / Z max depth")
-                    field($draft.zClear, help: "Work Z the bit travels at between the points (Candle's Zt) — above the highest spot of the board")
-                    field($draft.zMaxDepth, help: "Lowest work Z a probe may reach (Candle's Zb); the probe gives up there if nothing is touched")
+                    field($draft.zClear, help: "Work Z the bit travels at between the points — above the highest spot of the board")
+                    field($draft.zMaxDepth, help: "Lowest work Z a probe may reach; the probe gives up there if nothing is touched")
                     Text("Zt / Zb").font(.caption).foregroundStyle(.secondary)
                 }
                 GridRow {

@@ -193,7 +193,7 @@ struct ProbeControls: View {
     private var edgeProbeSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             MachineSectionLabel(title: "Edge / corner probe")
-            Text("Finding the board's XY edges with the bit (Candle's two-pass edge probe) is planned for a later release. For now, jog to the corner and use Zero XY.")
+            Text("Finding the board's XY edges with the bit — a fast touch, back off, a slow touch, on each edge — is planned for a later release. For now, jog to the corner and use Zero XY.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
