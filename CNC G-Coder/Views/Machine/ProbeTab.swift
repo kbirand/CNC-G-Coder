@@ -51,26 +51,31 @@ struct ProbeControls: View {
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                     Text("Max travel")
+                        .help("How far down the probe may go before it gives up. A little more than the gap between the bit and the board; the probe fails without an alarm if nothing is touched.")
                     numberField($maxTravel, unit: "mm",
                                 help: "How far down the probe may go (G38.2 Z−…) before it gives up. A little more than the gap between the bit and the board; the probe fails without an alarm if nothing is touched.")
                 }
                 GridRow {
                     Text("Retract after")
+                        .help("How far the bit backs off after the fast pass (before the slow one) and after the last pass")
                     numberField($retract, unit: "mm",
                                 help: "How far the bit backs off after the fast pass (before the slow one) and after the last pass")
                 }
                 GridRow {
                     Text("Fast feed")
+                        .help("Speed of the first pass, which only has to find the surface")
                     numberField($feedFast, unit: "mm/min",
                                 help: "Speed of the first pass, which only has to find the surface")
                 }
                 GridRow {
                     Text("Slow feed")
+                        .help("Speed of the second pass, which sets the Z — slower is more precise (20 mm/min is typical)")
                     numberField($feedSlow, unit: "mm/min",
                                 help: "Speed of the second pass, which sets the Z — slower is more precise (20 mm/min is typical)")
                 }
                 GridRow {
                     Text("Plate thickness")
+                        .help("What work Z reads at the trigger point: 0 for the bit touching the copper itself, the plate's thickness when probing through a touch plate laid on the board")
                     HStack(spacing: 8) {
                         numberField($plateThickness, unit: "mm",
                                     help: "What work Z reads at the trigger point: 0 for the bit touching the copper itself, the plate's thickness when probing through a touch plate laid on the board")

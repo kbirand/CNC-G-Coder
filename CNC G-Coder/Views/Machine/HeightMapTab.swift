@@ -96,6 +96,7 @@ private struct HeightMapControlsBody: View {
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
                 GridRow {
                     Text("Border X / Y")
+                        .help("Lower-left corner of the probe grid, in the board's design coordinates (the Gerber frame, as in the preview). Auto fills the border from the shown program's cut area.")
                     field($draft.originX, help: "Lower-left corner of the probe grid, in the board's design coordinates (the Gerber frame, as in the preview)")
                     field($draft.originY, help: "Lower-left corner of the probe grid, in the board's design coordinates (the Gerber frame, as in the preview)")
                     Button("Auto", systemImage: "wand.and.stars") { autoGrid() }
@@ -104,30 +105,35 @@ private struct HeightMapControlsBody: View {
                 }
                 GridRow {
                     Text("Border W / H")
+                        .help("Width and height of the probe grid. It should cover everything the program cuts, with a little margin; the work coordinates of its corner are shown beside it.")
                     field($draft.width, help: "Size of the probe grid. It should cover everything the program cuts, with a little margin.")
                     field($draft.height, help: "Size of the probe grid. It should cover everything the program cuts, with a little margin.")
                     Text(workEquivalent).font(.caption).foregroundStyle(.secondary)
                 }
                 GridRow {
                     Text("Points X / Y")
+                        .help("Probe points along X and Y (2–15 each). Points about 10 mm apart follow a warped board well; more points take longer to probe.")
                     field($draft.nx, help: "Probe points along X (2–15). Points about 10 mm apart follow a warped board well; more points take longer to probe.")
                     field($draft.ny, help: "Probe points along Y (2–15). Points about 10 mm apart follow a warped board well; more points take longer to probe.")
                     Text("2–15 each").font(.caption).foregroundStyle(.secondary)
                 }
                 GridRow {
                     Text("Z clear / Z max depth")
+                        .help("Z clear: the work Z the bit travels at between the points — above the highest spot of the board. Z max depth: the lowest work Z a probe may reach; it gives up there if nothing is touched.")
                     field($draft.zClear, help: "Work Z the bit travels at between the points — above the highest spot of the board")
                     field($draft.zMaxDepth, help: "Lowest work Z a probe may reach; the probe gives up there if nothing is touched")
                     Text("Zt / Zb").font(.caption).foregroundStyle(.secondary)
                 }
                 GridRow {
                     Text("Probe feed")
+                        .help("Speed of the probing move at every point, mm/min — slow for precision, as in the Z probe")
                     field($draft.feedSlow, help: "Speed of the probing move at every point, mm/min — slow for precision, as in the Z probe")
                     Text("mm/min").font(.caption).foregroundStyle(.secondary)
                         .gridCellColumns(2)
                 }
                 GridRow {
                     Text("Interpolation grid X / Y")
+                        .help("Lines of the wireframe the preview draws between the probed points (4–60) — display only; the program itself is interpolated continuously")
                     linesField(linesX, help: "Lines of the wireframe the preview draws between the probed points (4–60) — display only, the program itself is interpolated continuously")
                     linesField(linesY, help: "Lines of the wireframe the preview draws between the probed points (4–60) — display only, the program itself is interpolated continuously")
                     Text("4–60 lines").font(.caption).foregroundStyle(.secondary)
