@@ -30,6 +30,11 @@ Options:
     --alarm-code C      alarm number for --alarm (default 1)
     --probe-fail        every G38.2/G38.4 fails: ALARM:5, then after 0.5 s
                         [PRB:x,y,z:0] + ok (G38.3/.5 just report :0)
+    --probe-overshoot MM after a probe trips, keep moving MM further along the
+                        probe direction before stopping, as FluidNC does with
+                        its queued step segments (~0.1 s: 0.03-0.05 mm at
+                        F20-30). [PRB] still reports the contact; the status
+                        report shows the resting position (default 0)
     --surface Z         machine Z of the synthetic probe surface (default -3;
                         the surface ripples by 0.05*sin(x/10)+0.03*cos(y/8));
                         honoured by G38.2/.3 going down and G38.4/.5 going up
@@ -416,14 +421,23 @@ class Machine:
             speed = block.feed * self.ov["feed"] / 100.0
         step = speed / 60.0 * dt
         target = min(block.length, block.progress + step)
-        if block.kind == "probe":
+        if block.kind == "probe" and block.triggered is None:
             hit = self.probe_contact(block, block.progress, target)
             if hit is not None:
-                self.mpos = list(hit)
                 block.triggered = tuple(hit)
                 self.probe_pin = True
-                self.finish(block)
-                return
+                over = max(0.0, self.opts.probe_overshoot)
+                # The block now ends `over` mm past the contact (FluidNC keeps
+                # stepping through its queued segments after the trigger).
+                at = math.dist(block.start, hit)
+                f = (at + over) / block.length
+                block.end = tuple(block.start[i] + (block.end[i] - block.start[i]) * f for i in range(3))
+                block.length = at + over
+                if over <= 0:
+                    self.mpos = list(hit)
+                    self.finish(block)
+                    return
+                target = min(block.length, max(target, at))
         block.progress = target
         f = target / block.length
         self.mpos = [block.start[i] + (block.end[i] - block.start[i]) * f for i in range(3)]
@@ -431,7 +445,7 @@ class Machine:
             self.finish(block)
 
     def finish(self, block):
-        self.mpos = list(block.end) if block.triggered is None else list(block.triggered)
+        self.mpos = list(block.end)   # a tripped probe block already ends at contact + overshoot
         block.done = True
         if self.queue and self.queue[0] is block:
             self.queue.popleft()
@@ -1473,6 +1487,7 @@ def main(argv=None):
     p.add_argument("--alarm", type=int, default=0, metavar="N")
     p.add_argument("--alarm-code", type=int, default=ALARM_HARD_LIMIT, metavar="C")
     p.add_argument("--probe-fail", action="store_true")
+    p.add_argument("--probe-overshoot", type=float, default=0.0, metavar="MM")
     p.add_argument("--surface", type=float, default=-3.0, metavar="Z")
     p.add_argument("--wco", type=parse_wco, default=[0.0, 0.0, 0.0], metavar="X,Y,Z",
                    help="initial G54 offset (machine point of work zero)")

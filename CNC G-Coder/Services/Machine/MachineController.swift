@@ -1441,8 +1441,25 @@ final class MachineController {
             guard let slow, slow.success, alarmCode == nil else {
                 return await probeFailed("The probe lost contact on the slow pass.")
             }
-            // On the contact point: make this position read `plate`.
-            try await sendInternal(ProbeRoutines.originLine(plate: spec.plateThickness))
+            // Where the axis came to rest. The firmware keeps executing the
+            // step segments it had queued when the probe tripped (FluidNC:
+            // ~0.1 s, 0.03–0.05 mm at F20–30 — more than the copper foil),
+            // so the bit stops BELOW the PRB contact. The origin goes on the
+            // contact: the resting position is made to read `plate − overshoot`.
+            statusSerial += 1
+            let rested = await waitForFreshStatus(timeout: 3)
+            var overshoot = 0.0
+            if rested, let restZ = status.machinePosition?.z {
+                let past = slow.position.z - restZ
+                if abs(past) <= 0.5 {
+                    overshoot = past
+                } else {
+                    log(.warning, "The status report after the slow pass puts the bit \(GRBLCommand.number(past)) mm from the PRB contact (machine Z \(GRBLCommand.number(restZ)) vs PRB \(GRBLCommand.number(slow.position.z))); ignoring it and setting the origin at the resting position.")
+                }
+            } else {
+                log(.warning, "No status report after the slow pass; the origin is set at the resting position, which may lie a few hundredths below the contact.")
+            }
+            try await sendInternal(ProbeRoutines.originLine(plate: spec.plateThickness, overshoot: overshoot))
             // Read the offsets straight back (`$#`) so the DRO shows the new Z
             // at once (GRBL puts WCO: in a status report only every few
             // reports) and the controller's view can be checked.
@@ -1451,7 +1468,7 @@ final class MachineController {
             seedWorkOffset()
             statusSerial += 1
             let expectedOrigin = ProbeRoutines.expectedOrigin(prbMachineZ: slow.position.z, plate: spec.plateThickness)
-            if let origin = offsets[activeWCS]?.z, abs(origin - expectedOrigin) > 0.05 {
+            if let origin = offsets[activeWCS]?.z, abs(origin - expectedOrigin) > 0.01 {
                 log(.warning, "\(activeWCS) Z origin reads \(GRBLCommand.number(origin)) after the probe, expected about \(GRBLCommand.number(expectedOrigin)) (PRB − plate); \(offsetsSummary).")
             }
             for line in ProbeRoutines.zProbeTail(spec) { try await sendInternal(line) }
@@ -1459,10 +1476,10 @@ final class MachineController {
             // Verify against the controller's own report after the retract;
             // if the origin did not land, set it from here (the retract is
             // an exact incremental move from the contact point).
-            let expected = spec.plateThickness + abs(spec.retract)
+            let expected = spec.plateThickness - overshoot + abs(spec.retract)
             var settled = await waitForFreshStatus(timeout: 4)
             var workZ = status.workPosition?.z
-            if settled, let z = workZ, abs(z - expected) > 0.05 {
+            if settled, let z = workZ, abs(z - expected) > 0.01 {
                 log(.warning, "After the retract the controller reads work Z\(GRBLCommand.number(z)) instead of Z\(GRBLCommand.number(expected)); \(offsetsSummary); WCO \(status.workOffset?.summary ?? "?"). Setting the origin again from this position.")
                 try await sendInternal("G10 L20 P0 Z" + GRBLCommand.number(expected))
                 workOffset = nil
@@ -1474,9 +1491,10 @@ final class MachineController {
             }
             var note = "Probe Z: contact at machine Z \(GRBLCommand.number(slow.position.z)) → work Z\(GRBLCommand.number(spec.plateThickness)) there"
             if let origin = offsets[activeWCS]?.z { note += " (\(activeWCS) Z origin now \(GRBLCommand.number(origin)))" }
+            if overshoot != 0 { note += "; the axis stopped \(GRBLCommand.number(overshoot)) mm past the contact" }
             if let workZ { note += "; after the \(GRBLCommand.number(abs(spec.retract))) mm retract the DRO reads Z\(GRBLCommand.number(workZ))" }
             log(.info, note + ".")
-            if settled, let workZ, abs(workZ - expected) > 0.05 {
+            if settled, let workZ, abs(workZ - expected) > 0.01 {
                 let message = "Probe Z could not make the controller read Z\(GRBLCommand.number(expected)) after the retract (it reads Z\(GRBLCommand.number(workZ)); \(offsetsSummary); status WCO \(status.workOffset?.summary ?? "?")). Please send the Console lines from this probe."
                 log(.warning, message)
                 lastError = message

@@ -2,9 +2,14 @@ import Foundation
 
 // The Z touch-off as pure line builders. The controller runs them one by
 // one (each `G38.2` answers only when the probe has stopped), reads the
-// trigger point from the `[PRB:…]` line attributed to that command, and
-// inserts the `G10 L2` itself — so the origin is placed at the exact
-// trigger point whatever overshoot the slow pass had.
+// trigger point from the `[PRB:…]` line attributed to that command, reads
+// where the axis actually came to rest from the next status report, and
+// inserts the `G10 L20` itself — so the origin is placed at the exact
+// trigger point whatever overshoot the slow pass had. The overshoot is
+// real: FluidNC keeps executing the step segments it had queued when the
+// probe tripped, about 0.1 s, i.e. 0.03–0.05 mm at F20–30 — more than the
+// copper foil is thick. Three boards lost their pads to a zero set at the
+// resting position (2026-10-09).
 
 /// Parameters of a two-pass Z probe. Distances in mm, feeds in mm/min.
 nonisolated struct ZProbeSpec: Equatable, Sendable {
@@ -46,15 +51,16 @@ nonisolated enum ProbeRoutines {
         ]
     }
 
-    /// Sets the active system's Z origin from the position the bit stopped
-    /// at — the contact point: `G10 L20 P0 Z<plate>` makes the current
-    /// position read `plate`, and the controller folds any G92 or tool
-    /// length offset in itself. The slow pass stops within a micron of the
-    /// trigger (v²/2a at F20), so this is as exact as `G10 L2` from the PRB
-    /// value, and it does not depend on how the firmware reports PRB or
-    /// treats `L2 P0` (FluidNC 4.0.3 left the G54 origin untouched by it).
-    static func originLine(plate: Double) -> String {
-        "G10 L20 P0 Z" + GRBLCommand.number(plate)
+    /// Sets the active system's Z origin on the contact point from the
+    /// position the bit came to rest at: `overshoot` = PRB Z − resting Z
+    /// (how far the axis ran on past the trigger before it stopped), so
+    /// `G10 L20 P0 Z<plate − overshoot>` makes the resting position read
+    /// `plate − overshoot` and the contact itself read `plate`. `L20` lets
+    /// the controller fold any G92 or tool length offset in itself, and
+    /// does not depend on how the firmware treats `L2 P0` (FluidNC 4.0.3
+    /// left the G54 origin untouched by it).
+    static func originLine(plate: Double, overshoot: Double) -> String {
+        "G10 L20 P0 Z" + GRBLCommand.number(plate - overshoot)
     }
 
     /// The machine-coordinate origin `originLine` should produce, for the read-back check.

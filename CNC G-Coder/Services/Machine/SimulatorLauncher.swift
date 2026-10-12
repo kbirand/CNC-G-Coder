@@ -40,6 +40,8 @@ actor SimulatorLauncher {
     nonisolated static let workZero = (x: 11.0, y: 71.0, z: -81.0)
     /// Machine Z of the simulated probe surface (`--surface`), 1 mm below work Z0.
     nonisolated static let probeSurface = -82.0
+    /// How far a probe runs on past the contact before it stops (`--probe-overshoot`).
+    nonisolated static let probeOvershoot = 0.04
     nonisolated static let firmwareDescription = "FluidNC 3.9.9"
 
     private var process: Process?
@@ -68,6 +70,9 @@ actor SimulatorLauncher {
             "--port", String(port),
             "--wco", "\(Self.number(Self.workZero.x)),\(Self.number(Self.workZero.y)),\(Self.number(Self.workZero.z))",
             "--surface", Self.number(Self.probeSurface),
+            // Like FluidNC: the axis runs on past the probe trigger before it
+            // stops, so Probe Z must set the origin from the PRB contact.
+            "--probe-overshoot", Self.number(Self.probeOvershoot),
             "--parent-pid", String(ProcessInfo.processInfo.processIdentifier),
         ]
         process.currentDirectoryURL = script.deletingLastPathComponent()
