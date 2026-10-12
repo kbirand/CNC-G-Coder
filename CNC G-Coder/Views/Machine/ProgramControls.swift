@@ -451,7 +451,8 @@ private struct ProgramControlsBody<Middle: View>: View {
                                      heightMap: machine.applyHeightMap ? availableMap : nil,
                                      applyBelowZ: MachineSettings.heightMapApplyBelowZ,
                                      frame: model.heightMapFrame(side: kind.boardSide),
-                                     clampZAboveWork: clampZ ? machine.clampZWork() : nil)
+                                     clampZAboveWork: clampZ ? machine.clampZWork() : nil,
+                                     fitArcs: MachineSettings.fitArcs)
         if !force, let program, program.kind == kind, program.name == name, program.options == options {
             preparing = false
             prepareError = nil

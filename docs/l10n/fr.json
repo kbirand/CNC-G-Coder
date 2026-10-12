@@ -1257,5 +1257,10 @@
 "Zoom out": "Zoom arrière",
 "~ — cycle start / resume": "~ — cycle start / reprise",
 "Σ est. %1$@ across %2$lld programs — rapids assumed %3$@ %4$@.": "Σ est. %1$@ sur %2$lld programmes — rapides supposés %3$@ %4$@.",
-"← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · hold = continuous · Esc stops": "← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · maintenir = continu · Échap arrête"
+"← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · hold = continuous · Esc stops": "← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · maintenir = continu · Échap arrête",
+"About CNC G-Coder": "À propos de CNC G-Coder",
+"Version %1$@ (%2$@), commit %3$@": "Version %1$@ (%2$@), commit %3$@",
+"Send circles as arcs (G2/G3)": "Envoyer les cercles en arcs (G2/G3)",
+"Chains of short straight segments that lie on a circle are sent as one arc each; the files on disk are not changed": "Les chaînes de petits segments droits situés sur un cercle sont envoyées comme un seul arc chacune ; les fichiers sur le disque ne changent pas",
+"pcb2gcode writes round pads and rings as polylines of 0.07 mm chords, one line each; an arc is one line and the controller follows it from memory. Only chains within 0.005 mm of a true circle are replaced. Applies to the copy that is sent, so the same program can be compared both ways; the Program tab's notes say how many arcs were fitted.": "pcb2gcode écrit les pastilles rondes et les anneaux comme des polylignes de cordes de 0,07 mm, une ligne chacune ; un arc est une seule ligne et le contrôleur le suit depuis sa mémoire. Seules les chaînes à moins de 0,005 mm d'un vrai cercle sont remplacées. S'applique à la copie envoyée, le même programme peut donc être comparé des deux façons ; les notes de l'onglet Program indiquent combien d'arcs ont été ajustés."
 }

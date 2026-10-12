@@ -170,6 +170,9 @@ extension AppModel {
             removeRecent(url)
             return
         }
+        if let saved = document.savedWith {
+            appendLog("\nProject saved with CNC G-Coder \(saved.summary) on \(saved.date).\n")
+        }
 
         // Packed files are unpacked into a fresh working folder; version 1
         // links are looked up where they were.
@@ -274,6 +277,7 @@ extension AppModel {
         document.guidesX = UserDefaults.standard.string(forKey: "previewGuidesX")
         document.guidesY = UserDefaults.standard.string(forKey: "previewGuidesY")
         document.customLayers = customLayers
+        document.savedWith = .current
         let layers = LayerSlot.allCases.filter { $0 != .drill }.compactMap { slot in
             detectedFiles[slot].map { (slot: slot.rawValue, file: $0, origin: layerOrigins[$0]) }
         }
@@ -282,7 +286,8 @@ extension AppModel {
             return (file: file, origin: layerOrigins[file], parameters: own.isEmpty ? nil : own)
         }
         do {
-            document = try ProjectDocument.writePackage(document, to: url, layers: layers, drills: drills)
+            document = try ProjectDocument.writePackage(document, to: url, layers: layers, drills: drills,
+                                                       heightMaps: Array(heightMaps.values))
         } catch {
             appendLog("\nERROR saving project: \(error.localizedDescription)\n")
             showError("Could not save \(url.lastPathComponent)", error.localizedDescription)

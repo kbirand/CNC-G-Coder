@@ -757,6 +757,12 @@ final class JobStreamer {
     /// itself, so a TCP link gets at least 512 bytes; both kinds grow to the
     /// RX size the controller reports in `Bf:`; Settings → Machine can pin
     /// a value (`machine.streamWindowBytes`, 0 = this automatic choice).
+    /// FluidNC over USB gets 256: that is what its firmware advertises
+    /// (`Channel::rx_buffer_available()` = 256 − queued, line queue ~1 KB),
+    /// and FluidNC does not put `Bf:` in its status reports by default, so
+    /// the window could never grow past 128 on its own — five 24-byte lines
+    /// in flight, while the 0.077 mm segments of a round mask pocket need a
+    /// line every 23 ms at F200 and the circles crawled next to the squares.
     private func applyWindowBudget() {
         let bytes: Int
         let source: String
@@ -765,7 +771,8 @@ final class JobStreamer {
             bytes = max(64, pinned)
             source = "setting"
         } else {
-            let floor = controller?.transportKind == .serial ? 128 : 512
+            let serialFloor = controller?.firmware.kind == .fluidnc ? 256 : 128
+            let floor = controller?.transportKind == .serial ? serialFloor : 512
             bytes = max(floor, min(maxRxBytes ?? 0, 2048))
             source = (maxRxBytes ?? 0) > floor ? "controller buffer" : "automatic"
         }

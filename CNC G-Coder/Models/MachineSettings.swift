@@ -31,6 +31,7 @@ nonisolated enum MachineSettings {
         static let consoleShowStatus = "machine.consoleShowStatus"
         static let macros = "machine.macros"
         static let applyBacklash = "machine.applyBacklash"
+        static let fitArcs = "machine.fitArcs"
         static let heightMapApplyBelowZ = "machine.heightMap.applyBelowZ"
         static let confirmContinue = "machine.confirmContinue"
         /// Record the work zero (as a machine point) in Positions when a program is sent.
@@ -69,6 +70,7 @@ nonisolated enum MachineSettings {
         static let autoReconnect = true
         static let consoleShowStatus = false
         static let applyBacklash = true
+        static let fitArcs = false
         static let heightMapApplyBelowZ = 1.0
         /// Continue after a tool change runs at once; on, the preamble sheet asks first.
         static let confirmContinue = false
@@ -171,6 +173,10 @@ nonisolated enum MachineSettings {
     static var consoleShowStatus: Bool {
         get { bool(Keys.consoleShowStatus, Defaults.consoleShowStatus) }
         set { defaults.set(newValue, forKey: Keys.consoleShowStatus) }
+    }
+    static var fitArcs: Bool {
+        get { bool(Keys.fitArcs, Defaults.fitArcs) }
+        set { defaults.set(newValue, forKey: Keys.fitArcs) }
     }
     static var applyBacklash: Bool {
         get { bool(Keys.applyBacklash, Defaults.applyBacklash) }

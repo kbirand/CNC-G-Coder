@@ -490,7 +490,8 @@ class Machine:
             parts.append("WPos:" + fmt3([self.mpos[i] - w[i] for i in range(3)]))
         else:
             parts.append("MPos:" + fmt3(self.mpos))
-        rx = RX_BYTES - sum(c.pending_bytes() for c in self.clients)
+        # Stock FluidNC advertises 256 bytes (Channel::rx_buffer_available), Grbl 1.1 128.
+        rx = (RX_BYTES if self.opts.grbl else 2 * RX_BYTES) - sum(c.pending_bytes() for c in self.clients)
         parts.append("Bf:%d,%d" % (PLANNER_BLOCKS - len(self.queue), max(0, rx)))
         parts.append("FS:%d,%d" % (self.current_feed(), self.current_spindle()))
         pins = ""

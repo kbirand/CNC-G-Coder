@@ -132,6 +132,14 @@ private struct GeneralSettingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Divider()
+                .padding(.vertical, 4)
+
+            Text("Version \(BuildInfo.version) (\(BuildInfo.build)), commit \(BuildInfo.commit)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
         }
         .padding(20)
         .onChange(of: refreshMode) {

@@ -31,6 +31,9 @@ nonisolated struct ProgramOptions: Equatable, Sendable {
     /// is replaced by it (air tests with work Z0 near the top of travel).
     /// Lower Z — the cutting depths — is never touched.
     var clampZAboveWork: Double? = nil
+    /// Replace pcb2gcode's chord polylines by G2/G3 arcs in the streamed
+    /// copy (`ArcFitter`; Settings → Machine). Off by default.
+    var fitArcs: Bool = false
 }
 
 /// A program ready to stream: its text on disk, the tool segments and the
@@ -193,6 +196,18 @@ nonisolated enum ProgramPreparer {
         // line at "\r" too, which would make it acknowledge every line twice).
         var text = sourceText.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         var notes: [String] = []
+
+        // 0. Arcs: chains of chords on a circle become one G2/G3 each. Before
+        //    the height map, which chords any arc again where it warps Z.
+        if options.fitArcs {
+            let fitted = ArcFitter.fit(text)
+            if fitted.arcs > 0 {
+                text = fitted.text
+                notes.append("Arcs fitted: \(fitted.arcs) G2/G3 arc\(fitted.arcs == 1 ? "" : "s") replaced \(fitted.linesReplaced) line\(fitted.linesReplaced == 1 ? "" : "s") (\(fitted.linesBefore) → \(fitted.linesAfter) lines).")
+            } else {
+                notes.append("Arcs: no chord chains to fit in this program.")
+            }
+        }
 
         // 1. Height map (before backlash: the take-ups are XY-only and the
         //    warp subdivides XY moves, so either order is geometrically the

@@ -145,6 +145,72 @@
         }
       }
     },
+    "Chains of short straight segments that lie on a circle are sent as one arc each; the files on disk are not changed" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las cadenas de segmentos rectos cortos que están sobre un círculo se envían como un solo arco cada una; los archivos del disco no cambian"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les chaînes de petits segments droits situés sur un cercle sont envoyées comme un seul arc chacune ; les fichiers sur le disque ne changent pas"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bir çember üzerinde duran kısa düz parça zincirleri birer yay olarak gönderilir; diskteki dosyalar değişmez"
+          }
+        }
+      }
+    },
+    "pcb2gcode writes round pads and rings as polylines of 0.07 mm chords, one line each; an arc is one line and the controller follows it from memory. Only chains within 0.005 mm of a true circle are replaced. Applies to the copy that is sent, so the same program can be compared both ways; the Program tab's notes say how many arcs were fitted." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pcb2gcode escribe los pads redondos y los anillos como polilíneas de cuerdas de 0,07 mm, una línea cada una; un arco es una sola línea y el controlador lo sigue desde su memoria. Solo se reemplazan las cadenas a menos de 0,005 mm de un círculo verdadero. Se aplica a la copia enviada, así que el mismo programa puede compararse de las dos formas; las notas de la pestaña Program dicen cuántos arcos se ajustaron."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pcb2gcode écrit les pastilles rondes et les anneaux comme des polylignes de cordes de 0,07 mm, une ligne chacune ; un arc est une seule ligne et le contrôleur le suit depuis sa mémoire. Seules les chaînes à moins de 0,005 mm d'un vrai cercle sont remplacées. S'applique à la copie envoyée, le même programme peut donc être comparé des deux façons ; les notes de l'onglet Program indiquent combien d'arcs ont été ajustés."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pcb2gcode yuvarlak pedleri ve halkaları 0,07 mm'lik kirişlerden oluşan çoklu çizgiler olarak, her biri bir satır, yazar; bir yay tek satırdır ve denetleyici onu bellekten izler. Yalnızca gerçek bir çembere 0,005 mm'den yakın zincirler değiştirilir. Gönderilen kopyaya uygulanır, böylece aynı program iki şekilde karşılaştırılabilir; Program sekmesinin notları kaç yay uydurulduğunu söyler."
+          }
+        }
+      }
+    },
+    "Send circles as arcs (G2/G3)" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar los círculos como arcos (G2/G3)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyer les cercles en arcs (G2/G3)"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Çemberleri yay (G2/G3) olarak gönder"
+          }
+        }
+      }
+    },
     "— %" : {
 
     },
@@ -1686,6 +1752,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "İşi bırak: reset, iş mili kapalı. Send from line… ile daha sonra sürdürülebilir."
+          }
+        }
+      }
+    },
+    "About CNC G-Coder" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acerca de CNC G-Coder"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "À propos de CNC G-Coder"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CNC G-Coder Hakkında"
           }
         }
       }
@@ -27064,6 +27152,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Doğrulanıyor"
+          }
+        }
+      }
+    },
+    "Version %@ (%@), commit %@" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Versión %1$@ (%2$@), commit %3$@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sürüm %1$@ (%2$@), commit %3$@"
+          }
+        }
+      }
+    },
+    "Version %1$@ (%2$@), commit %3$@" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Versión %1$@ (%2$@), commit %3$@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sürüm %1$@ (%2$@), commit %3$@"
           }
         }
       }

@@ -394,10 +394,7 @@ private struct HeightMapControlsBody: View {
     }
 
     private func clear() {
-        model.heightMaps[side] = nil
-        if let key = model.heightMapKey {
-            try? FileManager.default.removeItem(at: HeightMap.storageURL(projectKey: key, side: side))
-        }
+        model.removeHeightMap(side: side)
         Task { await machine.reprepareLoadedProgram() }
         message = String(localized: "Cleared.")
     }

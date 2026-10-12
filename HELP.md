@@ -49,8 +49,9 @@ A project (`.cncproj`) is a self-contained **package**: Finder shows it as one f
 
 ```
 Board.cncproj/
-  project.json   parameters (tools, depths, feeds, origin…), layer roles, guides, where each file came from
+  project.json   parameters (tools, depths, feeds, origin…), layer roles, guides, where each file came from, and the app version and commit that saved it
   Layers/        the Gerber and drill files themselves, unchanged
+  HeightMaps/    the probed height maps (front.json, back.json), so they travel with the project
 ```
 
 Move or copy the project on its own — it never loses its layers. (To email one, compress it first; Mail does this automatically.) When a project is opened its files are copied into a private working folder, so the originals are not needed and are never modified.
@@ -242,7 +243,7 @@ The tabs above the preview switch the main area:
 - **Jog** — the feed and step the panel starts with, and the segment length for continuous jogging on firmware that cannot cancel a long jog.
 - **Z probe** — fast and slow feeds, maximum travel, retract, plate thickness (the same values as on the Probe tab).
 - **Motion** — safe work Z for Go to Work Zero, Safe Z below the top of travel (also the parked height for tool changes), spindle minimum and maximum for the panel's Spindle button, spindle warm-up before resuming.
-- **Programs** — Apply backlash compensation when sending, Confirm before continuing after a tool change, Save the work zero when a program is sent (a Work entry in the Positions tab named after the program and the time; the newest 20 automatic entries are kept), the stream window (how many unacknowledged bytes stay in flight; 0 = automatic: 128 on USB serial, 512 over Wi‑Fi, or the receive buffer the controller reports — raise it when arcs and round corners run slower than the feed over Wi‑Fi, keep a Grbl board on USB at 128), the Z below which the height map applies.
+- **Programs** — Apply backlash compensation when sending, Confirm before continuing after a tool change, Save the work zero when a program is sent (a Work entry in the Positions tab named after the program and the time; the newest 20 automatic entries are kept), the stream window (how many unacknowledged bytes stay in flight; 0 = automatic: 128 on USB serial, 512 over Wi‑Fi, or the receive buffer the controller reports — raise it when arcs and round corners run slower than the feed over Wi‑Fi, keep a Grbl board on USB at 128), Send circles as arcs (G2/G3) (chains of 0.07 mm chords that lie on a circle are sent as one arc each — only the sent copy changes, so the same program can be compared both ways; the Program tab's notes count the arcs), the Z below which the height map applies.
 - **Axis calibration (steps/mm)** — see *Axis calibration* under Machine panel.
 
 ## Machine zeroing & double-sided work
@@ -300,7 +301,7 @@ If a 10 mm jog moves the spindle 9.85 mm, the controller's steps/mm is off. Sett
 Your own command sequences. **Add** creates a macro with a name, an optional SF Symbol icon (`fan.fill`, `drop.fill`, `house`…) and the G-code lines it sends; **Run** sends the lines one after another, waiting for each to be acknowledged (the machine must be connected and idle); **Edit**, and by right-click **Duplicate** and **Delete**; **Restore Defaults** replaces the list with the built-in examples. Every macro is also a **user button** on the Control tab; *allow while running* keeps a button enabled during a job, for short commands such as coolant. `@goto <position>` in a line moves to a saved position from the Positions tab.
 
 ### Height Map tab
-Define a grid over the board (**Auto** fits the selected program), **Probe** it and read the deviation. Maps are per side and stored relative to the Z probed at the work origin, so re-probing Z there after a tool change keeps them valid. With **Apply height map** on, every cut and low plunge of the streamed copy is warped to the measured surface (bilinear interpolation); rapids at safe height are untouched. If the work origin moved since probing, the app warns before applying. Maps are kept per project under Application Support and can be saved/loaded as JSON; View Options → Height Map shows the points on the toolpath.
+Define a grid over the board (**Auto** fits the selected program), **Probe** it and read the deviation. Maps are per side and stored relative to the Z probed at the work origin, so re-probing Z there after a tool change keeps them valid. With **Apply height map** on, every cut and low plunge of the streamed copy is warped to the measured surface (bilinear interpolation); rapids at safe height are untouched. If the work origin moved since probing, the app warns before applying. Maps are saved inside the project package (HeightMaps/) as soon as a probe completes, and under Application Support; they can also be saved/loaded as JSON by hand; View Options → Height Map shows the points on the toolpath.
 
 ### Trying it without a machine
 Turn on **Show the Simulator in the connection picker** in Settings → Machine, pick **Simulator** in the connection bar and press Connect: the app starts a built-in FluidNC simulator (`fake-grbl.py`, bundled; needs python3 from Xcode's command line tools) on a private port and talks to it like a real controller — real-time motion, alarms, tool-change suspensions, Z probing against a synthetic surface 1 mm below work zero, height maps. Its work zero is preset so the sample programs fit the travel. The state pill carries a **SIM** tag and the badge reads Simulator; Disconnect or quitting stops it. (Dev: `-debugMachineWindow 1 -debugMachineConnect sim`.)

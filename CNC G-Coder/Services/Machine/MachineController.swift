@@ -1706,7 +1706,8 @@ final class MachineController {
         let options = ProgramOptions(applyBacklash: program.options.applyBacklash, heightMap: map,
                                      applyBelowZ: MachineSettings.heightMapApplyBelowZ,
                                      frame: app?.heightMapFrame(side: program.kind.boardSide) ?? .identity,
-                                     clampZAboveWork: program.options.clampZAboveWork)
+                                     clampZAboveWork: program.options.clampZAboveWork,
+                                     fitArcs: program.options.fitArcs)
         guard options != program.options else { return nil }
         do {
             _ = try await prepareProgram(layer: layer, name: program.name, options: options)

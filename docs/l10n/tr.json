@@ -1258,5 +1258,10 @@
 "Zoom out": "Uzaklaştır",
 "~ — cycle start / resume": "~ — cycle start / sürdür",
 "Σ est. %1$@ across %2$lld programs — rapids assumed %3$@ %4$@.": "Σ tahmini %1$@, %2$lld programda — hızlılar %3$@ %4$@ varsayıldı.",
-"← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · hold = continuous · Esc stops": "← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · basılı = sürekli · Esc durdurur"
+"← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · hold = continuous · Esc stops": "← → X · ↑ ↓ Y · Page ↑ ↓ Z · ⇧ ×10 · basılı = sürekli · Esc durdurur",
+"About CNC G-Coder": "CNC G-Coder Hakkında",
+"Version %1$@ (%2$@), commit %3$@": "Sürüm %1$@ (%2$@), commit %3$@",
+"Send circles as arcs (G2/G3)": "Çemberleri yay (G2/G3) olarak gönder",
+"Chains of short straight segments that lie on a circle are sent as one arc each; the files on disk are not changed": "Bir çember üzerinde duran kısa düz parça zincirleri birer yay olarak gönderilir; diskteki dosyalar değişmez",
+"pcb2gcode writes round pads and rings as polylines of 0.07 mm chords, one line each; an arc is one line and the controller follows it from memory. Only chains within 0.005 mm of a true circle are replaced. Applies to the copy that is sent, so the same program can be compared both ways; the Program tab's notes say how many arcs were fitted.": "pcb2gcode yuvarlak pedleri ve halkaları 0,07 mm'lik kirişlerden oluşan çoklu çizgiler olarak, her biri bir satır, yazar; bir yay tek satırdır ve denetleyici onu bellekten izler. Yalnızca gerçek bir çembere 0,005 mm'den yakın zincirler değiştirilir. Gönderilen kopyaya uygulanır, böylece aynı program iki şekilde karşılaştırılabilir; Program sekmesinin notları kaç yay uydurulduğunu söyler."
 }

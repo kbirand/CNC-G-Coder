@@ -202,26 +202,77 @@ final class AppModel: ObservableObject {
     /// default framing).
     @Published var travelFitRequest = 0
 
-    /// Keeps a probed map for its side and writes it to Application Support.
+    /// The open .cncproj package, when the project was opened from or saved
+    /// to one (older single-file projects cannot hold maps).
+    private var projectPackageURL: URL? {
+        guard let projectURL else { return nil }
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: projectURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
+            ? projectURL : nil
+    }
+
+    /// Keeps a probed map for its side and writes it to Application Support
+    /// and into the project package, so it travels with the .cncproj.
     func saveHeightMap(_ map: HeightMap) {
         heightMaps[map.side] = map
-        guard let key = heightMapKey else { return }
-        let url = HeightMap.storageURL(projectKey: key, side: map.side)
-        do {
-            try map.write(to: url)
-            appendLog("[machine] Height map (\(map.side.title)) saved: \(url.path)\n")
-        } catch {
-            appendLog("[machine] ERROR saving the height map: \(error.localizedDescription)\n")
+        if let key = heightMapKey {
+            let url = HeightMap.storageURL(projectKey: key, side: map.side)
+            do {
+                try map.write(to: url)
+                appendLog("[machine] Height map (\(map.side.title)) saved: \(url.path)\n")
+            } catch {
+                appendLog("[machine] ERROR saving the height map: \(error.localizedDescription)\n")
+            }
+        }
+        if let package = projectPackageURL {
+            let url = ProjectDocument.heightMapURL(inPackage: package, side: map.side)
+            do {
+                try map.write(to: url)
+                appendLog("[machine] Height map (\(map.side.title)) saved into the project: \(package.lastPathComponent)/\(ProjectDocument.heightMapsFolder)/\(url.lastPathComponent)\n")
+            } catch {
+                appendLog("[machine] ERROR saving the height map into the project: \(error.localizedDescription)\n")
+            }
         }
     }
 
-    /// Reads the current project's maps from disk. With `carryOver`, maps
-    /// already in memory survive when the new key has none on disk (an
-    /// untitled project being saved for the first time).
+    /// Forgets a side's map: memory, Application Support and the package.
+    func removeHeightMap(side: BoardSide) {
+        heightMaps[side] = nil
+        if let key = heightMapKey {
+            try? FileManager.default.removeItem(at: HeightMap.storageURL(projectKey: key, side: side))
+        }
+        if let package = projectPackageURL {
+            try? FileManager.default.removeItem(at: ProjectDocument.heightMapURL(inPackage: package, side: side))
+        }
+    }
+
+    /// Reads the current project's maps from disk: the ones inside the
+    /// project package first (they travel with the file; a map found there
+    /// is mirrored to Application Support), then Application Support for
+    /// sides the package does not hold. With `carryOver`, maps already in
+    /// memory survive when nothing is found (an untitled project being saved
+    /// for the first time).
     func loadHeightMaps(carryOver: Bool = false) {
         var loaded: [BoardSide: HeightMap] = [:]
-        if let key = heightMapKey {
+        if let package = projectPackageURL {
             for side in BoardSide.allCases {
+                let url = ProjectDocument.heightMapURL(inPackage: package, side: side)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                do {
+                    let map = try HeightMap.read(from: url)
+                    loaded[side] = map
+                    // projectURL and projectFolder both reload; log a map once.
+                    if heightMaps[side] != map {
+                        appendLog("Height map (\(side.title)) loaded from the project: \(map.nx)×\(map.ny), probed \(map.probedAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "?").\n")
+                    }
+                    if let key = heightMapKey { try? map.write(to: HeightMap.storageURL(projectKey: key, side: side)) }
+                } catch {
+                    appendLog("WARNING: the project's \(side.title.lowercased()) height map could not be read: \(error.localizedDescription)\n")
+                }
+            }
+        }
+        if let key = heightMapKey {
+            for side in BoardSide.allCases where loaded[side] == nil {
                 let url = HeightMap.storageURL(projectKey: key, side: side)
                 guard FileManager.default.fileExists(atPath: url.path) else { continue }
                 if let map = try? HeightMap.read(from: url) { loaded[side] = map }
@@ -232,6 +283,7 @@ final class AppModel: ObservableObject {
     }
 
     private func startup() async {
+        appendLog("CNC G-Coder \(BuildInfo.summary)\n")
         PreviewPaths.cleanRoot()
         try? FileManager.default.removeItem(at: ProjectDocument.workingRoot)
         TempRoots.cleanStale(named: ProjectDocument.workingRootName)
@@ -433,10 +485,6 @@ final class AppModel: ObservableObject {
         }
         // Dev hook: `-debugTestDialog 1` opens Generate Test Board… at launch.
         if UserDefaults.standard.bool(forKey: "debugTestDialog") { showTestBoardDialog = true }
-        // Dev hook: `-debugOpenProject /path/x.cncproj` opens a saved project.
-        if let path = UserDefaults.standard.string(forKey: "debugOpenProject") {
-            openProject(at: URL(fileURLWithPath: path), confirmed: true)
-        }
         // Dev hook: `-debugTestBoard /path/out.ngc` generates a default test
         // board there and shows it in the preview.
         if let testPath = UserDefaults.standard.string(forKey: "debugTestBoard") {
@@ -594,7 +642,8 @@ final class AppModel: ObservableObject {
                                      heightMap: UserDefaults.standard.bool(forKey: "debugMachineApplyMap") ? heightMaps[layer.id.boardSide] : nil,
                                      applyBelowZ: MachineSettings.heightMapApplyBelowZ,
                                      frame: heightMapFrame(side: layer.id.boardSide),
-                                     clampZAboveWork: UserDefaults.standard.bool(forKey: "debugMachineClampZ") ? machine.clampZWork() : nil)
+                                     clampZAboveWork: UserDefaults.standard.bool(forKey: "debugMachineClampZ") ? machine.clampZWork() : nil,
+                                     fitArcs: MachineSettings.fitArcs)
         do {
             let program = try await machine.prepareProgram(layer: layer, name: layer.id.fileSlug + ".ngc", options: options)
             requestedMachineLayer = layer.id   // the Machine window's Program tab adopts this program instead of preparing its own

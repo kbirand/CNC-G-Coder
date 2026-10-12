@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 @main
 struct CNC_G_CoderApp: App {
@@ -97,6 +98,21 @@ struct CNC_G_CoderApp: App {
             CommandGroup(replacing: .help) {
                 Button("CNC G-Coder Help") { openWindow(id: "help") }
                     .keyboardShortcut("?", modifiers: .command)
+            }
+            // About: version, build and the git commit the app was built from.
+            CommandGroup(replacing: .appInfo) {
+                Button("About CNC G-Coder") {
+                    var options: [NSApplication.AboutPanelOptionKey: Any] = [
+                        .applicationVersion: BuildInfo.version,
+                        .version: "\(BuildInfo.build) · \(BuildInfo.commit)",
+                    ]
+                    if !BuildInfo.commitDate.isEmpty {
+                        options[.credits] = NSAttributedString(
+                            string: "Commit \(BuildInfo.commit) — \(BuildInfo.commitDate)",
+                            attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)])
+                    }
+                    NSApp.orderFrontStandardAboutPanel(options: options)
+                }
             }
         }
 

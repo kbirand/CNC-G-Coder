@@ -18,6 +18,15 @@ nonisolated struct ProjectDocument: Codable, Sendable {
     static let fileExtension = "cncproj"
     static let manifestName = "project.json"
     static let layersFolder = "Layers"
+    /// Probed height maps travel inside the package: `HeightMaps/front.json`,
+    /// `HeightMaps/back.json` (HeightMap's own JSON), written when a probe
+    /// completes and on every save, read before the per-computer store.
+    static let heightMapsFolder = "HeightMaps"
+
+    static func heightMapURL(inPackage project: URL, side: BoardSide) -> URL {
+        project.appendingPathComponent(heightMapsFolder, isDirectory: true)
+            .appendingPathComponent("\(side.rawValue).json")
+    }
 
     /// One layer file, and where it originally came from.
     struct StoredFile: Codable, Sendable {
@@ -58,6 +67,25 @@ nonisolated struct ProjectDocument: Codable, Sendable {
     var guidesY: String?
     /// Hand-drawn layers from the shape editor (absent in older projects).
     var customLayers: [CustomLayer]?
+    /// The app build that saved the file (absent in projects saved before
+    /// 2026-10-13), so a board can be traced to the build that made it.
+    struct SavedWith: Codable, Sendable {
+        var version: String
+        var build: String
+        /// Short git hash, "-dirty" appended for an uncommitted tree.
+        var commit: String
+        /// ISO 8601, when the file was written.
+        var date: String
+
+        static var current: SavedWith {
+            SavedWith(version: BuildInfo.version, build: BuildInfo.build, commit: BuildInfo.commit,
+                      date: ISO8601DateFormatter().string(from: .now))
+        }
+        var summary: String { "\(version) (\(build)) · \(commit)" }
+    }
+    var savedWith: SavedWith?
+    /// Height maps packed in, by side raw value → path inside the package.
+    var heightMaps: [String: String]?
 
     static func link(_ url: URL) -> StoredFile {
         StoredFile(name: url.lastPathComponent, path: url.path, bookmark: FileAccess.bookmark(url))
@@ -127,7 +155,8 @@ nonisolated struct ProjectDocument: Codable, Sendable {
     /// `layers`/`drills` are the files to pack, with their original locations.
     static func writePackage(_ document: ProjectDocument, to url: URL,
                              layers: [(slot: String, file: URL, origin: URL?)],
-                             drills: [(file: URL, origin: URL?, parameters: [String: String]?)]) throws -> ProjectDocument {
+                             drills: [(file: URL, origin: URL?, parameters: [String: String]?)],
+                             heightMaps: [HeightMap] = []) throws -> ProjectDocument {
         let fm = FileManager.default
         let scratch = (try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true))
             ?? fm.temporaryDirectory
@@ -151,6 +180,13 @@ nonisolated struct ProjectDocument: Codable, Sendable {
             return stored
         }
         document.version = 3
+        var packedMaps: [String: String] = [:]
+        for map in heightMaps {
+            let relative = "\(heightMapsFolder)/\(map.side.rawValue).json"
+            try map.write(to: staging.appendingPathComponent(relative))
+            packedMaps[map.side.rawValue] = relative
+        }
+        document.heightMaps = packedMaps.isEmpty ? nil : packedMaps
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

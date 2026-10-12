@@ -35,6 +35,7 @@ struct MachineSettingsPane: View {
     @AppStorage(MachineSettings.Keys.confirmContinue) private var confirmContinue = MachineSettings.Defaults.confirmContinue
     @AppStorage(MachineSettings.Keys.autoSaveWorkZero) private var autoSaveWorkZero = MachineSettings.Defaults.autoSaveWorkZero
     @AppStorage(MachineSettings.Keys.streamWindowBytes) private var streamWindowBytes = MachineSettings.Defaults.streamWindowBytes
+    @AppStorage(MachineSettings.Keys.fitArcs) private var fitArcs = MachineSettings.Defaults.fitArcs
 
     var body: some View {
         Form {
@@ -143,6 +144,11 @@ struct MachineSettingsPane: View {
             TextField("Stream window (bytes, 0 = automatic):", value: $streamWindowBytes, format: .number.grouping(.never))
                 .help("How many unacknowledged bytes stay in flight while a program streams; 0 picks 128 on USB serial and 512 over Wi‑Fi, or the receive buffer the controller reports if larger")
             Text("Short segments around corners and holes need many lines per second: on a Wi‑Fi link a small window waits for an acknowledgement every few lines and the cut crawls. Raise it if arcs run slower than the feed; a Grbl board on USB must stay at 128.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Send circles as arcs (G2/G3)", isOn: $fitArcs)
+                .help("Chains of short straight segments that lie on a circle are sent as one arc each; the files on disk are not changed")
+            Text("pcb2gcode writes round pads and rings as polylines of 0.07 mm chords, one line each; an arc is one line and the controller follows it from memory. Only chains within 0.005 mm of a true circle are replaced. Applies to the copy that is sent, so the same program can be compared both ways; the Program tab's notes say how many arcs were fitted.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("Height map applies to moves at or below Z (mm):", value: $applyBelowZ, format: numberFormat)
