@@ -26,6 +26,11 @@ nonisolated enum GrooveMesh {
     /// Islands (inner rings of the removed region) smaller than this are
     /// left out, mm²: a 0.16 mm post of FR4 or copper does not stand.
     static let minimumIslandArea = 0.02
+    /// How far a deeper region is grown before it is subtracted from a
+    /// shallower slab (mm): keeps the two walls apart, invisibly.
+    static let overlapInset = 0.01
+    /// Rings smaller than this (mm²) left by that subtraction are noise.
+    static let sliverArea = 0.001
 
     struct Result {
         var node: SCNNode
@@ -61,7 +66,11 @@ nonisolated enum GrooveMesh {
     /// an overlaid back-side program); `underside` puts them on the bottom
     /// face of a board `thickness` thick, opening downwards. Nil when the
     /// program cuts nothing.
-    static func build(layer: ParsedLayer, planar: CGAffineTransform, underside: Bool, thickness: Double) -> Result? {
+    /// `board`: the board polygon (front frame, `BoardOutline.polygon`) the
+    /// grooves are clipped to — outside it there is no material; the outline
+    /// program's own channel lies entirely outside and draws nothing.
+    static func build(layer: ParsedLayer, planar: CGAffineTransform, underside: Bool, thickness: Double,
+                      board: Clipper.Paths? = nil) -> Result? {
         let r = max((layer.toolDiameter ?? fallbackToolWidth) / 2, 0.02)
         let moves = layer.moves
 
@@ -103,13 +112,31 @@ nonisolated enum GrooveMesh {
         // which would mirror the drawing otherwise (see below).
         var frame = planar
         if underside { frame = frame.concatenating(CGAffineTransform(scaleX: 1, y: -1)) }
+        let clip = board.map { paths in
+            underside ? paths.map { $0.map { $0.applying(CGAffineTransform(scaleX: 1, y: -1)) } } : paths
+        }
 
         let root = SCNNode()
         var rings = 0, ringVertices = 0, triangles = 0
         var unionTime = 0.0, tessellationTime = 0.0
+        // Everything cut deeper by the bins already drawn (deepest first). A
+        // shallower slab is drawn only where it alone cuts: the outline's
+        // five depth passes share one footprint, and five coincident walls
+        // z-fought into black jitter along the board edge whenever the
+        // outline was shown. The deeper region is grown by `overlapInset`
+        // first, so the shallow slab's inner wall sits a hair outside the
+        // deep wall instead of on it.
+        var deeper: Clipper.Paths = []
         for (bin, paths) in runs.sorted(by: { $0.key > $1.key }) {
             let z = Double(bin) / 100
-            let depth = min(max(-z, 0.01), thickness + 0.6)
+            // A cut reaching the bottom face is a through cut: the slab ends
+            // at the far face (whose copper mask is punched there, see
+            // `BoardSurfaceTexture.throughDepth`) and gets no floor, so the
+            // channel opens to the background like a drilled hole. Extruded
+            // to the full 1.8 mm of a 1.6 mm board, the outline's floor hung
+            // 0.2 mm below the board as a dark skirt round every edge.
+            let through = -z >= thickness - 0.005
+            let depth = through ? thickness - 2 * faceInset : min(max(-z, 0.01), thickness)
             let t0 = CACurrentMediaTime()
             let rawRegion = Clipper.inflate(paths.map { $0.map { $0.applying(frame) } }, by: r,
                                             join: .round, end: .round, arcTolerance: arcTolerance)
@@ -118,7 +145,19 @@ nonisolated enum GrooveMesh {
             // circle by a bit of less than half its diameter leaves a post at
             // the centre (4.125 mm hole, 2 mm bit: 0.125 mm across, 0.012 mm²)
             // that breaks off at the first touch; drawn, it reads as a defect.
-            let region = rawRegion.filter { Clipper.area($0) >= 0 || -Clipper.area($0) >= minimumIslandArea }
+            var full = rawRegion.filter { Clipper.area($0) >= 0 || -Clipper.area($0) >= minimumIslandArea }
+            if let clip { full = Clipper.intersection(full, clip).filter { abs(Clipper.area($0)) >= sliverArea } }
+            guard !full.isEmpty else { continue }
+            let region: Clipper.Paths
+            if deeper.isEmpty {
+                region = full
+                deeper = full
+            } else {
+                let grown = Clipper.inflate(deeper, by: overlapInset, join: .round, end: .polygon, arcTolerance: arcTolerance)
+                region = Clipper.difference(full, grown).filter { abs(Clipper.area($0)) >= sliverArea }
+                deeper = Clipper.union(deeper + full)
+            }
+            unionTime += CACurrentMediaTime() - t0
             guard !region.isEmpty else { continue }
             rings += region.count
             ringVertices += region.reduce(0) { $0 + $1.count }
@@ -137,7 +176,7 @@ nonisolated enum GrooveMesh {
             // SceneKit keeps the tessellation internal; estimate: floor ≈ one
             // triangle per ring vertex (plus bridges), walls two per edge.
             triangles += region.reduce(0) { $0 + $1.count } * 3
-            shape.materials = materials(for: shape, z: z)
+            shape.materials = materials(for: shape, z: z, through: through)
 
             // The shape lies in its local XY plane, extruded along local Z
             // (−depth/2 … +depth/2): turned so local Z is the board's Z and
@@ -166,8 +205,8 @@ nonisolated enum GrooveMesh {
     /// (material 1) is wound to face +Z, i.e. up into the groove, which is
     /// where the floor is seen from. (The tessellation itself is internal:
     /// `elements` stays empty, so it cannot be inspected.)
-    private static func materials(for shape: SCNShape, z: Double) -> [SCNMaterial] {
-        [opening(), floor(z: z), wall(z: z)]
+    private static func materials(for shape: SCNShape, z: Double, through: Bool) -> [SCNMaterial] {
+        [opening(), through ? opening() : floor(z: z), wall(z: z)]
     }
 
     /// Draws nothing: the copper face above shows through its own cut-out.

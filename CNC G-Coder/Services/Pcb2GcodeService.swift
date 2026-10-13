@@ -400,7 +400,7 @@ nonisolated enum Pcb2GcodeService {
     static func stepCount(_ p: ParameterSnapshot, files: DetectedFiles, pcb2gcode: URL?) -> Int {
         var steps = usesNativeEngine(p, pcb2gcode: pcb2gcode) ? 1 : jobs(p, files: files, outputDir: URL(fileURLWithPath: "/")).count
         if let clearance = Double(p.plungeClearance), clearance > 0 { steps += 1 }
-        if p.zeroStart { steps += 1 }
+        steps += 1   // normalizeOrigins, in both zeroing modes
         return steps
     }
 
@@ -553,8 +553,10 @@ nonisolated enum Pcb2GcodeService {
             }
         }
 
-        if p.zeroStart, result.succeeded, !result.outputs.isEmpty {
-            post("Normalizing origins") {
+        // Always: with zeroing off the front programs are left as exported
+        // and only the back programs move (mirrored about the project centre).
+        if result.succeeded, !result.outputs.isEmpty {
+            post(p.zeroStart ? "Normalizing origins" : "Mirroring the back side about the board centre") {
                 result.frame = normalizeOrigins(p, outputs: result.outputs, log: &result.log)
             }
         }
@@ -1084,18 +1086,28 @@ nonisolated enum Pcb2GcodeService {
     private static func isBackSide(_ kind: LayerKind) -> Bool { kind.isBackSide }
 
     /// X0/Y0 for each side, from the lower-left corner of the project as the
-    /// machine sees that side. Corners and centre are the same corner on both
-    /// sides — the one you touch off at after flipping; a custom point is the
-    /// same physical spot on the board, e.g. a registration hole.
+    /// machine sees that side. The origin is the same MACHINE point on both
+    /// sides: the board is flipped in place (about its centre line, in the
+    /// same fixture) and the back programs are mirrored to land where the
+    /// front ones were, so nothing is re-zeroed after the flip. Corners and
+    /// centre are therefore the same corner of the fixture; a custom point
+    /// keeps its position relative to the fixture too (the board feature
+    /// under it on the front is its mirror image on the back). Zeroing off
+    /// (`zeroStart` false) is the design origin for both sides, with the
+    /// back programs mirrored about the project's centre the same way.
     static func origins(_ p: ParameterSnapshot, rect: CGRect) -> (front: CGPoint, back: CGPoint) {
         let w = rect.width, h = rect.height
+        guard p.zeroStart else {
+            let design = CGPoint(x: -rect.minX, y: -rect.minY)
+            return (design, design)
+        }
         let corner: CGPoint
         switch p.originMode {
         case "custom":
             let x = (Double(p.originX) ?? 0) - rect.minX
             let y = (Double(p.originY) ?? 0) - rect.minY
             let front = CGPoint(x: x, y: y)
-            return (front, p.mirrorYAxis ? CGPoint(x: x, y: h - y) : CGPoint(x: w - x, y: y))
+            return (front, front)
         case "bottomRight": corner = CGPoint(x: w, y: 0)
         case "topLeft": corner = CGPoint(x: 0, y: h)
         case "topRight": corner = CGPoint(x: w, y: h)
@@ -1137,8 +1149,13 @@ nonisolated enum Pcb2GcodeService {
             }
         }
 
-        log += String(format: "Origins normalized: project %.2f × %.2f mm, X0 Y0 at %@ — all programs share one origin per side (zero the machine once per side).\n",
-                      union.width, union.height, originDescription(p, front: origin.front))
+        if p.zeroStart {
+            log += String(format: "Origins normalized: project %.2f × %.2f mm, X0 Y0 at %@ — one origin for both sides: flip the board in place about its centre line, the back programs are mirrored to land on it, nothing is re-zeroed.\n",
+                          union.width, union.height, originDescription(p, front: origin.front))
+        } else {
+            log += String(format: "Back side mirrored about the project centre (%@ %.3f mm): both sides keep the design origin — flip the board in place, nothing is re-zeroed.\n",
+                          p.mirrorYAxis ? "Y" : "X", p.mirrorYAxis ? union.midY : union.midX)
+        }
         return ProjectFrame(rect: union, frontOrigin: origin.front, backOrigin: origin.back,
                             mirrorYAxis: p.mirrorYAxis)
     }

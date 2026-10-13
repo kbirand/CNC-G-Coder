@@ -3147,24 +3147,24 @@
         }
       }
     },
-    "Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. With an origin set, every program shares one origin per side — zero the machine once for the front programs and once after flipping, and Mirror axis has no effect (the shared origin absorbs it). Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front." : {
+    "Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. The origin is the same machine point on both sides: flip the board in place about its centre line and the back programs land where the front ones were — nothing is re-zeroed. Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los programas de la cara posterior siempre se reflejan para mecanizarse bien tras voltear la placa; el ajuste de arriba solo dice hacia dónde la voltea. Con un origen fijado, cada programa comparte un origen por cara: ponga la máquina a cero una vez para los programas frontales y otra tras voltear, y Mirror axis no tiene efecto (el origen compartido lo absorbe). Verifique la dirección de volteo con «Un-mirror Back Side» en View Options: con el eje correcto, el reverso sin reflejar se superpone al anverso."
+            "value" : "Los programas de la cara posterior siempre se reflejan para mecanizarse correctamente tras voltear la placa; el ajuste de arriba solo dice hacia qué lado la voltea. El origen es el mismo punto de máquina en ambas caras: voltee la placa en su sitio respecto a su línea central y los programas posteriores caen donde estaban los frontales; no se vuelve a poner a cero nada. Verifique la dirección de volteo con «Un-mirror Back Side» en View Options: con el eje correcto, la cara posterior sin reflejar se superpone a la frontal."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les programmes de la face arrière sont toujours miroités pour s'usiner correctement après retournement ; le réglage ci-dessus dit seulement dans quel sens vous la retournez. Avec une origine définie, chaque programme partage une origine par face — faites le zéro une fois pour les programmes avant et une fois après retournement ; l'axe miroir n'a aucun effet (l'origine partagée l'absorbe). Vérifiez le sens de retournement avec « Un-mirror Back Side » dans View Options : avec le bon axe, l'arrière dé-miroité se superpose à l'avant."
+            "value" : "Les programmes de la face arrière sont toujours mis en miroir pour s'usiner correctement une fois la carte retournée ; le réglage ci-dessus dit seulement dans quel sens vous la retournez. L'origine est le même point machine pour les deux faces : retournez la carte sur place autour de sa ligne centrale et les programmes arrière tombent là où étaient ceux de l'avant — rien n'est refait. Vérifiez le sens de retournement avec « Un-mirror Back Side » dans View Options : avec le bon axe, l'arrière dé-miroité se superpose à l'avant."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arka taraf programları, kartı çevirdikten sonra doğru işlensin diye her zaman aynalanır; yukarıdaki ayar yalnızca hangi yöne çevirdiğinizi söyler. Bir başlangıç ayarlıyken her program taraf başına bir başlangıcı paylaşır — makineyi ön programlar için bir kez, çevirdikten sonra bir kez daha sıfırlayın; Mirror axis'in etkisi olmaz (ortak başlangıç onu soğurur). Çevirme yönünü View Options'taki 'Un-mirror Back Side' ile doğrulayın: doğru eksen seçiliyken aynalanmamış arka, önün üstüne oturur."
+            "value" : "Arka taraf programları, kartı çevirdikten sonra doğru işlensin diye her zaman aynalanır; yukarıdaki ayar yalnızca hangi yöne çevirdiğinizi söyler. Başlangıç iki tarafta da aynı makine noktasıdır: kartı yerinde orta çizgisi etrafında çevirin, arka programlar ön programların olduğu yere düşer — hiçbir şey yeniden sıfırlanmaz. Çevirme yönünü View Options'taki 'Un-mirror Back Side' ile doğrulayın: doğru eksen seçiliyse aynası kaldırılan arka taraf önün üzerine biner."
           }
         }
       }
@@ -3440,7 +3440,7 @@
       }
     },
     "Bf %lld,%lld" : {
-      "comment" : "A label showing the number of free planner blocks and receive-buffer bytes.",
+      "comment" : "A label showing the number of free planner blocks and receive-buffer bytes. The first argument is the number of free planner blocks. The second argument is the number of receive-buffer bytes.",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "en" : {
@@ -13174,6 +13174,7 @@
       }
     },
     "Inert unless Origin is set to Design origin: mirroring about this line moves the back programs by twice its value, and the shared origin then shifts them back by exactly the same amount, so the result is identical whatever you put here. Pick Design origin to use it." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -15435,6 +15436,7 @@
       }
     },
     "Mirror axis" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -19911,6 +19913,7 @@
       }
     },
     "Programs keep the design's own coordinates — X0 Y0 is wherever the EDA tool put it, often far off the board (KiCad: the page corner)." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -19928,6 +19931,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Programlar tasarımın kendi koordinatlarını korur — X0 Y0, EDA aracının koyduğu yerdedir, çoğu zaman karttan çok uzakta (KiCad: sayfa köşesi)."
+          }
+        }
+      }
+    },
+    "Programs keep the design's own coordinates — X0 Y0 is wherever the EDA tool put it, often far off the board (KiCad: the page corner). The back programs are mirrored about the board's centre line, so after flipping the board in place the same X0 Y0 serves both sides." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los programas conservan las coordenadas del diseño: X0 Y0 está donde lo puso la herramienta EDA, a menudo lejos de la placa (KiCad: la esquina de la página). Los programas de la cara posterior se reflejan respecto a la línea central de la placa, así que tras voltearla en su sitio el mismo X0 Y0 sirve para ambas caras."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les programmes gardent les coordonnées de la conception — X0 Y0 est là où l'outil EDA l'a mis, souvent loin de la carte (KiCad : le coin de la page). Les programmes de la face arrière sont mis en miroir autour de la ligne centrale de la carte : après l'avoir retournée sur place, le même X0 Y0 sert aux deux faces."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Programlar tasarımın kendi koordinatlarını korur — X0 Y0, EDA aracının koyduğu yerdedir, çoğu zaman kartın çok dışında (KiCad: sayfa köşesi). Arka taraf programları kartın orta çizgisine göre aynalanır; kartı yerinde çevirdikten sonra aynı X0 Y0 iki tarafa da hizmet eder."
           }
         }
       }
@@ -25633,6 +25658,7 @@
       }
     },
     "The coordinate line the back side is mirrored around; it positions the mirrored programs directly. Set it to match your fixture — e.g. board width ÷ 2 when you flip around the board's centre line." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -26052,6 +26078,7 @@
       }
     },
     "The origin is the same physical point on both sides — for a two-sided board, pick a hole on the flip axis or re-find it after flipping. The marker in the view shows where X0 Y0 is." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -29128,6 +29155,28 @@
         }
       }
     },
+    "X0 Y0 stays at this machine point for both sides: flip the board in place about its centre line and the back programs are mirrored to land on it — nothing is re-zeroed. The marker in the view shows where X0 Y0 is." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X0 Y0 se queda en este punto de máquina para ambas caras: voltee la placa en su sitio respecto a su línea central y los programas de la cara posterior se reflejan para caer sobre él; no se vuelve a poner a cero nada. El marcador de la vista muestra dónde está X0 Y0."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X0 Y0 reste à ce point machine pour les deux faces : retournez la carte sur place autour de sa ligne centrale et les programmes de la face arrière sont mis en miroir pour y tomber — rien n'est refait. Le repère dans la vue montre où est X0 Y0."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X0 Y0 iki taraf için de bu makine noktasında kalır: kartı yerinde orta çizgisi etrafında çevirin, arka taraf programları onun üzerine düşecek biçimde aynalanır — hiçbir şey yeniden sıfırlanmaz. Görünümdeki işaret X0 Y0'ın yerini gösterir."
+          }
+        }
+      }
+    },
     "XY feed" : {
       "localizations" : {
         "es" : {
@@ -29497,6 +29546,7 @@
       }
     },
     "Zero the machine at this corner of the board before the front programs, and at the same corner of the fixture after flipping. The marker in the view shows where X0 Y0 is — drag it to move the origin." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -29514,6 +29564,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ön programlardan önce makineyi kartın bu köşesinde, çevirdikten sonra ise fikstürün aynı köşesinde sıfırlayın. Görünümdeki imleç X0 Y0'ın yerini gösterir — başlangıcı taşımak için sürükleyin."
+          }
+        }
+      }
+    },
+    "Zero the machine once at this corner. After flipping the board in place about its centre line, the back programs run from the same zero — nothing is re-zeroed. The marker in the view shows where X0 Y0 is — drag it to move the origin." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ponga la máquina a cero una sola vez en esta esquina. Tras voltear la placa en su sitio respecto a su línea central, los programas de la cara posterior parten del mismo cero; no se vuelve a poner a cero nada. El marcador de la vista muestra dónde está X0 Y0; arrástrelo para mover el origen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faites le zéro machine une seule fois à ce coin. Après avoir retourné la carte sur place autour de sa ligne centrale, les programmes de la face arrière partent du même zéro — rien n'est refait. Le repère dans la vue montre où est X0 Y0 — faites-le glisser pour déplacer l'origine."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Makineyi bu köşede bir kez sıfırlayın. Kartı yerinde orta çizgisi etrafında çevirdikten sonra arka taraf programları aynı sıfırdan çalışır — hiçbir şey yeniden sıfırlanmaz. Görünümdeki işaret X0 Y0'ın yerini gösterir — başlangıcı taşımak için sürükleyin."
           }
         }
       }

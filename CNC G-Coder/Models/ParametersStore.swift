@@ -216,7 +216,11 @@ final class ParametersStore: ObservableObject {
     // Where X0/Y0 goes when zeroing: bottomLeft | bottomRight | topLeft |
     // topRight | center — a corner of the project as the machine sees it, on
     // each side — or custom: the point originX/originY in design (Gerber)
-    // coordinates, which is the same physical spot on both sides.
+    // coordinates. Either way the origin is the same MACHINE point on both
+    // sides (the board is flipped in place; the back programs are mirrored
+    // to land on it), so nothing is re-zeroed after the flip. mirrorAxis is
+    // kept for old projects but inert: normalizeOrigins re-mirrors the back
+    // about the project centre in every mode.
     @AppStorage("param.originMode") var originMode = "bottomLeft"
     @AppStorage("param.originX") var originX = "0"
     @AppStorage("param.originY") var originY = "0"

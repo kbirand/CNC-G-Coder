@@ -51,9 +51,14 @@ final class BoardSurfaceTexture {
     /// Fallback cutter width when a program does not know its tool, mm.
     static let fallbackToolWidth = 0.2
 
-    init?(rect: CGRect) {
+    /// The board polygon in `rect`'s frame; the face outside it is punched
+    /// (alpha 0, so the cut-out shader drops it) on every repaint.
+    private let board: Clipper.Paths?
+
+    init?(rect: CGRect, board: Clipper.Paths? = nil) {
         guard rect.width > 0, rect.height > 0, rect.width.isFinite, rect.height.isFinite else { return nil }
         self.rect = rect
+        self.board = board
         let longest = max(rect.width, rect.height)
         let ppm = min(max(Self.longestEdgePixels / longest, Self.minimumPixelsPerMM), Self.maximumPixelsPerMM)
         pixelsPerMM = ppm
@@ -183,6 +188,20 @@ final class BoardSurfaceTexture {
         } else {
             context.setFillColor(CGColor(red: 0.72, green: 0.45, blue: 0.2, alpha: 1))
             context.fill(CGRect(x: 0, y: 0, width: pixelSize.width, height: pixelSize.height))
+        }
+        // No board outside the outline: even-odd fill of the whole face plus
+        // the board rings punches everything beyond them.
+        if let board, !board.isEmpty {
+            let path = CGMutablePath()
+            path.addRect(CGRect(x: -1, y: -1, width: pixelSize.width + 2, height: pixelSize.height + 2))
+            for ring in board where ring.count >= 3 {
+                path.addLines(between: ring.map { $0.applying(toPixels) })
+                path.closeSubpath()
+            }
+            context.setBlendMode(.copy)
+            context.setFillColor(Self.cutColor)
+            context.addPath(path)
+            context.fillPath(using: .evenOdd)
         }
         context.restoreGState()
         markAllDirty()

@@ -943,15 +943,13 @@ struct ParameterFormView: View {
             }
             .pickerStyle(.segmented)
             .help("How you physically turn the board over to machine the back — the back-side programs are ALWAYS mirrored to match, this only picks which way. Left–right: X coordinates are mirrored (turn it like a page, around a vertical line). Top–bottom: Y coordinates are mirrored (tip it towards you, around a horizontal line). Get this wrong and the back side machines as a mirror image of itself.")
-            ParamRow("Mirror axis", value: params.$mirrorAxis, kind: .length,
-                     help: params.zeroStart
-                        ? "Inert unless Origin is set to Design origin: mirroring about this line moves the back programs by twice its value, and the shared origin then shifts them back by exactly the same amount, so the result is identical whatever you put here. Pick Design origin to use it."
-                        : "The coordinate line the back side is mirrored around; it positions the mirrored programs directly. Set it to match your fixture — e.g. board width ÷ 2 when you flip around the board's centre line.")
-                .disabled(params.zeroStart)
+            // "Mirror axis" (param.mirrorAxis) is no longer shown: the back
+            // programs are always re-mirrored about the project centre by
+            // normalizeOrigins, whatever pcb2gcode mirrored them around.
         } header: {
             sectionHeader(.setup)
         } footer: {
-            Text("Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. With an origin set, every program shares one origin per side — zero the machine once for the front programs and once after flipping, and Mirror axis has no effect (the shared origin absorbs it). Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front.")
+            Text("Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. The origin is the same machine point on both sides: flip the board in place about its centre line and the back programs land where the front ones were — nothing is re-zeroed. Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front.")
         }
         if !ToolLocator.isAppStoreBuild {
             Section {
@@ -1034,12 +1032,12 @@ struct ParameterFormView: View {
 
     private var originFooter: String {
         guard params.zeroStart else {
-            return String(localized: "Programs keep the design's own coordinates — X0 Y0 is wherever the EDA tool put it, often far off the board (KiCad: the page corner).")
+            return String(localized: "Programs keep the design's own coordinates — X0 Y0 is wherever the EDA tool put it, often far off the board (KiCad: the page corner). The back programs are mirrored about the board's centre line, so after flipping the board in place the same X0 Y0 serves both sides.")
         }
         if params.originMode == "custom" {
-            return String(localized: "The origin is the same physical point on both sides — for a two-sided board, pick a hole on the flip axis or re-find it after flipping. The marker in the view shows where X0 Y0 is.")
+            return String(localized: "X0 Y0 stays at this machine point for both sides: flip the board in place about its centre line and the back programs are mirrored to land on it — nothing is re-zeroed. The marker in the view shows where X0 Y0 is.")
         }
-        return String(localized: "Zero the machine at this corner of the board before the front programs, and at the same corner of the fixture after flipping. The marker in the view shows where X0 Y0 is — drag it to move the origin.")
+        return String(localized: "Zero the machine once at this corner. After flipping the board in place about its centre line, the back programs run from the same zero — nothing is re-zeroed. The marker in the view shows where X0 Y0 is — drag it to move the origin.")
     }
 
     // MARK: - CNC export (per layer)

@@ -251,11 +251,11 @@ Tekerlek / sıkıştırma = yakınlaştırma (imlece sabit) · sürükleme = kay
 **Machine setup → Origin → "X0 Y0 at"**, makine başlangıcının kart üzerinde nerede olduğuna karar verir; her program onu paylaşır, taraf başına bir başlangıç. Görünüm onu halkalı bir artı ve kırmızı X / yeşil Y oklarıyla işaretler (Fit her zaman çerçeveler).
 
 - **Corners / Centre** — tüm projenin (tüm programların kapsamı), makinenin her tarafı gördüğü biçimiyle: çevirdikten sonra tezgâhın aynı köşesinde sıfırlarsınız.
-- **Custom point** — tasarım (Gerber/EasyEDA) koordinatlarında bir nokta; takım boyutları onu asla kaydırmaz. İki tarafta da aynı fiziksel noktadır, örneğin bir hizalama deliği. Origin X / Y'yi yazın ya da görünümde ayarlayın (aşağıda).
+- **Custom point** — tasarım (Gerber/EasyEDA) koordinatlarında bir nokta; takım boyutları onu asla kaydırmaz. X0 Y0 iki taraf için de aynı makine noktasında kalır: kartı yerinde çevirin, arka taraf programları onun üzerine düşecek biçimde aynalanır. Origin X / Y'yi yazın ya da görünümde ayarlayın (aşağıda).
 - **Görünümde taşıma** — başlangıç işaretini X0 Y0'ın olması gereken yere sürükleyin ya da **Set Origin in View**'a (Machine setup) / nişangâh düğmesine tıklayıp noktaya tıklayın. İkisi de projenin köşelerine ve merkezine (bu, o köşe modunu ayarlar) ve deliklere (özel nokta) yapışır. **Snap to Grid** açıkken (View Options ya da View → Snap to Grid, ⌘') diğer bırakmalar görünümde gösterilen ızgaraya düşer; böylece başlangıç tam ızgara adımlarıyla hareket eder; daha ince ızgara için yakınlaştırın.
-- **Design origin** — sıfırlama yok; koordinatlar tam dışa aktarıldığı gibi.
+- **Design origin** — sıfırlama yok; koordinatlar tam dışa aktarıldığı gibi. Arka taraf programları yine kartın orta çizgisine göre aynalanır, böylece ön taraftakilerle aynı X/Y aralığını kaplar.
 
-Ön taraf programları (bakır, delikler, dış hat, üst maske) için X/Y'yi başlangıçta sıfırlayın, sonra arka taraf programları için çevirdikten sonra bir kez daha — her şey çakışık kalır. Z'yi kart yüzeyinde sıfırlayın. Çevirme yönünü **Mirror around Y axis** ile seçin ve Flip Back View ile doğrulayın. Problama ve yükseklik haritaları Makine panelinden canlı yapılır (aşağıda); programların kendileri düz G-code kalır.
+X/Y'yi başlangıçta bir kez, Z'yi kart yüzeyinde sıfırlayın. Ön taraf programları (bakır, delikler, dış hat, üst maske) oradan çalışır; kartı yerinde orta çizgisi etrafında çevirdikten sonra arka taraf programları da — ön taraftakilerin tam olduğu yere düşecek biçimde aynalanırlar, hiçbir şey yeniden sıfırlanmaz. Çevirme yönünü **Mirror around Y axis** ile seçin ve Flip Back View ile doğrulayın. Problama ve yükseklik haritaları Makine panelinden canlı yapılır (aşağıda); programların kendileri düz G-code kalır.
 
 ## Boşluk telafisi
 

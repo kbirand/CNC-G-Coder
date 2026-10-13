@@ -696,6 +696,9 @@ private struct SceneRepresentable: NSViewRepresentable {
             topTexture = nil
             bottomTexture = nil
             let layer = program ?? document?.layers.first { $0.id == selected } ?? document?.layers.first
+            // The board's shape (front frame) from the outline program, when
+            // there is one: faces, walls and grooves are cut to it below.
+            let boardPolygon = document?.layers.first { $0.id == .outline }.flatMap { BoardOutline.polygon(outline: $0) }
             guard document != nil || layer != nil else {
                 toolMarker.isHidden = true
                 return
@@ -781,7 +784,7 @@ private struct SceneRepresentable: NSViewRepresentable {
                 if showCuts, !program.id.isDrill {
                     let onUnderside = physical && program.id.isBackSide && backToFront != nil
                     if let groove = GrooveMesh.build(layer: program, planar: onUnderside ? backToFront! : .identity,
-                                                     underside: onUnderside, thickness: t) {
+                                                     underside: onUnderside, thickness: t, board: boardPolygon) {
                         groove.node.name = "grooves-\(program.id.fileSlug)"
                         content.addChildNode(groove.node)
                         if UserDefaults.standard.bool(forKey: "debugDumpViews") {
@@ -813,20 +816,26 @@ private struct SceneRepresentable: NSViewRepresentable {
             if var rect = document.flatMap({ ArtworkExport.boardRect(in: $0) })
                 ?? document?.layers.compactMap({ $0.cutBounds }).reduce(CGRect?.none, { $0?.union($1) ?? $1 })
                 ?? shownBounds {
+                var polygon = boardPolygon
                 if !physical, let kind = layer?.id, kind.isBackSide, let flip = backToFront {
                     rect = rect.applying(flip.inverted())   // the board as seen for this program
+                    polygon = polygon?.map { $0.map { $0.applying(flip.inverted()) } }
                 }
-                let board = Self.boardNode(rect: rect, thickness: t, textured: showCuts)
+                let board = Self.boardNode(rect: rect, thickness: t, textured: showCuts, polygon: polygon)
                 content.addChildNode(board.node)
                 include(scenePoint(rect.minX, rect.minY, -t))
                 include(scenePoint(rect.maxX, rect.maxY, 0))
                 if showCuts {
                     boardTopMaterial = board.top
                     boardBottomMaterial = board.bottom
-                    frontSurface = BoardSurfaceTexture(rect: rect)
+                    frontSurface = BoardSurfaceTexture(rect: rect, board: polygon)
                     let progressiveThrough = progressivePlan.map { cutsThrough($0.layer) } ?? false
+                    // The bottom face needs its mask whenever the board has a
+                    // shape: untextured it is a copper-coloured rectangle, and
+                    // its corners show through the masked top face.
                     backSurface = bottomPrograms.isEmpty && progressivePlan?.underside != true && !progressiveThrough
-                        ? nil : BoardSurfaceTexture(rect: rect)
+                        && polygon == nil
+                        ? nil : BoardSurfaceTexture(rect: rect, board: polygon)
                     frontSurface?.setStatic(topPrograms)
                     backSurface?.setStatic(bottomPrograms)
                     if let plan = progressivePlan, let surface = plan.underside ? backSurface : frontSurface {
@@ -1409,7 +1418,12 @@ private struct SceneRepresentable: NSViewRepresentable {
         /// SCNBox material index 4) and bottom (index 5) faces get their own
         /// materials for the board surface images, mapped so world X/Y land
         /// where they are on the slab; the sides stay FR4 green.
-        nonisolated private static func boardNode(rect: CGRect, thickness: Double, textured: Bool)
+        /// With `polygon` (the board outline, `BoardOutline.polygon`) the
+        /// faces are masked to it by their textures and the box's sides are
+        /// not drawn; an extruded outline (`outlineWalls`) walls the slab
+        /// along the real edge instead.
+        nonisolated private static func boardNode(rect: CGRect, thickness: Double, textured: Bool,
+                                                  polygon: Clipper.Paths? = nil)
             -> (node: SCNNode, top: SCNMaterial?, bottom: SCNMaterial?) {
             let box = SCNBox(width: rect.width, height: thickness, length: rect.height, chamferRadius: 0)
             func fr4() -> SCNMaterial {
@@ -1421,7 +1435,17 @@ private struct SceneRepresentable: NSViewRepresentable {
                 m.isDoubleSided = true
                 return m
             }
+            func hidden() -> SCNMaterial {
+                let m = SCNMaterial()
+                m.colorBufferWriteMask = []
+                m.writesToDepthBuffer = false
+                m.readsFromDepthBuffer = false
+                return m
+            }
             guard textured else {
+                if let polygon, let walls = outlineWalls(polygon, thickness: thickness, side: fr4(), caps: fr4()) {
+                    return (walls, nil, nil)
+                }
                 box.materials = [fr4()]
                 let node = SCNNode(geometry: box)
                 node.simdPosition = scenePoint(rect.midX, rect.midY, -thickness / 2)
@@ -1448,11 +1472,50 @@ private struct SceneRepresentable: NSViewRepresentable {
             }
             let topMaterial = face(top: true)
             let bottomMaterial = face(top: false)
-            box.materials = [fr4(), fr4(), fr4(), fr4(), topMaterial, bottomMaterial]
+            let side = polygon == nil ? fr4() : hidden()
+            box.materials = [side, side, side, side, topMaterial, bottomMaterial]
             let node = SCNNode(geometry: box)
             node.simdPosition = scenePoint(rect.midX, rect.midY, -thickness / 2)
             node.renderingOrder = 1
+            if let polygon, let walls = outlineWalls(polygon, thickness: thickness, side: fr4(), caps: nil) {
+                let root = SCNNode()
+                root.addChildNode(node)
+                root.addChildNode(walls)
+                return (root, topMaterial, bottomMaterial)
+            }
             return (node, topMaterial, bottomMaterial)
+        }
+
+        /// The board outline extruded through the slab: `side` on the walls,
+        /// `caps` on the top and bottom faces (nil: not drawn — the textured
+        /// box faces show there). Placed like a groove: local XY is world
+        /// X/Y, local +Z the board's Z, spanning Z0 … −thickness.
+        nonisolated private static func outlineWalls(_ polygon: Clipper.Paths, thickness: Double,
+                                                     side: SCNMaterial, caps: SCNMaterial?) -> SCNNode? {
+            let path = NSBezierPath()
+            path.windingRule = .evenOdd
+            for ring in polygon where ring.count >= 3 {
+                path.move(to: ring[0])
+                for p in ring.dropFirst() { path.line(to: p) }
+                path.close()
+            }
+            guard !path.isEmpty else { return nil }
+            let shape = SCNShape(path: path, extrusionDepth: CGFloat(thickness))
+            shape.chamferRadius = 0
+            let cap: SCNMaterial = caps ?? {
+                let m = SCNMaterial()
+                m.colorBufferWriteMask = []
+                m.writesToDepthBuffer = false
+                m.readsFromDepthBuffer = false
+                return m
+            }()
+            shape.materials = [cap, cap, side]
+            let node = SCNNode(geometry: shape)
+            node.name = "board-outline"
+            node.simdOrientation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+            node.simdPosition = SIMD3(0, Float(-thickness / 2), 0)
+            node.renderingOrder = 1
+            return node
         }
 
         /// The texture transform that puts a board image (u → world X, image
