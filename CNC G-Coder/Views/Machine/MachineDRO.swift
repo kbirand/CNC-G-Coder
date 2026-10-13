@@ -2,24 +2,49 @@ import SwiftUI
 
 /// Digital read-out: work position large, machine position small ("—" until
 /// the controller has reported one), a status strip with the live feed and
-/// spindle speed, buffer and pin state, and a grid of icon
-/// buttons: Zero XY / Zero Z / Zero All / Probe Z and Go to Work Zero /
-/// Safe Z / Home / Unlock. Clicking a work value opens a popover that sets
-/// that axis (`G10 L20`) — that is where the per-axis zero lives.
+/// spindle speed, buffer and pin state, and a grid of icon buttons — by
+/// default Zero XY / Zero Z / Zero All / Probe Z and Go to Work Zero /
+/// Safe Z / Home / Unlock. The grid is `MachineSettings.droButtons`: the
+/// slider button at the top right opens `DROButtonsCustomizeSheet`, where
+/// the cells are reordered, removed and added from the built-in actions
+/// (`DROBuiltIn`) and the macros (a macro cell runs it like a user button).
+/// Clicking a work value opens a popover that sets that axis (`G10 L20`) —
+/// that is where the per-axis zero lives.
 struct MachineDRO: View {
     @Bindable var machine: MachineController
+    /// Speed of the Spindle cell (`param.millSpeed`, clamped to the spindle range).
+    var defaultSpindleRPM: Double = MachineSettings.spindleMax
+
+    /// Observed only so the grid re-reads the layout and the macros after
+    /// an edit; the JSON itself is decoded by the accessors.
+    @AppStorage(MachineSettings.Keys.droButtons) private var droButtonsJSON = ""
+    @AppStorage(MachineSettings.Keys.macros) private var macrosJSON = ""
 
     @State private var editingAxis: Axis?
     @State private var editText = ""
     @State private var confirmHome = false
     @State private var probing = false
     @State private var probeResult: (text: String, failed: Bool)?
+    @State private var runningMacro: UUID?
+    @State private var customizing = false
 
     var body: some View {
         let _ = DebugFlags.renderLog ? Self._printChanges() : ()
         VStack(alignment: .leading, spacing: 8) {
-            MachineSectionLabel(title: "Position", detail: wcsLabel)
-                .help(parserStateTooltip)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                MachineSectionLabel(title: "Position", detail: wcsLabel)
+                    .help(parserStateTooltip)
+                Button {
+                    customizing = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Customize Buttons… — reorder or remove the buttons below, add built-in actions and macros")
+                .accessibilityLabel("Customize Buttons")
+            }
             VStack(spacing: 4) {
                 ForEach(Axis.allCases, id: \.self) { axis in
                     axisRow(axis)
@@ -36,6 +61,11 @@ struct MachineDRO: View {
             }
         }
         .machinePanel()
+        .sheet(isPresented: $customizing) {
+            DROButtonsCustomizeSheet()
+        }
+        // Dev hook: `-debugDROCustomize 1` opens Customize Buttons… at launch.
+        .onAppear { if UserDefaults.standard.bool(forKey: "debugDROCustomize") { customizing = true } }
         .alert("Run the homing cycle?", isPresented: $confirmHome) {
             Button("Home") { Task { await machine.home() } }
             Button("Cancel", role: .cancel) {}
@@ -134,50 +164,176 @@ struct MachineDRO: View {
 
     // MARK: Buttons
 
-    /// Two rows of four equal cells; each button fills its cell so the grid
-    /// follows the panel width.
+    /// The configured cells, macros whose definition is gone left out.
+    private var buttons: [MachineSettings.DROButton] {
+        _ = droButtonsJSON
+        _ = macrosJSON
+        let macros = MachineSettings.macros
+        return MachineSettings.droButtons.filter {
+            if case .macro(let id) = $0 { return macros.contains { $0.id == id } }
+            return true
+        }
+    }
+
+    /// Four equal columns, as many rows as the layout needs; each button
+    /// fills its cell so the grid follows the panel width.
+    @ViewBuilder
     private var buttonGrid: some View {
-        Grid(horizontalSpacing: 6, verticalSpacing: 6) {
-            GridRow {
-                droButton("Zero XY", "scope", help: "Make the current position work X0 Y0 (G10 L20)", enabled: canZero) {
-                    Task { await machine.zero(axes: [.x, .y]) }
-                }
-                droButton("Zero Z", "arrow.down.to.line.compact", help: "Make the current position work Z0 (G10 L20)", enabled: canZero) {
-                    Task { await machine.zero(axes: [.z]) }
-                }
-                droButton("Zero All", "target", help: "Make the current position work X0 Y0 Z0 (G10 L20)", enabled: canZero) {
-                    Task { await machine.zero(axes: Axis.allCases) }
-                }
-                droButton(probing ? "Probing…" : "Probe Z", "arrow.down.to.line",
-                          help: "Two-pass Z touch-off with the settings of the Probe tab; work Z is set at the trigger point",
-                          enabled: canProbeZ) { probeZ() }
-            }
-            GridRow {
-                droButton("Work Zero", "house", help: "Go to work zero: rapid up to the safe work Z, then to work X0 Y0", enabled: machine.positioningEnabled) {
-                    Task { await machine.goToWorkZero() }
-                }
-                droButton("Safe Z", "arrow.up.to.line", help: "Rapid Z to just below the top of travel (G53)",
-                          enabled: machine.positioningEnabled && machine.safePositionLine() != nil) {
-                    Task { await machine.safePosition() }
-                }
-                droButton("Home", "house.fill", help: "$H — home every axis", enabled: canHome) { confirmHome = true }
-                droButton("Unlock", "lock.open", help: "$X — clear the alarm without homing",
-                          enabled: machine.isConnected && !machine.jobLocksControls) {
-                    Task { await machine.unlock() }
+        let buttons = buttons
+        if buttons.isEmpty {
+            Text("No buttons. Click the slider icon above to add some.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+        } else {
+            let macros = MachineSettings.macros
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                ForEach(buttons, id: \.self) { button in
+                    switch button {
+                    case .builtIn(let action):
+                        builtInButton(action)
+                    case .macro(let id):
+                        if let macro = macros.first(where: { $0.id == id }) {
+                            macroButton(macro)
+                        }
+                    }
                 }
             }
         }
     }
 
-    private func droButton(_ title: LocalizedStringKey, _ symbol: String, help: LocalizedStringKey, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol)
+    private func builtInButton(_ action: MachineSettings.DROBuiltIn) -> some View {
+        Button {
+            perform(action)
+        } label: {
+            Label(title(of: action), systemImage: action.symbol)
                 .labelStyle(DROButtonLabelStyle())
         }
         .buttonStyle(.bordered)
         .controlSize(.large)
-        .disabled(!enabled)
-        .help(help)
+        .tint(tint(of: action))
+        .disabled(!isEnabled(action))
+        .help(action.help)
+    }
+
+    private func macroButton(_ macro: MachineSettings.Macro) -> some View {
+        Button {
+            run(macro)
+        } label: {
+            Label {
+                Text(macro.name)
+            } icon: {
+                if runningMacro == macro.id {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: macro.icon ?? "command")
+                }
+            }
+            .labelStyle(DROButtonLabelStyle())
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .tint(macro.allowWhileRunning ? .orange : nil)
+        .disabled(!isEnabled(macro))
+        .help(macro.lines.joined(separator: String(localized: "  ·  ")) + (macro.allowWhileRunning ? String(localized: "  (allowed while a program runs)") : String(localized: "")))
+    }
+
+    private func title(of action: MachineSettings.DROBuiltIn) -> String {
+        action == .probeZ && probing ? String(localized: "Probing…") : action.title
+    }
+
+    /// Spindle and Coolant show the controller's `A:` state, like the
+    /// toggles of the Machine section.
+    private func tint(of action: MachineSettings.DROBuiltIn) -> Color? {
+        switch action {
+        case .spindle: spindleOn ? .orange : nil
+        case .coolant: coolantOn ? .cyan : nil
+        case .resume: isHeld ? .green : nil
+        default: nil
+        }
+    }
+
+    private func perform(_ action: MachineSettings.DROBuiltIn) {
+        switch action {
+        case .zeroXY: Task { await machine.zero(axes: [.x, .y]) }
+        case .zeroZ: Task { await machine.zero(axes: [.z]) }
+        case .zeroAll: Task { await machine.zero(axes: Axis.allCases) }
+        case .probeZ: probeZ()
+        case .workZero: Task { await machine.goToWorkZero() }
+        case .safeZ: Task { await machine.safePosition() }
+        case .home: confirmHome = true
+        case .unlock: Task { await machine.unlock() }
+        case .spindle:
+            let on = !spindleOn
+            let rpm = spindleRPM
+            Task { await machine.spindle(on: on, rpm: rpm) }
+        case .coolant:
+            let on = !coolantOn
+            Task { await machine.coolant(flood: on) }
+        case .hold: machine.feedHold()
+        case .resume: machine.resume()
+        case .reset: Task { await machine.softReset() }
+        case .sleep: Task { await machine.sleep() }
+        }
+    }
+
+    private func isEnabled(_ action: MachineSettings.DROBuiltIn) -> Bool {
+        switch action {
+        case .zeroXY, .zeroZ, .zeroAll: canZero
+        case .probeZ: canProbeZ
+        case .workZero: machine.positioningEnabled
+        case .safeZ: machine.positioningEnabled && machine.safePositionLine() != nil
+        case .home: canHome
+        case .unlock: machine.isConnected && !machine.jobLocksControls
+        case .spindle, .coolant: machine.manualControlsEnabled
+        case .hold: machine.isConnected && isMoving
+        case .resume: machine.isConnected && isHeld
+        case .reset: machine.isConnected
+        case .sleep: machine.machineState == .idle
+        }
+    }
+
+    /// Same rules as the user buttons of the Control tab.
+    private func isEnabled(_ macro: MachineSettings.Macro) -> Bool {
+        guard machine.isConnected, machine.alarmCode == nil, runningMacro == nil, !macro.lines.isEmpty else { return false }
+        if machine.jobBlocksCommands { return macro.allowWhileRunning }
+        return machine.machineState == .idle
+    }
+
+    private func run(_ macro: MachineSettings.Macro) {
+        runningMacro = macro.id
+        Task {
+            await machine.runMacro(macro)
+            runningMacro = nil
+        }
+    }
+
+    private var spindleOn: Bool {
+        let a = machine.status.accessories
+        return a.contains("S") || a.contains("C")
+    }
+
+    private var coolantOn: Bool { machine.status.accessories.contains("F") }
+
+    private var isMoving: Bool {
+        switch machine.machineState {
+        case .run, .jog: true
+        default: false
+        }
+    }
+
+    private var isHeld: Bool {
+        switch machine.machineState {
+        case .hold, .door: true
+        default: false
+        }
+    }
+
+    /// The default spindle speed clamped to the configured range.
+    private var spindleRPM: Double {
+        let lo = min(MachineSettings.spindleMin, MachineSettings.spindleMax)
+        let hi = max(MachineSettings.spindleMin, MachineSettings.spindleMax)
+        return min(max(defaultSpindleRPM, lo), hi)
     }
 
     private var canZero: Bool { machine.manualControlsEnabled && machine.status.hasPosition }

@@ -148,8 +148,9 @@ struct MacrosControls: View {
     }
 }
 
-/// Name, button icon, lines and the while-running flag of one macro.
-private struct MacroEditSheet: View {
+/// Name, button icon, lines and the while-running flag of one macro (also
+/// used by `DROButtonsCustomizeSheet` for New Macro… / Edit Macro…).
+struct MacroEditSheet: View {
     var macro: MachineSettings.Macro
     var onSave: (MachineSettings.Macro) -> Void
     @Environment(\.dismiss) private var dismiss

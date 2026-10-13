@@ -18,6 +18,9 @@ struct JobBar: View {
     @State private var fromLineText = ""
     @State private var resumePlan: ResumePlan?
     @State private var actionError: String?
+    /// The program Send is about to stream, shown in `StartJobSheet` first.
+    @State private var startProgram: MachineProgram?
+    @AppStorage(MachineSettings.Keys.confirmSend) private var confirmSend = MachineSettings.Defaults.confirmSend
 
     private var streamer: JobStreamer { machine.streamer }
 
@@ -28,6 +31,17 @@ struct JobBar: View {
         }
         .sheet(item: $resumePlan) { plan in
             ResumePreambleSheet(machine: machine, plan: plan)
+        }
+        .sheet(item: $startProgram) { program in
+            StartJobSheet(machine: machine, program: program)
+        }
+        // Dev hook: `-debugConfirmSendSheet 1` shows the start sheet for the
+        // program as soon as one is loaded (with `-debugMachineSend`, which
+        // then does not start it).
+        .onChange(of: streamer.program?.id, initial: true) { _, _ in
+            if !compact, UserDefaults.standard.bool(forKey: "debugConfirmSendSheet"), let program = streamer.program {
+                startProgram = program
+            }
         }
         .sheet(isPresented: $showFromLine) { fromLineSheet }
         .alert("Cannot send", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
@@ -254,13 +268,20 @@ struct JobBar: View {
 
     // MARK: Actions
 
+    /// Send: pre-flight, then the start sheet (which layer, side, tool,
+    /// depth) unless `machine.confirmSend` is off, in which case it streams
+    /// at once.
     private func startJob() {
         guard let program = streamer.program else { return }
         if let problem = machine.preflight(program) {
             actionError = problem
             return
         }
-        Task { await streamer.start() }
+        if confirmSend {
+            startProgram = program
+        } else {
+            Task { await streamer.start() }
+        }
     }
 
     private var fromLineSheet: some View {

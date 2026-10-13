@@ -34,6 +34,8 @@ nonisolated enum MachineSettings {
         static let fitArcs = "machine.fitArcs"
         static let heightMapApplyBelowZ = "machine.heightMap.applyBelowZ"
         static let confirmContinue = "machine.confirmContinue"
+        /// Send shows `StartJobSheet` (which layer, side, tool, depth) before streaming.
+        static let confirmSend = "machine.confirmSend"
         /// Record the work zero (as a machine point) in Positions when a program is sent.
         static let autoSaveWorkZero = "machine.autoSaveWorkZero"
         /// Bytes kept in flight while streaming; 0 = automatic (see JobStreamer.windowBudget).
@@ -43,6 +45,8 @@ nonisolated enum MachineSettings {
         static let showSimulator = "machine.showSimulator"
         /// FluidNC config file `$CD=` writes to ("" = the one the controller reports).
         static let configFilename = "machine.configFilename"
+        /// The DRO's button grid: a JSON array of `DROButton.storageString`.
+        static let droButtons = "machine.droButtons"
     }
 
     enum Defaults {
@@ -74,6 +78,7 @@ nonisolated enum MachineSettings {
         static let heightMapApplyBelowZ = 1.0
         /// Continue after a tool change runs at once; on, the preamble sheet asks first.
         static let confirmContinue = false
+        static let confirmSend = true
         static let autoSaveWorkZero = true
         static let streamWindowBytes = 0
         /// The built-in simulator is a developer/try-out feature: hidden from
@@ -190,6 +195,10 @@ nonisolated enum MachineSettings {
         get { bool(Keys.confirmContinue, Defaults.confirmContinue) }
         set { defaults.set(newValue, forKey: Keys.confirmContinue) }
     }
+    static var confirmSend: Bool {
+        get { bool(Keys.confirmSend, Defaults.confirmSend) }
+        set { defaults.set(newValue, forKey: Keys.confirmSend) }
+    }
     static var streamWindowBytes: Int {
         get { defaults.object(forKey: Keys.streamWindowBytes) == nil ? Defaults.streamWindowBytes : defaults.integer(forKey: Keys.streamWindowBytes) }
         set { defaults.set(newValue, forKey: Keys.streamWindowBytes) }
@@ -269,6 +278,120 @@ nonisolated enum MachineSettings {
             encoder.outputFormatting = [.sortedKeys]
             guard let data = try? encoder.encode(newValue), let text = String(data: data, encoding: .utf8) else { return }
             defaults.set(text, forKey: Keys.macros)
+        }
+    }
+
+    // MARK: - DRO buttons
+
+    /// The built-in actions the DRO's button grid can hold. The first eight
+    /// are the default grid; the rest are offered in Customize Buttons…
+    enum DROBuiltIn: String, CaseIterable, Sendable {
+        case zeroXY, zeroZ, zeroAll, probeZ, workZero, safeZ, home, unlock
+        case spindle, coolant, hold, resume, reset, sleep
+
+        var title: String {
+            switch self {
+            case .zeroXY: String(localized: "Zero XY")
+            case .zeroZ: String(localized: "Zero Z")
+            case .zeroAll: String(localized: "Zero All")
+            case .probeZ: String(localized: "Probe Z")
+            case .workZero: String(localized: "Work Zero")
+            case .safeZ: String(localized: "Safe Z")
+            case .home: String(localized: "Home")
+            case .unlock: String(localized: "Unlock")
+            case .spindle: String(localized: "Spindle")
+            case .coolant: String(localized: "Coolant")
+            case .hold: String(localized: "Hold")
+            case .resume: String(localized: "Resume")
+            case .reset: String(localized: "Reset")
+            case .sleep: String(localized: "Sleep")
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .zeroXY: "scope"
+            case .zeroZ: "arrow.down.to.line.compact"
+            case .zeroAll: "target"
+            case .probeZ: "arrow.down.to.line"
+            case .workZero: "house"
+            case .safeZ: "arrow.up.to.line"
+            case .home: "house.fill"
+            case .unlock: "lock.open"
+            case .spindle: "fan.fill"
+            case .coolant: "drop.fill"
+            case .hold: "pause.fill"
+            case .resume: "play.fill"
+            case .reset: "arrow.counterclockwise"
+            case .sleep: "moon.zzz"
+            }
+        }
+
+        var help: String {
+            switch self {
+            case .zeroXY: String(localized: "Make the current position work X0 Y0 (G10 L20)")
+            case .zeroZ: String(localized: "Make the current position work Z0 (G10 L20)")
+            case .zeroAll: String(localized: "Make the current position work X0 Y0 Z0 (G10 L20)")
+            case .probeZ: String(localized: "Two-pass Z touch-off with the settings of the Probe tab; work Z is set at the trigger point")
+            case .workZero: String(localized: "Go to work zero: rapid up to the safe work Z, then to work X0 Y0")
+            case .safeZ: String(localized: "Rapid Z to just below the top of travel (G53)")
+            case .home: String(localized: "$H — home every axis")
+            case .unlock: String(localized: "$X — clear the alarm without homing")
+            case .spindle: String(localized: "M3/M5 — spindle on or off at the default speed (orange while it runs)")
+            case .coolant: String(localized: "M8/M9 — flood coolant on or off")
+            case .hold: String(localized: "! — feed hold (decelerate and wait)")
+            case .resume: String(localized: "~ — cycle start / resume")
+            case .reset: String(localized: "Ctrl‑X soft reset — stops everything; position is lost if the machine was moving")
+            case .sleep: String(localized: "$SLP — sleep: spindle and steppers off until a reset")
+            }
+        }
+    }
+
+    /// One cell of the DRO's button grid: a built-in action or a macro of
+    /// `macros` (by id). Stored as strings — `"zeroXY"`, `"macro:<uuid>"` —
+    /// so `defaults read` shows the layout.
+    enum DROButton: Hashable, Sendable {
+        case builtIn(DROBuiltIn)
+        case macro(UUID)
+
+        var storageString: String {
+            switch self {
+            case .builtIn(let action): action.rawValue
+            case .macro(let id): "macro:" + id.uuidString
+            }
+        }
+
+        init?(storageString: String) {
+            let text = storageString.trimmingCharacters(in: .whitespaces)
+            if let action = DROBuiltIn(rawValue: text) {
+                self = .builtIn(action)
+            } else if text.hasPrefix("macro:"), let id = UUID(uuidString: String(text.dropFirst(6))) {
+                self = .macro(id)
+            } else {
+                return nil
+            }
+        }
+    }
+
+    /// Two rows of four: the grid as it was before it became customizable.
+    static let defaultDROButtons: [DROButton] =
+        ([.zeroXY, .zeroZ, .zeroAll, .probeZ, .workZero, .safeZ, .home, .unlock] as [DROBuiltIn]).map(DROButton.builtIn)
+
+    /// Unset or unreadable → `defaultDROButtons`. Unknown entries are
+    /// skipped and duplicates folded so the grid's `ForEach` keys stay unique.
+    static var droButtons: [DROButton] {
+        get {
+            guard let text = defaults.string(forKey: Keys.droButtons), let data = text.data(using: .utf8),
+                  let strings = try? JSONDecoder().decode([String].self, from: data) else {
+                return defaultDROButtons
+            }
+            var seen = Set<DROButton>()
+            return strings.compactMap(DROButton.init(storageString:)).filter { seen.insert($0).inserted }
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue.map(\.storageString)),
+                  let text = String(data: data, encoding: .utf8) else { return }
+            defaults.set(text, forKey: Keys.droButtons)
         }
     }
 

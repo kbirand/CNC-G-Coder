@@ -153,7 +153,7 @@ private struct MachineInspectorBody: View {
             titleRow
             MachineConnectionBar(machine: machine)
             MachineErrorLine(machine: machine)
-            MachineDRO(machine: machine)
+            MachineDRO(machine: machine, defaultSpindleRPM: defaultSpindleRPM)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             EmergencyStopButton(machine: machine)

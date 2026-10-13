@@ -33,6 +33,7 @@ struct MachineSettingsPane: View {
     @AppStorage(MachineSettings.Keys.applyBacklash) private var applyBacklash = MachineSettings.Defaults.applyBacklash
     @AppStorage(MachineSettings.Keys.heightMapApplyBelowZ) private var applyBelowZ = MachineSettings.Defaults.heightMapApplyBelowZ
     @AppStorage(MachineSettings.Keys.confirmContinue) private var confirmContinue = MachineSettings.Defaults.confirmContinue
+    @AppStorage(MachineSettings.Keys.confirmSend) private var confirmSend = MachineSettings.Defaults.confirmSend
     @AppStorage(MachineSettings.Keys.autoSaveWorkZero) private var autoSaveWorkZero = MachineSettings.Defaults.autoSaveWorkZero
     @AppStorage(MachineSettings.Keys.streamWindowBytes) private var streamWindowBytes = MachineSettings.Defaults.streamWindowBytes
     @AppStorage(MachineSettings.Keys.fitArcs) private var fitArcs = MachineSettings.Defaults.fitArcs
@@ -131,6 +132,8 @@ struct MachineSettingsPane: View {
         Section("Programs") {
             Toggle("Apply backlash compensation when sending", isOn: $applyBacklash)
                 .help("Rewrite every program sent to the machine for the play set in Machine setup (the program files on disk are not changed)")
+            Toggle("Confirm the layer before sending a program", isOn: $confirmSend)
+                .help("Send first shows which layer is about to be milled — side, tool, depth, time — and streams on Start")
             Toggle("Confirm before continuing after a tool change", isOn: $confirmContinue)
                 .help("Show the resume preamble in a sheet before Continue sends it, instead of resuming at once")
             Text("Off: Continue in the tool-change banner resumes at once (the banner shows the lines it will send). Send from line… always shows its preamble first.")

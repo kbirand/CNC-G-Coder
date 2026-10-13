@@ -96,7 +96,7 @@ private struct MachineWindowBody: View {
     private var leftColumn: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                MachineDRO(machine: machine)
+                MachineDRO(machine: machine, defaultSpindleRPM: defaultSpindleRPM)
                 MachineControls(machine: machine, defaultSpindleRPM: defaultSpindleRPM)
                 PositionsSection(machine: machine)
                 JogPad(machine: machine)

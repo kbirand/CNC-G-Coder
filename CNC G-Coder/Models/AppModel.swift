@@ -575,7 +575,7 @@ final class AppModel: ObservableObject {
         if let script = defaults.string(forKey: "debugMachineScript") {
             await runMachineScript(script)
         } else if let target = defaults.string(forKey: "debugMachineSend") {
-            if await machineSend(target) {
+            if await machineSend(target), !defaults.bool(forKey: "debugConfirmSendSheet") {
                 await machine.streamer.start()
                 machineLog("start: \(machine.streamer.state)" + (machine.streamer.lastMessage.map { " — \($0)" } ?? ""))
             }
