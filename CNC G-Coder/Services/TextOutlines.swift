@@ -85,7 +85,7 @@ nonisolated enum TextOutlines {
                 let c = e.points[0].applying(transform), p1 = e.points[1].applying(transform)
                 let n = segments(ShapeMath.distance(p0, c) + ShapeMath.distance(c, p1))
                 for i in 1...n {
-                    let t = Double(i) / Double(n), u = 1 - t
+                    let t = CGFloat(i) / CGFloat(n), u = 1 - t
                     current.append(CGPoint(x: u * u * p0.x + 2 * u * t * c.x + t * t * p1.x,
                                            y: u * u * p0.y + 2 * u * t * c.y + t * t * p1.y))
                 }
@@ -95,7 +95,7 @@ nonisolated enum TextOutlines {
                 let p1 = e.points[2].applying(transform)
                 let n = segments(ShapeMath.distance(p0, c1) + ShapeMath.distance(c1, c2) + ShapeMath.distance(c2, p1))
                 for i in 1...n {
-                    let t = Double(i) / Double(n), u = 1 - t
+                    let t = CGFloat(i) / CGFloat(n), u = 1 - t
                     current.append(CGPoint(
                         x: u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p1.x,
                         y: u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p1.y))

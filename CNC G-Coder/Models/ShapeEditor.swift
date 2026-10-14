@@ -404,7 +404,7 @@ final class ShapeEditor: ObservableObject {
             let hit = shape.hit(p)
             if hit.distance <= tolerance, hit.distance < (nearest?.0 ?? .infinity) { nearest = (hit.distance, shape.id) }
             if hit.inside, let b = shape.bounds {
-                let area = b.width * b.height
+                let area = Double(b.width * b.height)
                 if area < (container?.0 ?? .infinity) { container = (area, shape.id) }
             }
         }

@@ -456,9 +456,9 @@ nonisolated enum GerberSegment: Hashable, Sendable {
             let steps = ShapeMath.arcSteps(radius: max(r0, r1), angle: sweep)
             return (1...steps).map { s in
                 let f = Double(s) / Double(steps)
-                let a = a0 + sweep * f
-                let r = r0 + (r1 - r0) * f
-                return CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
+                let a: Double = a0 + sweep * f
+                let r: Double = r0 + (r1 - r0) * f
+                return CGPoint(x: Double(c.x) + r * Foundation.cos(a), y: Double(c.y) + r * Foundation.sin(a))
             }
         }
     }

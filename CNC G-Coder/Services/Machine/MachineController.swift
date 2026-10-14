@@ -671,7 +671,20 @@ final class MachineController {
     /// running, paused or stopping — a suspended job hands the machine back.
     func send(_ line: String, log: Bool = true) async throws {
         guard !jobBlocksCommands else { throw GRBLCommandError.refused("A program is being sent — stop it first.") }
+        if line.trimmingCharacters(in: .whitespaces).uppercased().hasPrefix(GRBLCommand.home) {
+            await waitForIdentify()
+        }
         try await sendInternal(line, log: log)
+    }
+
+    /// A homing cycle blocks the controller until it ends, so the identify
+    /// queries queued behind it time out and the axis ranges come out wrong.
+    /// Let any identify in flight finish first (a banner may restart it).
+    private func waitForIdentify() async {
+        while let task = identifyTask {
+            await task.value
+            if identifyTask == task { return }
+        }
     }
 
     /// The send-response path without the job guard: for the streamer's own
