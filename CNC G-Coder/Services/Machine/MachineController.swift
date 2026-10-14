@@ -288,7 +288,7 @@ final class MachineController {
             log(.info, "Starting the simulator…")
             let port: UInt16
             do {
-                port = try await SimulatorLauncher.shared.start()
+                port = try await SimulatorLauncher.shared.start(boardSize: app?.preview.document?.frame?.rect.size)
             } catch {
                 phase = .disconnected
                 lastError = error.localizedDescription
@@ -1529,7 +1529,29 @@ final class MachineController {
         guard await waitForStatus(timeout: 5, { $0.state == .idle }) else {
             return "The machine did not come to rest at the work origin (now \(status.state.name))."
         }
-        return await probeZ()
+        let failure = await probeZ()
+        if failure == nil {
+            reanchorHeightMap(afterOriginProbe: streamer.program?.kind.boardSide ?? app?.shownBoardSide ?? .front)
+        }
+        return failure
+    }
+
+    /// A bit change shifts work Z0 in machine coordinates without moving the
+    /// board, which read as "Z was re-zeroed" and demanded a full re-probe of
+    /// the height map. The map's points are relative to the reference probe
+    /// at work X0/Y0, so after a successful Probe Z at the origin the stored
+    /// map of the program's side is re-anchored to the new Z0 — provided the
+    /// design origin's XY is unchanged (the board did not move). A probe away
+    /// from the origin (the DRO's Probe Z) never re-anchors.
+    private func reanchorHeightMap(afterOriginProbe side: BoardSide) {
+        guard let app, var map = app.heightMaps[side], let probed = map.probedDesignOrigin,
+              let current = currentDesignOrigin(side: side) else { return }
+        let dz = current.z - probed.z
+        guard abs(current.x - probed.x) <= 0.01, abs(current.y - probed.y) <= 0.01, abs(dz) > 0.03 else { return }
+        map.probedDesignOrigin = current
+        if let reference = map.referenceZ { map.referenceZ = reference + dz }
+        app.saveHeightMap(map)
+        log(.info, "Height map (\(side.title)) re-anchored to the new work Z0 (Δ \(GRBLCommand.number(dz)) mm): the grid stays valid across a bit change.")
     }
 
     /// `$#` as last read: the active system, G92 and TLO — the three parts of WCO.
@@ -1559,6 +1581,144 @@ final class MachineController {
             needsG90Restore = false
         }
         return message
+    }
+
+    // MARK: - Tool reference
+
+    /// `probeZ`'s two passes without touching any origin: fast down, back
+    /// off, slow down, retract. Returns the PRB machine Z of the slow
+    /// contact, or the failure message.
+    private func measureContact(spec: ZProbeSpec) async -> (contact: Double?, failure: String?) {
+        let head = ProbeRoutines.zProbeHead(spec)
+        do {
+            try await sendInternal(head[0])
+            needsG90Restore = true
+            let fast = try await sendExpectingProbe(head[1])
+            guard let fast, fast.success, alarmCode == nil else {
+                return (nil, await probeFailed("The probe did not make contact within \(GRBLCommand.number(spec.maxTravel)) mm."))
+            }
+            try await sendInternal(head[2])
+            let slow = try await sendExpectingProbe(head[3])
+            guard let slow, slow.success, alarmCode == nil else {
+                return (nil, await probeFailed("The probe lost contact on the slow pass."))
+            }
+            for line in ProbeRoutines.zProbeTail(spec) { try await sendInternal(line) }
+            needsG90Restore = false
+            try? await sync()
+            return (slow.position.z, nil)
+        } catch {
+            return (nil, await probeFailed("Probe failed: \(error.localizedDescription)"))
+        }
+    }
+
+    private func toolReferenceGuards() -> String? {
+        guard isConnected else { return "Not connected." }
+        guard !jobBlocksCommands else { return "A program is being sent." }
+        guard status.state == .idle else { return "The machine must be Idle to probe (now \(status.state.name))." }
+        guard alarmCode == nil else { return "Clear the alarm first." }
+        guard positionTrusted else { return "Position may be lost — home the machine first." }
+        guard status.workOffset != nil else { return "Work offset unknown — wait for a status report." }
+        guard !status.pins.contains("P") else { return "Probe already triggered — check the wiring and the bit." }
+        return nil
+    }
+
+    /// Records the fixed reference spot (block or switch setter) under the
+    /// bit: probes down at the current XY and stores the contact's machine Z
+    /// together with the machine Z of the current work Z0. Do this while Z0
+    /// is freshly set on the surface that matters (bare copper) — probing
+    /// the reference later restores that Z0 whatever the bit length, even
+    /// when the board itself can no longer be touched (solder mask).
+    func setToolReference() async -> String? {
+        if let reason = toolReferenceGuards() { return reason }
+        guard let wco = status.workOffset, let position = status.machinePosition else {
+            return "Machine position unknown — wait for a status report."
+        }
+        let spec = ZProbeSpec(maxTravel: MachineSettings.probeMaxTravel, feedFast: MachineSettings.probeFeedFast,
+                              feedSlow: MachineSettings.probeFeedSlow, retract: MachineSettings.probeRetract,
+                              plateThickness: 0)
+        var remaining: Double?
+        if let range = axisRanges[.z] { remaining = position.z - range.lowerBound }
+        if let reason = ProbeRoutines.validate(spec, remainingZTravel: remaining) { return reason }
+        log(.info, "Setting the tool reference at machine X\(GRBLCommand.number(position.x)) Y\(GRBLCommand.number(position.y)): probing down \(GRBLCommand.number(spec.maxTravel)) mm.")
+        let (contact, failure) = await measureContact(spec: spec)
+        guard let contact else { return failure }
+        MachineSettings.toolReference = .init(x: position.x, y: position.y, contactZ: contact,
+                                              workZeroZ: wco.z, savedAt: .now)
+        log(.info, "Tool reference set: contact at machine Z \(GRBLCommand.number(contact)), work Z0 at machine \(GRBLCommand.number(wco.z)). Probe it after a bit change (or once the board is masked) to restore Z0.")
+        return nil
+    }
+
+    /// Headroom above the stored contact where the reference probe starts,
+    /// and how far below it the probe may continue: covers bits up to this
+    /// much longer or shorter than the one the reference was set with.
+    static let toolReferenceHeadroom = 15.0
+
+    /// Probes the stored reference spot and restores work Z0: a new bit (or
+    /// anything else that only changed the tool length) shifts the contact by
+    /// exactly the amount work Z0 must shift. Travels at the safe height,
+    /// probes, sets the origin, and re-anchors the height map of the loaded
+    /// program's side (same rules as a Probe Z at the origin).
+    func probeToolReference() async -> String? {
+        if let reason = toolReferenceGuards() { return reason }
+        guard let reference = MachineSettings.toolReference else {
+            return "No tool reference is set — probe one with \u{201C}Set reference here\u{201D} first."
+        }
+        guard let safe = safePositionLine() else {
+            return homed ? "Z travel unknown — the firmware did not report it." : "Home the machine first."
+        }
+        let headroom = Self.toolReferenceHeadroom
+        var start = reference.contactZ + headroom
+        if let range = axisRanges[.z] { start = min(start, range.upperBound - MachineSettings.safeZBelowTop) }
+        let travel = [
+            safe,
+            "G90 G53 G0 X" + GRBLCommand.number(reference.x) + " Y" + GRBLCommand.number(reference.y),
+            "G90 G53 G0 Z" + GRBLCommand.number(start),
+        ]
+        if let reason = preflight(lines: travel) { return "Cannot reach the tool reference: " + reason }
+        log(.info, "Probing the tool reference at machine X\(GRBLCommand.number(reference.x)) Y\(GRBLCommand.number(reference.y)) (contact was Z \(GRBLCommand.number(reference.contactZ))).")
+        do {
+            for line in travel { try await sendInternal(line) }
+            try await sync()
+        } catch {
+            return "Could not move to the tool reference: \(error.localizedDescription)"
+        }
+        guard await waitForStatus(timeout: 10, { $0.state == .idle }) else {
+            return "The machine did not come to rest over the tool reference (now \(status.state.name))."
+        }
+        var maxTravel = (start - reference.contactZ) + headroom
+        if let range = axisRanges[.z], let position = status.machinePosition {
+            maxTravel = min(maxTravel, position.z - range.lowerBound)
+        }
+        let spec = ZProbeSpec(maxTravel: maxTravel, feedFast: MachineSettings.probeFeedFast,
+                              feedSlow: MachineSettings.probeFeedSlow, retract: MachineSettings.probeRetract,
+                              plateThickness: 0)
+        if let reason = ProbeRoutines.validate(spec, remainingZTravel: nil) { return reason }
+        let (contact, failure) = await measureContact(spec: spec)
+        guard let contact else { return failure }
+        let dz = contact - reference.contactZ
+        let newWorkZeroZ = reference.workZeroZ + dz
+        // Set the origin from where the bit rests now (`G10 L20`, like
+        // `probeZ` — FluidNC 4.0.3 ignored a Z-only `L2 P0`): make the
+        // current machine Z read machine − newWorkZeroZ.
+        statusSerial += 1
+        guard await waitForFreshStatus(timeout: 3), let restZ = status.machinePosition?.z else {
+            return "No status report after the probe — work Z0 was not changed."
+        }
+        do {
+            try await sendInternal("G10 L20 P0 Z" + GRBLCommand.number(restZ - newWorkZeroZ))
+        } catch {
+            return "Could not set the work origin: \(error.localizedDescription)"
+        }
+        workOffset = nil
+        try? await sendInternal(GRBLCommand.offsets)
+        seedWorkOffset()
+        statusSerial += 1
+        if let origin = offsets[activeWCS]?.z, abs(origin - newWorkZeroZ) > 0.01 {
+            log(.warning, "\(activeWCS) Z origin reads \(GRBLCommand.number(origin)) after the tool reference, expected \(GRBLCommand.number(newWorkZeroZ)); \(offsetsSummary).")
+        }
+        log(.info, "Tool reference probed: contact at machine Z \(GRBLCommand.number(contact)), \(GRBLCommand.number(dz)) mm vs when it was set → work Z0 restored to machine \(GRBLCommand.number(newWorkZeroZ)).")
+        reanchorHeightMap(afterOriginProbe: streamer.program?.kind.boardSide ?? app?.shownBoardSide ?? .front)
+        return nil
     }
 
     /// The machine position of design (0,0) for programs of `side` now:
@@ -1707,7 +1867,8 @@ final class MachineController {
                                      applyBelowZ: MachineSettings.heightMapApplyBelowZ,
                                      frame: app?.heightMapFrame(side: program.kind.boardSide) ?? .identity,
                                      clampZAboveWork: program.options.clampZAboveWork,
-                                     fitArcs: program.options.fitArcs)
+                                     fitArcs: program.options.fitArcs,
+                                     documentToken: app?.preview.document?.token)
         guard options != program.options else { return nil }
         do {
             _ = try await prepareProgram(layer: layer, name: program.name, options: options)

@@ -320,7 +320,7 @@ private struct HeightMapControlsBody: View {
         case .wcoUnknown: "work offset unknown (connect)"
         case .originUnknown: "board position at probing unknown"
         case .xyMoved(let dx, let dy): "work origin moved on the board X\(formatMM(dx)) Y\(formatMM(dy))"
-        case .zRezeroed(let dz): "Z re-zeroed by \(formatMM(dz))"
+        case .zRezeroed(let dz): String(localized: "Z re-zeroed by \(formatMM(dz)) — Probe Z at the origin re-anchors")
         case .incomplete: "incomplete"
         }
     }

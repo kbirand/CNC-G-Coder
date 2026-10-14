@@ -522,7 +522,7 @@ final class AppModel: ObservableObject {
     /// steps (jog:x,1 | zero:xy | setx:5 | gozero | safez | send:front |
     /// wait:suspended | continue | hold | resume | fromLine:120 | stop |
     /// estop | savezero[:name] | usezero:name | verify:front | probez |
-    /// wait:done | sleep:2 | home | unlock);
+    /// setref | proberef | wait:done | sleep:2 | home | unlock);
     /// `-debugMachineProbeMap 3x3` probes a map over the first program;
     /// `-debugMachineClampZ 1` prepares with "Clamp Z to top";
     /// `-debugMachineExitWhenDone 1` prints the job summary and quits.
@@ -643,7 +643,8 @@ final class AppModel: ObservableObject {
                                      applyBelowZ: MachineSettings.heightMapApplyBelowZ,
                                      frame: heightMapFrame(side: layer.id.boardSide),
                                      clampZAboveWork: UserDefaults.standard.bool(forKey: "debugMachineClampZ") ? machine.clampZWork() : nil,
-                                     fitArcs: MachineSettings.fitArcs)
+                                     fitArcs: MachineSettings.fitArcs,
+                                     documentToken: preview.document?.token)
         do {
             let program = try await machine.prepareProgram(layer: layer, name: layer.id.fileSlug + ".ngc", options: options)
             requestedMachineLayer = layer.id   // the Machine window's Program tab adopts this program instead of preparing its own
@@ -782,6 +783,15 @@ final class AppModel: ObservableObject {
                 m.emergencyStop()
                 _ = await m.waitForStatus(timeout: 5) { _ in true }
                 machineLog("estop: was \(before) → job \(m.streamer.state), machine \(m.status.state.name), trusted \(m.positionTrusted)")
+            case "setref":
+                let failure = await m.setToolReference()
+                let stored = MachineSettings.toolReference.map {
+                    "contact Z \(GRBLCommand.number($0.contactZ)), work Z0 at machine \(GRBLCommand.number($0.workZeroZ))"
+                } ?? "nothing stored"
+                machineLog("setref: " + (failure ?? "ok — \(stored)"))
+            case "proberef":
+                let failure = await m.probeToolReference()
+                machineLog("proberef: " + (failure ?? "ok — WCO \(m.status.workOffset?.summary ?? "?"), work \(m.status.workPosition?.summary ?? "?")"))
             case "savezero":
                 // The work origin as a machine position, like the Positions tab's "Save work zero".
                 if let wco = m.status.workOffset {

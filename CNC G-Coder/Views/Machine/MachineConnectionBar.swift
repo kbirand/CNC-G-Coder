@@ -23,7 +23,7 @@ struct MachineConnectionBar: View {
             VStack(alignment: .leading, spacing: 0) {
                 connectionRows
                 if kind == .simulator {
-                    Text("Simulated FluidNC with real-time motion. Work zero and a probe surface are preset so the sample programs run.")
+                    Text("Simulated FluidNC with real-time motion. A PCB of set thickness lies on the bed (position and thickness in Settings → Machine) and work zero is preset on its top corner: the probe finds the board over it and the bed next to it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

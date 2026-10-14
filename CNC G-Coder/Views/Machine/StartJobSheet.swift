@@ -138,6 +138,12 @@ struct StartJobSheet: View {
     // MARK: Action
 
     private func start() {
+        // Start streams the loaded program; if it was re-prepared while the
+        // sheet was open, these numbers describe a different text.
+        guard machine.streamer.program?.id == program.id else {
+            problem = String(localized: "The program was re-prepared while this sheet was open — close it and send again.")
+            return
+        }
         if let refusal = machine.preflight(program) {
             problem = refusal
             return

@@ -5,9 +5,14 @@ import Foundation
 /// child process on a free localhost port, so the Machine panel can be tried
 /// without a controller and without a terminal.
 ///
-/// The simulator boots with work zero at machine (11, 71, −81) and its probe
-/// surface at machine Z −82 (1 mm below work Z0): with that preset the
-/// sample boards pass the travel pre-flight, and a Z probe finds copper.
+/// The simulator models a bed (the probe surface, machine Z −82 with a
+/// slight ripple) with a PCB of real thickness lying on it: inside the
+/// board's rectangle the probe finds the board's top, outside it the bed —
+/// like a real board in a fixture. The board's machine XY and thickness are
+/// Settings → Machine (`machine.sim.board*`), its size follows the loaded
+/// project (`start(boardSize:)`, 120 × 80 mm without one), and work zero is
+/// preset on the board's top at its corner so the sample programs pass the
+/// travel pre-flight and a Z probe lands on "copper".
 ///
 /// One instance at a time: `start` kills whatever it launched before. The
 /// child is terminated on `stop`, at `exit` (an `atexit` handler) and, in
@@ -36,10 +41,16 @@ nonisolated enum SimulatorLauncherError: LocalizedError, Sendable {
 actor SimulatorLauncher {
     nonisolated static let shared = SimulatorLauncher()
 
-    /// Machine coordinates of the simulated work zero (`--wco`).
-    nonisolated static let workZero = (x: 11.0, y: 71.0, z: -81.0)
-    /// Machine Z of the simulated probe surface (`--surface`), 1 mm below work Z0.
+    /// Machine Z of the simulated bed, the probe surface (`--surface`).
     nonisolated static let probeSurface = -82.0
+    /// The simulated board's size when no project gives one.
+    nonisolated static let defaultBoardSize = (width: 120.0, height: 80.0)
+    /// Machine coordinates of the simulated work zero (`--wco`): the board's
+    /// lower-left corner, on its top face (bed + thickness).
+    nonisolated static var workZero: (x: Double, y: Double, z: Double) {
+        (MachineSettings.simBoardX, MachineSettings.simBoardY,
+         probeSurface + MachineSettings.simBoardThickness)
+    }
     /// How far a probe runs on past the contact before it stops (`--probe-overshoot`).
     nonisolated static let probeOvershoot = 0.04
     nonisolated static let firmwareDescription = "FluidNC 3.9.9"
@@ -55,8 +66,9 @@ actor SimulatorLauncher {
     var isRunning: Bool { process?.isRunning ?? false }
 
     /// Starts a fresh simulator and returns the port it listens on once it
-    /// accepts connections (≤ 5 s).
-    func start() async throws -> UInt16 {
+    /// accepts connections (≤ 5 s). `boardSize` is the loaded project's
+    /// extent, giving the simulated PCB its footprint.
+    func start(boardSize: CGSize? = nil) async throws -> UInt16 {
         stop()
 
         guard let python = Self.findPython() else { throw SimulatorLauncherError.pythonMissing }
@@ -70,6 +82,7 @@ actor SimulatorLauncher {
             "--port", String(port),
             "--wco", "\(Self.number(Self.workZero.x)),\(Self.number(Self.workZero.y)),\(Self.number(Self.workZero.z))",
             "--surface", Self.number(Self.probeSurface),
+            "--board", Self.boardArgument(size: boardSize),
             // Like FluidNC: the axis runs on past the probe trigger before it
             // stops, so Probe Z must set the origin from the PRB contact.
             "--probe-overshoot", Self.number(Self.probeOvershoot),
@@ -227,6 +240,16 @@ actor SimulatorLauncher {
 
     private nonisolated static func number(_ value: Double) -> String {
         value == value.rounded() ? String(Int(value)) : String(value)
+    }
+
+    /// `--board X,Y,W,H,T`: placement and thickness from Settings → Machine,
+    /// footprint from the loaded project (`defaultBoardSize` without one).
+    private nonisolated static func boardArgument(size: CGSize?) -> String {
+        let width = (size?.width).flatMap { $0 > 1 ? Double($0) : nil } ?? defaultBoardSize.width
+        let height = (size?.height).flatMap { $0 > 1 ? Double($0) : nil } ?? defaultBoardSize.height
+        return [MachineSettings.simBoardX, MachineSettings.simBoardY,
+                width, height, max(0, MachineSettings.simBoardThickness)]
+            .map(number).joined(separator: ",")
     }
 
     // MARK: - Exit cleanup

@@ -35,15 +35,19 @@ Options:
                         its queued step segments (~0.1 s: 0.03-0.05 mm at
                         F20-30). [PRB] still reports the contact; the status
                         report shows the resting position (default 0)
-    --surface Z         machine Z of the synthetic probe surface (default -3;
-                        the surface ripples by 0.05*sin(x/10)+0.03*cos(y/8));
+    --surface Z         machine Z of the bed, the synthetic probe surface
+                        (default -3; it ripples by 0.05*sin(x/10)+0.03*cos(y/8));
                         honoured by G38.2/.3 going down and G38.4/.5 going up
+    --board X,Y,W,H,T   a PCB lying on the bed: machine X,Y of its lower-left
+                        corner, width, height and thickness in mm. Inside the
+                        rectangle the probe finds the board's top (bed + T),
+                        outside it the bed — like a real board in a fixture.
     --wco X,Y,Z         initial G54 offset, i.e. the machine point that is work
                         zero at boot (default 0,0,0; reported by `$#` and the
-                        `WCO:` field). The app's built-in Simulator uses
-                        `--wco 11,71,-81 --surface -82`, so the sample boards
-                        fit the travel and the probe surface sits 1 mm below
-                        work Z0.
+                        `WCO:` field). The app's built-in Simulator places a
+                        board on the bed and presets work zero on its top
+                        corner, so the sample boards fit the travel and a
+                        Z probe lands on "copper".
     --parent-pid N      exit when process N is gone (the app passes its own
                         pid so a simulator it launched never outlives it)
     --wpos              report WPos instead of MPos in status reports
@@ -296,7 +300,13 @@ class Machine:
         return self.state in ("Run", "Jog", "Home") or (self.state == "Hold" and self.hold_sub == 1)
 
     def surface_z(self, x, y):
-        return self.opts.surface + 0.05 * math.sin(x / 10.0) + 0.03 * math.cos(y / 8.0)
+        z = self.opts.surface + 0.05 * math.sin(x / 10.0) + 0.03 * math.cos(y / 8.0)
+        board = self.opts.board_rect
+        if board:
+            bx, by, bw, bh, bt = board
+            if bx <= x <= bx + bw and by <= y <= by + bh:
+                z += bt   # the PCB's top face; the bed elsewhere
+        return z
 
     @property
     def positive(self):
@@ -1490,6 +1500,15 @@ def main(argv=None):
     p.add_argument("--probe-fail", action="store_true")
     p.add_argument("--probe-overshoot", type=float, default=0.0, metavar="MM")
     p.add_argument("--surface", type=float, default=-3.0, metavar="Z")
+
+    def parse_board(text):
+        parts = [float(v) for v in text.split(",")]
+        if len(parts) != 5 or parts[2] <= 0 or parts[3] <= 0 or parts[4] < 0:
+            raise argparse.ArgumentTypeError("expected X,Y,W,H,T with positive W, H and T >= 0")
+        return tuple(parts)
+
+    p.add_argument("--board", dest="board_rect", type=parse_board, default=None, metavar="X,Y,W,H,T",
+                   help="a PCB on the bed: machine X,Y of its lower-left corner, width, height, thickness")
     p.add_argument("--wco", type=parse_wco, default=[0.0, 0.0, 0.0], metavar="X,Y,Z",
                    help="initial G54 offset (machine point of work zero)")
     p.add_argument("--parent-pid", type=int, default=0, metavar="N",

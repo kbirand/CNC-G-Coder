@@ -38,11 +38,15 @@ nonisolated enum MachineSettings {
         static let confirmSend = "machine.confirmSend"
         /// Record the work zero (as a machine point) in Positions when a program is sent.
         static let autoSaveWorkZero = "machine.autoSaveWorkZero"
+        static let toolReference = "machine.toolReference"
         /// Bytes kept in flight while streaming; 0 = automatic (see JobStreamer.windowBudget).
         static let streamWindowBytes = "machine.streamWindowBytes"
         /// Which list the Positions tab shows: "machine" or "workZero".
         static let positionsKind = "machine.positionsKind"
         static let showSimulator = "machine.showSimulator"
+        static let simBoardX = "machine.sim.boardX"
+        static let simBoardY = "machine.sim.boardY"
+        static let simBoardThickness = "machine.sim.boardThickness"
         /// FluidNC config file `$CD=` writes to ("" = the one the controller reports).
         static let configFilename = "machine.configFilename"
         /// The DRO's button grid: a JSON array of `DROButton.storageString`.
@@ -84,6 +88,9 @@ nonisolated enum MachineSettings {
         /// The built-in simulator is a developer/try-out feature: hidden from
         /// the connection picker unless asked for in Settings.
         static let showSimulator = false
+        static let simBoardX = 11.0
+        static let simBoardY = 71.0
+        static let simBoardThickness = 1.6
         static let configFilename = ""
     }
 
@@ -142,6 +149,22 @@ nonisolated enum MachineSettings {
     static var probeMaxTravel: Double {
         get { double(Keys.probeMaxTravel, Defaults.probeMaxTravel) }
         set { defaults.set(newValue, forKey: Keys.probeMaxTravel) }
+    }
+
+    /// Where the Simulator lays its PCB on the bed (machine XY of the
+    /// lower-left corner) and how thick it is; the preset work zero sits on
+    /// the board's top at that corner.
+    static var simBoardX: Double {
+        get { double(Keys.simBoardX, Defaults.simBoardX) }
+        set { defaults.set(newValue, forKey: Keys.simBoardX) }
+    }
+    static var simBoardY: Double {
+        get { double(Keys.simBoardY, Defaults.simBoardY) }
+        set { defaults.set(newValue, forKey: Keys.simBoardY) }
+    }
+    static var simBoardThickness: Double {
+        get { double(Keys.simBoardThickness, Defaults.simBoardThickness) }
+        set { defaults.set(newValue, forKey: Keys.simBoardThickness) }
     }
     static var probeRetract: Double {
         get { double(Keys.probeRetract, Defaults.probeRetract) }
@@ -262,6 +285,38 @@ nonisolated enum MachineSettings {
         Macro(name: "Go to work zero", lines: ["G90 G0 Z5", "G0 X0 Y0"], icon: "scope"),
         Macro(name: "Spindle & coolant off", lines: ["M5", "M9"], icon: "power"),
     ]
+
+    /// A fixed conductive spot on the machine bed (a block or a switch-type
+    /// tool setter wired in parallel with the probe input). Probing it before
+    /// and after a bit change measures the stickout difference, so work Z0
+    /// can be restored when the board surface itself can no longer be probed
+    /// (a solder-masked board). A machine property, like backlash — never a
+    /// project field.
+    struct ToolReference: Codable, Equatable {
+        /// Machine XY of the spot.
+        var x: Double
+        var y: Double
+        /// Machine Z of the probe contact (PRB) when the reference was set.
+        var contactZ: Double
+        /// Machine Z of work Z0 (the work offset's Z) when it was set.
+        var workZeroZ: Double
+        var savedAt: Date
+    }
+
+    /// Stored as a JSON string, like `macros`.
+    static var toolReference: ToolReference? {
+        get {
+            guard let text = defaults.string(forKey: Keys.toolReference), let data = text.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(ToolReference.self, from: data)
+        }
+        set {
+            guard let newValue else { defaults.removeObject(forKey: Keys.toolReference); return }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(newValue), let text = String(data: data, encoding: .utf8) else { return }
+            defaults.set(text, forKey: Keys.toolReference)
+        }
+    }
 
     /// Stored as a JSON string (`[{"name":…,"lines":[…]}]`) so it is readable
     /// and editable with `defaults read`. Unset or unreadable → `defaultMacros`.

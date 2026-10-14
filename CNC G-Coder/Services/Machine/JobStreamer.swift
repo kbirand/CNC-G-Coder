@@ -59,12 +59,48 @@ final class JobStreamer {
     private(set) var elapsedSeconds = 0
 
     /// `parsed.totalTime − currentTime` while a program job is loaded and
-    /// running or done; nil for verify/probe jobs and when idle.
+    /// running or done, scaled by the observed pace (wall seconds per
+    /// estimated second so far): the feed-rate estimate ignores
+    /// acceleration, so a segment-dense program runs slower than estimated
+    /// and the raw difference reaches zero minutes before the job ends.
+    /// Nil for verify/probe jobs and when idle.
     var remaining: TimeInterval? {
         guard mode == .run, let program, isActive || state == .completed else { return nil }
         let time = controller?.app?.player.currentTime ?? 0
-        return max(0, program.parsed.totalTime - time)
+        let left = max(0, program.parsed.totalTime - time)
+        // The pace needs signal — early on, the approach to the first cut
+        // dominates the ratio and would blow the estimate up.
+        let progressed = time - clockBase
+        let active = elapsed - heldTime
+        guard active > 30, progressed > 15 else { return left }
+        var pace = active / progressed
+        // The slowdown is not uniform: straight passes run near the
+        // estimate, segment-dense regions far below it (measured on the Cam
+        // front copper: whole-job pace 1.69, but 1.1 over the first third).
+        // Take the steeper of the whole job and the last ~75 s, so entering
+        // a dense region raises the estimate quickly while a fast stretch
+        // cannot collapse it below the job's own history.
+        if let base = paceSamples.first(where: { $0.active >= active - 75 }),
+           progressed - base.progressed > 3 {
+            pace = max(pace, (active - base.active) / (progressed - base.progressed))
+        }
+        return left * min(pace, 10)
     }
+
+    /// `player.currentTime` when the run began: pace is measured from here,
+    /// so Send from line… does not count the skipped part as progress.
+    @ObservationIgnored private var clockBase: TimeInterval = 0
+    /// Wall seconds spent in feed hold (or Door) during the run — excluded
+    /// from the pace, or a long hold would inflate `remaining` for good.
+    @ObservationIgnored private var heldTime: TimeInterval = 0
+    @ObservationIgnored private var lastReportAt: ContinuousClock.Instant?
+    /// ~1 Hz (active wall seconds, estimate seconds) samples while running,
+    /// for `remaining`'s recent-pace window.
+    @ObservationIgnored private var paceSamples: [(active: Double, progressed: Double)] = []
+    /// Keeps the Mac from idle-sleeping (and the process from App Nap)
+    /// while a job is active: a sleeping sender stalls the stream mid-cut
+    /// with the spindle running.
+    @ObservationIgnored private var activityToken: NSObjectProtocol?
 
     /// 0…1: by time for a program job, by acknowledged lines otherwise.
     var progressFraction: Double {
@@ -346,6 +382,7 @@ final class JobStreamer {
             // (which the 3D view places from the same interpolator per frame).
             let ticker = FrameTicker { [weak self] in
                 guard let self, self.state == .running else { self?.stopFrameSync(); return }
+                self.lastFrameSyncAt = ContinuousClock.now
                 self.syncClockToSmoothedPosition()
             }
             ticker.start()
@@ -363,6 +400,12 @@ final class JobStreamer {
     /// Non-nil while the clock follows the machine at frame rate (`steerClock`
     /// then leaves the clock to it).
     @ObservationIgnored private var frameSync: FrameTicker?
+    /// When the frame sync last fired. A `CADisplayLink` stops with the
+    /// display (sleep, occluded window) while reports keep flowing — the
+    /// clock then froze mid-job with the bar and remaining stuck (seen on a
+    /// headless run once the host display slept, 2026-10-13). `steerClock`
+    /// falls back to writing from reports when the ticker has gone quiet.
+    @ObservationIgnored private var lastFrameSyncAt: ContinuousClock.Instant?
 
     /// Projects the smoothed machine position onto the matched move and its
     /// neighbours (a local search; the per-report matcher keeps `matchedMove`
@@ -413,6 +456,7 @@ final class JobStreamer {
             ackedLine = line - 1
             matchedMove = firstMove(atOrAfter: line)
             controller?.app?.player.currentTime = startTime(ofMove: matchedMove)
+            if resetElapsed { clockBase = startTime(ofMove: matchedMove) }
         } else {
             sentLine = 0
             ackedLine = 0
@@ -420,6 +464,15 @@ final class JobStreamer {
         if resetElapsed {
             elapsed = 0
             elapsedBase = 0
+            heldTime = 0
+            paceSamples = []
+        }
+        lastReportAt = nil
+        lastFrameSyncAt = nil
+        if activityToken == nil {
+            activityToken = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "Streaming a program to the machine")
         }
         startedAt = ContinuousClock.now
         switch mode {
@@ -908,9 +961,17 @@ final class JobStreamer {
     // MARK: - Status reports
 
     func noteStatus(_ status: GRBLStatus) {
+        let now = ContinuousClock.now
         if let startedAt {
-            elapsed = elapsedBase + startedAt.duration(to: ContinuousClock.now).seconds
+            elapsed = elapsedBase + startedAt.duration(to: now).seconds
         }
+        if isActive, let last = lastReportAt {
+            switch status.state {
+            case .hold, .door: heldTime += last.duration(to: now).seconds
+            default: break
+            }
+        }
+        lastReportAt = now
         if let blocks = status.plannerBlocks { maxPlannerBlocks = max(maxPlannerBlocks ?? 0, blocks) }
         if let rx = status.rxBytes { maxRxBytes = max(maxRxBytes ?? 0, rx) }
         if awaitingIdle, errorPrompt == nil {
@@ -936,6 +997,30 @@ final class JobStreamer {
         default: return
         }
         matchPosition(position, in: program)
+        if state == .running {
+            let active = elapsed - heldTime
+            let progressed = (controller?.app?.player.currentTime ?? 0) - clockBase
+            if paceSamples.last.map({ active - $0.active >= 1 }) ?? true {
+                paceSamples.append((active, progressed))
+                if paceSamples.count > 1200 { paceSamples.removeFirst(400) }
+            }
+        }
+        if DebugFlags.jobLog { logJobTick(program, position: position) }
+    }
+
+    /// `-debugJobLog 1`: one line per second with what the job bar shows.
+    @ObservationIgnored private var lastJobLogSecond = -1
+    private func logJobTick(_ program: MachineProgram, position: MachinePosition) {
+        let second = Int(elapsed)
+        guard second != lastJobLogSecond else { return }
+        lastJobLogSecond = second
+        let time = controller?.app?.player.currentTime ?? 0
+        let total = program.parsed.totalTime
+        print(String(format: "[job] elapsed=%d time=%.1f/%.1f frac=%.3f rem=%.0f matched=%d/%d acked=%d/%d pos=%.2f,%.2f,%.2f",
+                     second, time, total, total > 0 ? min(1, max(0, time / total)) : 0,
+                     remaining ?? -1,
+                     matchedMove, program.parsed.moves.count, ackedLine, program.lines.count,
+                     position.x, position.y, position.z))
     }
 
     /// Finds the move nearest the reported work position among the moves
@@ -995,8 +1080,11 @@ final class JobStreamer {
         // position) is the only writer: the mask only ever grows, so a
         // report landing ahead of the bit would open the channel in front
         // of it. Reports then only keep `matchedMove` honest. Held or
-        // suspended, the report is the position.
-        if frameSync == nil { player.currentTime = matched }
+        // suspended, the report is the position — and so it is when the
+        // frame sync has gone quiet (display asleep or window occluded
+        // stops the CADisplayLink; nothing smooth is rendering then).
+        let tickerQuiet = lastFrameSyncAt.map { $0.duration(to: ContinuousClock.now).seconds > 0.5 } ?? true
+        if frameSync == nil || tickerQuiet { player.currentTime = matched }
     }
 
     /// 3D distance from a point to a move's segment, with the parameter of
@@ -1028,6 +1116,10 @@ final class JobStreamer {
     }
 
     private func finish(_ end: State, message: String? = nil) {
+        if let activityToken {
+            ProcessInfo.processInfo.endActivity(activityToken)
+            self.activityToken = nil
+        }
         // Hand the preview back to playback; the job bar's summary keeps the result.
         controller?.app?.player.job = nil
         if let startedAt {

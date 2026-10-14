@@ -34,6 +34,12 @@ nonisolated struct ProgramOptions: Equatable, Sendable {
     /// Replace pcb2gcode's chord polylines by G2/G3 arcs in the streamed
     /// copy (`ArcFitter`; Settings → Machine). Off by default.
     var fitArcs: Bool = false
+    /// Token of the preview document the program was prepared from. A
+    /// regeneration changes the token, so the Program tab's unforced
+    /// prepare stops matching and re-prepares from the new files, and Send
+    /// warns when the loaded program predates the current preview. Nil for
+    /// programs that do not come from the preview (test-board files).
+    var documentToken: UUID? = nil
 }
 
 /// A program ready to stream: its text on disk, the tool segments and the

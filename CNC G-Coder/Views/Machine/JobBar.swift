@@ -20,6 +20,9 @@ struct JobBar: View {
     @State private var actionError: String?
     /// The program Send is about to stream, shown in `StartJobSheet` first.
     @State private var startProgram: MachineProgram?
+    /// Send/Send-from-line hit while the loaded program predates the current
+    /// edits: the alert explains and `proceed` runs on "Send Previous Version".
+    @State private var staleWarning: StaleWarning?
     @AppStorage(MachineSettings.Keys.confirmSend) private var confirmSend = MachineSettings.Defaults.confirmSend
 
     private var streamer: JobStreamer { machine.streamer }
@@ -49,6 +52,33 @@ struct JobBar: View {
         } message: {
             Text(actionError ?? "")
         }
+        .alert("The preview has newer edits",
+               isPresented: Binding(get: { staleWarning != nil }, set: { if !$0 { staleWarning = nil } }),
+               presenting: staleWarning) { warning in
+            Button("Send Previous Version", role: .destructive) { staleWarning = nil; warning.proceed() }
+            Button("Cancel", role: .cancel) { staleWarning = nil }
+        } message: { warning in
+            Text(warning.message)
+        }
+    }
+
+    private struct StaleWarning {
+        var message: String
+        var proceed: @MainActor () -> Void
+    }
+
+    /// Why the loaded program may not match the current edits, or nil.
+    /// Checked when Send is clicked, never from `body` (it reads the preview
+    /// controller, and `body` must stay cheap — see the pre-flight note).
+    private func stalenessProblem() -> String? {
+        guard let program = streamer.program, let preview = machine.app?.preview else { return nil }
+        if !preview.showsExternalFile, preview.isStale || preview.phase == .debouncing || preview.phase == .running {
+            return String(localized: "Your parameter edits are still being processed; the loaded program was generated before them. Wait for the preview to finish and the program to re-prepare, or send the previous version.")
+        }
+        if let prepared = program.options.documentToken, let current = preview.document?.token, prepared != current {
+            return String(localized: "The loaded program was prepared from an older preview and is re-preparing. Wait a moment, or send the previous version.")
+        }
+        return nil
     }
 
     // MARK: Layouts
@@ -208,7 +238,11 @@ struct JobBar: View {
     private var fromLineButton: some View {
         Button("Send from line…", systemImage: "text.insert") {
             fromLineText = "\(streamer.resumeLine ?? 1)"
-            showFromLine = true
+            if let problem = stalenessProblem() {
+                staleWarning = StaleWarning(message: problem) { showFromLine = true }
+            } else {
+                showFromLine = true
+            }
         }
         .disabled(!canStart)
         .help("Resume a stopped program from a line, with a safe approach preamble")
@@ -277,6 +311,14 @@ struct JobBar: View {
             actionError = problem
             return
         }
+        if let problem = stalenessProblem() {
+            staleWarning = StaleWarning(message: problem) { confirmOrStart(program) }
+            return
+        }
+        confirmOrStart(program)
+    }
+
+    private func confirmOrStart(_ program: MachineProgram) {
         if confirmSend {
             startProgram = program
         } else {
@@ -452,6 +494,6 @@ private struct JobTimeLabel: View {
         Text("\(elapsed) · \(remaining)")
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(.secondary)
-            .help("Elapsed · remaining (estimated from the program's feed rates)")
+            .help("Elapsed · remaining (feed-rate estimate, scaled by the pace observed so far)")
     }
 }

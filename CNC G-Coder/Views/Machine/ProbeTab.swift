@@ -35,6 +35,7 @@ struct ProbeControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             zProbeSection
+            toolReferenceSection
             lastProbeSection
             edgeProbeSection
         }
@@ -163,6 +164,95 @@ struct ProbeControls: View {
                 let z = machine.lastProbe.map { " at machine Z\(formatMM($0.position.z))" } ?? ""
                 resultMessage = "Probe OK\(z) — work Z now reads \(formatMM(plateThickness)) there."
             }
+        }
+    }
+
+    // MARK: Tool reference
+
+    @State private var referenceBusy = false
+    @State private var referenceResult: String?
+    @State private var referenceFailed = false
+    @State private var toolReference = MachineSettings.toolReference
+
+    /// The off-board Z reference: set while work Z0 is valid, probe after a
+    /// bit change (or once the board is masked) to restore that Z0 from the
+    /// contact difference. The spot is a machine property (`MachineSettings
+    /// .toolReference`), like backlash.
+    private var toolReferenceSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            MachineSectionLabel(title: "Tool reference")
+            Text("A fixed block or switch-type setter on the bed, wired in parallel with the probe. Set it once while work Z0 sits on bare copper; after a bit change — or once the board is solder-masked and cannot be probed — probing it restores Z0 by the contact difference and re-anchors the height map.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let reference = toolReference {
+                HStack(spacing: 12) {
+                    Text("machine X\(formatMM(reference.x)) Y\(formatMM(reference.y)) · contact Z\(formatMM(reference.contactZ))")
+                        .font(.system(.callout, design: .monospaced))
+                    Spacer()
+                    Text(reference.savedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 10) {
+                    Button {
+                        runReference(restore: true)
+                    } label: {
+                        Label(referenceBusy ? "Probing…" : "Probe & Restore Z0", systemImage: "arrow.uturn.down")
+                            .frame(minWidth: 130)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(referenceBusy || refusal != nil)
+                    .help("Move to the reference at the safe height, probe it, and shift work Z0 by the difference to the stored contact — the new bit's length is absorbed and the height map re-anchored")
+                    if referenceBusy { ProgressView().controlSize(.small) }
+                }
+                HStack(spacing: 10) {
+                    Button("Re-set Here") { runReference(restore: false) }
+                        .disabled(referenceBusy || refusal != nil)
+                        .help("Probe down at the current position and remember the contact together with the current work Z0 — do it while Z0 is freshly probed on the surface that matters")
+                    Button("Clear", role: .destructive) {
+                        MachineSettings.toolReference = nil
+                        toolReference = nil
+                        referenceResult = nil
+                    }
+                    .disabled(referenceBusy)
+                    .help("Forget the stored reference")
+                }
+            } else {
+                Text("No reference set. Jog the bit a few millimetres above the spot, then:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button {
+                        runReference(restore: false)
+                    } label: {
+                        Label(referenceBusy ? "Probing…" : "Set Reference Here", systemImage: "mappin.and.ellipse")
+                            .frame(minWidth: 130)
+                    }
+                    .disabled(referenceBusy || refusal != nil)
+                    .help("Probe down at the current position and remember the contact together with the current work Z0 — do it while Z0 is freshly probed on the surface that matters")
+                    if referenceBusy { ProgressView().controlSize(.small) }
+                }
+            }
+            if let referenceResult {
+                Label(referenceResult, systemImage: referenceFailed ? "xmark.octagon.fill" : "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(referenceFailed ? .red : .green)
+            }
+        }
+        .machinePanel()
+    }
+
+    private func runReference(restore: Bool) {
+        referenceBusy = true
+        referenceResult = nil
+        Task {
+            let failure = restore ? await machine.probeToolReference() : await machine.setToolReference()
+            referenceBusy = false
+            toolReference = MachineSettings.toolReference
+            referenceFailed = failure != nil
+            referenceResult = failure ?? (restore
+                ? String(localized: "Work Z0 restored from the reference.")
+                : String(localized: "Reference stored — probe it after the next bit change."))
         }
     }
 

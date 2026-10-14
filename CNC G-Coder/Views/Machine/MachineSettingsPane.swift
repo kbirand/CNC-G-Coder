@@ -14,6 +14,9 @@ struct MachineSettingsPane: View {
     @AppStorage(MachineSettings.Keys.autoReconnect) private var autoReconnect = MachineSettings.Defaults.autoReconnect
     @AppStorage(MachineSettings.Keys.consoleShowStatus) private var consoleShowStatus = MachineSettings.Defaults.consoleShowStatus
     @AppStorage(MachineSettings.Keys.showSimulator) private var showSimulator = MachineSettings.Defaults.showSimulator
+    @AppStorage(MachineSettings.Keys.simBoardX) private var simBoardX = MachineSettings.Defaults.simBoardX
+    @AppStorage(MachineSettings.Keys.simBoardY) private var simBoardY = MachineSettings.Defaults.simBoardY
+    @AppStorage(MachineSettings.Keys.simBoardThickness) private var simBoardThickness = MachineSettings.Defaults.simBoardThickness
 
     @AppStorage(MachineSettings.Keys.jogFeed) private var jogFeed = MachineSettings.Defaults.jogFeed
     @AppStorage(MachineSettings.Keys.jogStep) private var jogStep = MachineSettings.Defaults.jogStep
@@ -78,6 +81,23 @@ struct MachineSettingsPane: View {
             Text("A simulated FluidNC for trying the panel without a machine.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if showSimulator {
+                HStack(spacing: 8) {
+                    Text("Simulated board at")
+                    TextField("X", value: $simBoardX, format: .number.precision(.fractionLength(0...2)).grouping(.never))
+                        .frame(width: 60)
+                    TextField("Y", value: $simBoardY, format: .number.precision(.fractionLength(0...2)).grouping(.never))
+                        .frame(width: 60)
+                    Text("· thickness")
+                    TextField("mm", value: $simBoardThickness, format: .number.precision(.fractionLength(0...2)).grouping(.never))
+                        .frame(width: 50)
+                    Text("mm")
+                }
+                .help("Machine X/Y of the simulated PCB's lower-left corner on the bed, and its thickness. Its footprint follows the loaded project; the preset work zero sits on the board's top at that corner. Applied at the next Connect.")
+                Text("Machine X/Y of the board's corner on the bed; the probe finds the board's top inside it, the bed outside. Takes effect at the next Connect.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

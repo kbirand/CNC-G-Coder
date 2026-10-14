@@ -73,6 +73,10 @@ private struct ProgramControlsBody<Middle: View>: View {
         .onChange(of: model.requestedMachineLayer) { _, _ in consumeRequest() }
         .onChange(of: selectedKind) { _, _ in prepare() }
         .onChange(of: preview.document?.token) { _, _ in documentChanged() }
+        // A regeneration that lands while a job streams is deferred (the
+        // guards above skip it); catch up as soon as the job ends. The
+        // unforced prepare early-exits unless the document token moved.
+        .onChange(of: streamer.isActive) { _, active in if !active { prepare() } }
         .onChange(of: applyBacklash) { _, on in MachineSettings.applyBacklash = on; prepare() }
         .onChange(of: clampZ) { _, _ in prepare() }
         .alert("Line \(streamer.errorPrompt?.line ?? 0): error", isPresented: errorPromptShown, presenting: streamer.errorPrompt) { _ in
@@ -452,7 +456,8 @@ private struct ProgramControlsBody<Middle: View>: View {
                                      applyBelowZ: MachineSettings.heightMapApplyBelowZ,
                                      frame: model.heightMapFrame(side: kind.boardSide),
                                      clampZAboveWork: clampZ ? machine.clampZWork() : nil,
-                                     fitArcs: MachineSettings.fitArcs)
+                                     fitArcs: MachineSettings.fitArcs,
+                                     documentToken: preview.document?.token)
         if !force, let program, program.kind == kind, program.name == name, program.options == options {
             preparing = false
             prepareError = nil
@@ -563,7 +568,7 @@ private struct ProgramControlsBody<Middle: View>: View {
         case .wcoUnknown: String(localized: "The machine's work offset is not known yet")
         case .originUnknown: String(localized: "The map does not record where the board was when it was probed")
         case .xyMoved(let dx, let dy): String(localized: "The work origin moved on the board by X\(formatMM(dx)) Y\(formatMM(dy)) mm since probing")
-        case .zRezeroed(let dz): "Z was re-zeroed by \(formatMM(dz)) mm since probing"
+        case .zRezeroed(let dz): String(localized: "Z was re-zeroed by \(formatMM(dz)) mm since probing — Probe Z at the work origin re-anchors the map after a bit change")
         case .incomplete: String(localized: "The map is incomplete")
         }
     }
