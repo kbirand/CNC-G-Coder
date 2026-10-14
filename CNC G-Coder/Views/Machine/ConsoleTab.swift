@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The raw conversation with the controller: every line sent and received
@@ -37,6 +38,12 @@ struct ConsoleTab: View {
             Text("\(machine.console.count) lines")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+            Button("Copy", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(consoleText, forType: .string)
+            }
+            .disabled(machine.console.isEmpty)
+            .help("Copy the console as shown (with times) to the clipboard")
             Button("Clear", systemImage: "trash") { machine.clearConsole() }
                 .disabled(machine.console.isEmpty)
                 .help("Empty the console view — the connection itself is untouched")

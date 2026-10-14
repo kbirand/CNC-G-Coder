@@ -208,6 +208,8 @@ final class MachineController {
     private var motionTask: Task<Void, Never>?
     private var inboundSerial = 0
     private var pollMisses = 0
+    /// When the ESP32's ROM printed its reset line; cleared by the banner.
+    private var rebootingSince: ContinuousClock.Instant?
     private var pollPausedCount = 0
     private var awaitingFirstReport = false
     private var settingsSeen: [String: String] = [:]
@@ -366,6 +368,7 @@ final class MachineController {
         outbound.removeAll()
         transport = nil
         phase = .disconnected
+        rebootingSince = nil
         failPendingAcks(with: .disconnected)
         if streamer.isActive { jobLostLink = true }
         streamer.noteLinkLost()
@@ -435,7 +438,10 @@ final class MachineController {
                 let keys = ["axes/\(name)/max_travel_mm", "axes/\(name)/homing/mpos_mm",
                             "axes/\(name)/homing/positive_direction", "axes/\(name)/soft_limits"]
                 for key in keys {
-                    do { try await sendInternal(GRBLCommand.fluidNCSetting(key), timeout: timeout) } catch { break }
+                    do { try await sendInternal(GRBLCommand.fluidNCSetting(key), timeout: timeout) } catch {
+                        if Task.isCancelled { return }
+                        break
+                    }
                     if Task.isCancelled { return }
                 }
                 let travel = settingsSeen["$/axes/\(name)/max_travel_mm"].flatMap(Double.init)
@@ -522,6 +528,11 @@ final class MachineController {
     private func handle(line: String) {
         inboundSerial += 1
         pollMisses = 0
+        if line.hasPrefix("rst:") || line.hasPrefix("ets ") {
+            log(.received, line)
+            controllerRebooting()
+            return
+        }
         let response = GRBLResponse.classify(line)
 
         switch response {
@@ -641,9 +652,29 @@ final class MachineController {
         }
     }
 
+    /// The ESP32's ROM printed its reset line: the controller is booting.
+    /// FluidNC queues what arrives meanwhile and answers it after the
+    /// banner, where each `ok` would pop the wrong entry — so whatever is in
+    /// flight is dropped now and nothing is sent until the banner.
+    private func controllerRebooting() {
+        rebootingSince = .now
+        failPendingAcks(with: .cancelled)
+        streamer.noteBanner()
+        identifyTask?.cancel()
+        stopContinuousJog()
+    }
+
+    /// Between a ROM reset line and the banner (bounded, should the banner
+    /// never come).
+    private var isRebooting: Bool {
+        guard let rebootingSince else { return false }
+        return rebootingSince.duration(to: .now) < .seconds(10)
+    }
+
     /// Any banner means the controller restarted: whatever was in flight is
     /// gone, the parser is back to defaults, and the firmware is asked again.
     private func bannerReceived(_ text: String) {
+        rebootingSince = nil
         log(.info, text)
         if let info = FirmwareInfo.parse(banner: text) {
             if firmware.kind == .unknown || info.kind != firmware.kind { firmware = info } else { firmware.banner = text }
@@ -695,6 +726,7 @@ final class MachineController {
 
     private func sendEntry(_ line: String, log shouldLog: Bool, timeout: Duration?) async throws -> PendingAck {
         guard transport != nil, isConnected else { throw GRBLCommandError.disconnected }
+        guard !isRebooting else { throw GRBLCommandError.cancelled }
         var pending: PendingAck?
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let entry = PendingAck(line: line, continuation: continuation)
@@ -759,7 +791,7 @@ final class MachineController {
     /// through the streamer, not echoed in the console (a job is thousands
     /// of lines).
     func enqueueJobLine(_ text: String) {
-        guard transport != nil, isConnected else { return }
+        guard transport != nil, isConnected, !isRebooting else { return }
         ackOrder.append(.job)
         enqueue(Data((text + "\n").utf8))
     }
@@ -872,14 +904,19 @@ final class MachineController {
         phase = .unresponsive
         lastError = "The controller stopped answering."
         log(.warning, "No reply from the controller for \(Self.pollMissLimit) status polls — link unresponsive.")
-        if streamer.isActive {
+        let jobWasActive = streamer.isActive
+        if jobWasActive {
             // The socket may still carry bytes one way: a feed hold costs
             // nothing and stops the buffered moves if it gets through.
             jobLostLink = true
             sendRealtime(GRBLRealtime.feedHold)
         }
         streamer.noteLinkLost()
-        if MachineSettings.autoReconnect {
+        // Reopening a USB serial port can pulse the ESP32's reset line and
+        // abort a homing cycle the board is only slow to report on, so the
+        // port stays open and the next reply recovers the link (a port that
+        // vanishes closes by itself). Mid-job a reset is the safe outcome.
+        if MachineSettings.autoReconnect, transportKind != .serial || jobWasActive {
             Task { [weak self] in
                 guard let self else { return }
                 await self.closeLink()
