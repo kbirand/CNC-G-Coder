@@ -198,7 +198,7 @@ struct JobBar: View {
     // re-render per acknowledgement / second: when the bar's body read
     // `ackedLine` and `elapsedSeconds` itself, every ack re-laid out the
     // whole bar — buttons included, ~27 ms a time — and starved the sender.
-    private var progressBar: some View { JobProgressBar(streamer: streamer) }
+    private var progressBar: some View { JobProgressBar(streamer: streamer, clock: machine.app?.player.clock) }
     private var lineCounter: some View { JobLineCounter(streamer: streamer) }
     private var timeLabel: some View { JobTimeLabel(streamer: streamer) }
 
@@ -467,7 +467,19 @@ struct ResumePreambleSheet: View {
 
 private struct JobProgressBar: View {
     var streamer: JobStreamer
+    /// A running job's fraction is the preview clock's time, which the
+    /// streamer's observation does not track: the bar watches the clock
+    /// itself, or it would only move when the job state changes.
+    var clock: PlaybackClock?
     var body: some View {
+        if let clock {
+            PlaybackTimeReader(clock: clock) { bar }
+        } else {
+            bar
+        }
+    }
+
+    private var bar: some View {
         ProgressView(value: min(max(streamer.progressFraction, 0), 1))
             .progressViewStyle(.linear)
             .frame(minWidth: 120)

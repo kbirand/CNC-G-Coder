@@ -298,6 +298,11 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
     /// keep the sagitta under 0.003 mm there, 1° chords do on large arcs).
     private static let chordAngle = Double.pi / 180
     private static let chordLength = 0.1
+    /// An arc is kept whole when the surface departs from a straight Z ramp
+    /// along it by no more than this (mm).
+    private static let arcFlatness = 0.002
+    /// More pieces than this per arc and chords are as short anyway.
+    private static let maxArcPieces = 32
 
     /// Warps an absolute metric G0/G1/G2/G3 program (work coordinates) by
     /// the map; `frame` maps design → the program's frame, so every XY is
@@ -309,7 +314,10 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
     /// longer than half a cell. The motion word is preserved — G0 pieces stay
     /// rapids, a Z-only rapid becomes a single `G0 Z` — so a plunge clearance
     /// rapid is never turned into a feed move; `F` stays on the first piece
-    /// of its line; arcs become G1 chords (the one mode change). Comments,
+    /// of its line; an arc stays G2/G3 — split into up to `maxArcPieces`
+    /// helices, each ramping Z from its start's offset to its end's, until
+    /// the surface along each is straight to `arcFlatness` — else it becomes
+    /// G1 chords (the one mode change). Comments,
     /// blank lines and lines without axis words are copied verbatim, and a
     /// move whose Z is above the threshold (safe-height rapids) is untouched.
     /// The warp adds words only to lines that already move, so a feed move is
@@ -328,6 +336,45 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
             let d = CGPoint(x: px, y: py).applying(toDesign)
             return interpolate(x: d.x, y: d.y)
         }
+        /// The coordinate words of each helical piece, or nil when even
+        /// `maxArcPieces` pieces leave the surface too curved along them.
+        func helicalArcs(from start: (Double, Double), startZ: Double, to end: (Double, Double), endZ: Double,
+                         center c: (Double, Double), radius r: Double, startAngle a0: Double,
+                         sweep: Double) -> [String]? {
+            var pieces = 1
+            while pieces <= Self.maxArcPieces {
+                let step = sweep / Double(pieces)
+                let samples = min(400, max(8, Int((abs(step) / (.pi / 16)).rounded(.up)),
+                                           Int((abs(step) * r / 0.5).rounded(.up))))
+                var words: [String] = []
+                var from = start, fromOffset = offset(start.0, start.1)
+                var flat = true
+                for k in 1...pieces where flat {
+                    let a = a0 + step * Double(k)
+                    // Inner ends on the circle, at the output's precision, so
+                    // the next piece's I/J measure from where the bit is.
+                    let to = k == pieces ? end
+                        : (Double(Self.format(c.0 + r * cos(a)))!, Double(Self.format(c.1 + r * sin(a)))!)
+                    let toOffset = offset(to.0, to.1)
+                    let aFrom = a - step
+                    flat = (1..<samples).allSatisfy { s in
+                        let f = Double(s) / Double(samples)
+                        let angle = aFrom + step * f
+                        let surface = offset(c.0 + r * cos(angle), c.1 + r * sin(angle))
+                        return abs(surface - (fromOffset + (toOffset - fromOffset) * f)) <= Self.arcFlatness
+                    }
+                    let z = startZ + (endZ - startZ) * Double(k) / Double(pieces) + toOffset
+                    words.append("X\(Self.format(to.0)) Y\(Self.format(to.1)) Z\(Self.format(z)) "
+                                 + "I\(Self.format(c.0 - from.0)) J\(Self.format(c.1 - from.1))")
+                    from = to
+                    fromOffset = toOffset
+                }
+                if flat { return words }
+                pieces *= 2
+            }
+            return nil
+        }
+
         var out: [String] = []
         var mode = 0                     // modal motion G0–G3
         var x: Double?, y: Double?, z: Double?
@@ -408,6 +455,21 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
                 let a0 = atan2(sy - cy, sx - cx)
                 var sweep = atan2(ey - cy, ex - cx) - a0
                 if mode == 3 { if sweep <= eps { sweep += 2 * .pi } } else { if sweep >= -eps { sweep -= 2 * .pi } }
+                // The arc stays arcs: split in 1, 2, 4 … equal pieces until
+                // along each the surface departs from a straight Z ramp by
+                // no more than `arcFlatness`, each piece a helix from its
+                // start's offset to its end's (Z follows the angle linearly).
+                // A tilted board needs a few pieces per circle; chords would
+                // undo the arc fitting and starve the planner on every one.
+                if let arcs = helicalArcs(from: (sx, sy), startZ: sz, to: (ex, ey), endZ: tz,
+                                          center: (cx, cy), radius: r, startAngle: a0, sweep: sweep) {
+                    // The motion word is always written: an earlier chorded
+                    // arc left the controller in G1.
+                    out.append(contentsOf: Self.rebuild(chars, words: words, coordinates: arcs[0],
+                                                        motion: "G\(mode)", comments: comments))
+                    out.append(contentsOf: arcs.dropFirst().map { "G\(mode) " + $0 })
+                    continue
+                }
                 let byAngle = Int((abs(sweep) / Self.chordAngle).rounded(.up))
                 let byLength = Int((abs(sweep) * r / Self.chordLength).rounded(.up))
                 let chords = max(1, min(byAngle, byLength))
