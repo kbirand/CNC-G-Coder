@@ -255,6 +255,18 @@ final class MachineController {
     /// Launches the built-in FluidNC simulator and connects to it.
     func connectSimulator() async {
         await connect(to: .simulator)
+        simulatorBoardChanged()
+    }
+
+    /// The simulated PCB follows the project: whenever the preview document
+    /// changes (a project opened or regenerated after connecting), the
+    /// simulator is told where the board now lies in machine coordinates.
+    func simulatorBoardChanged() {
+        guard endpoint?.isSimulator == true, isConnected else { return }
+        let frame = app?.preview.document?.frame
+        let rect = frame.map { $0.rect.applying($0.designToFront) }
+        let line = "board " + SimulatorLauncher.boardArgument(rect: rect)
+        Task { try? await send(line, log: false) }
     }
 
     func connect(tcpHost: String, port: UInt16) async {
@@ -307,7 +319,8 @@ final class MachineController {
             log(.info, "Starting the simulator…")
             let port: UInt16
             do {
-                port = try await SimulatorLauncher.shared.start(boardSize: app?.preview.document?.frame?.rect.size)
+                let frame = app?.preview.document?.frame
+                port = try await SimulatorLauncher.shared.start(boardRect: frame.map { $0.rect.applying($0.designToFront) })
             } catch {
                 phase = .disconnected
                 lastError = error.localizedDescription
@@ -758,7 +771,16 @@ final class MachineController {
         rebootingSince = nil
         log(.info, text)
         if let info = FirmwareInfo.parse(banner: text) {
-            if firmware.kind == .unknown || info.kind != firmware.kind { firmware = info } else { firmware.banner = text }
+            if controllerFamily == .carvera {
+                // The link was opened to a Carvera: whatever the line looks
+                // like, the firmware stays a Carvera (the GRBL-style identify
+                // would hang on its silent `$I`).
+                firmware.banner = text
+            } else if firmware.kind == .unknown || info.kind != firmware.kind {
+                firmware = info
+            } else {
+                firmware.banner = text
+            }
         }
         failPendingAcks(with: .cancelled)
         streamer.noteBanner()
@@ -783,11 +805,21 @@ final class MachineController {
     /// running, paused or stopping — a suspended job hands the machine back.
     func send(_ line: String, log: Bool = true) async throws {
         guard !jobBlocksCommands else { throw GRBLCommandError.refused("A program is being sent — stop it first.") }
-        if line.trimmingCharacters(in: .whitespaces).uppercased().hasPrefix(GRBLCommand.home) {
+        let upper = line.trimmingCharacters(in: .whitespaces).uppercased()
+        if upper.hasPrefix(GRBLCommand.home) {
             await waitForIdentify()
+        }
+        if isCarvera, Self.carveraSilentLines.contains(upper) {
+            // Smoothieware prints nothing (not even ok) for these: sending
+            // them acknowledged would hang on an ok that never comes.
+            enqueueUnacked(line)
+            return
         }
         try await sendInternal(line, log: log)
     }
+
+    /// Lines the Carvera firmware never acknowledges.
+    private static let carveraSilentLines: Set<String> = ["$I", "$X", "VERSION", "MODEL", "ECHO"]
 
     /// A homing cycle blocks the controller until it ends, so the identify
     /// queries queued behind it time out and the axis ranges come out wrong.
@@ -1128,9 +1160,15 @@ final class MachineController {
     func unlock() async {
         do {
             if isCarvera {
-                // `$X` answers only when the firmware was halted; otherwise silence.
+                // `$X` answers (`[Caution: Unlocked]` + ok) only when the
+                // firmware was halted; otherwise silence. Never put it in the
+                // ack queue: a silent `$X` would otherwise eat the next
+                // line's ok and hang that command.
                 guard !jobBlocksCommands else { throw GRBLCommandError.refused("A program is being sent — stop it first.") }
-                do { try await sendInternal(GRBLCommand.unlock, timeout: .seconds(2)) } catch GRBLCommandError.timeout {}
+                let wasAlarm = status.state == .alarm || alarmCode != nil
+                enqueueUnacked(GRBLCommand.unlock)
+                if wasAlarm { _ = await waitForStatus(timeout: 3) { $0.state != .alarm } }
+                else { try? await Task.sleep(for: .milliseconds(200)) }
             } else {
                 try await send(GRBLCommand.unlock)
             }
@@ -2021,6 +2059,15 @@ final class MachineController {
     /// frame (design → work) is taken once, at the start.
     func probeHeightMap(_ map: HeightMap) async {
         let frame = app?.heightMapFrame(side: map.side) ?? .identity
+        var map = map
+        // The points are relative to work Z0 — the plane the program's Z is
+        // measured from — not to a probe at work X0/Y0, which may be off
+        // the board altogether.
+        guard let wco = status.workOffset else {
+            log(.warning, "Height map not probed: the work offset is not known yet.")
+            return
+        }
+        map.referenceZ = wco.z
         await streamer.probe(map: map, frame: frame)
         guard streamer.state == .probing else { return }
         await streamer.waitUntilFinished()
@@ -2044,6 +2091,61 @@ final class MachineController {
     /// Program tab's "Apply height map" and the Height Map tab's "Use height
     /// map for sending" are the same switch.
     var applyHeightMap = false
+    /// Carvera: the firmware's own leveling grid is on (after `M495 … A B I J H`),
+    /// so it corrects Z itself and the app's map should stay off.
+    var carveraLevelingActive = false
+
+    // MARK: - Carvera automation (M495 / M370)
+
+    /// The Carvera's built-in routines, the ones Makera's controller wraps:
+    /// `M495 X Y C D` traces the job's border with the probe laser, `… O F`
+    /// probes Z0 with the wireless probe (the firmware fetches the probe
+    /// itself), `… A B I J H` probes a leveling grid the firmware then
+    /// applies to every move, `M370` clears that grid. The line is answered
+    /// at once; the machine works through its script queue (Run/Tool) and
+    /// is Idle when done. Returns the failure, nil on success.
+    func runCarveraAutomation(_ line: String, label: String) async -> String? {
+        guard isCarvera else { return String(localized: "Only a Makera Carvera has this routine.") }
+        guard isConnected, !streamer.isActive else { return String(localized: "The machine must be connected and idle.") }
+        guard machineState == .idle else { return String(localized: "The machine must be idle (\(machineState.name)).") }
+        do { try await send(line) } catch { return error.localizedDescription }
+        log(.info, "\(label): the machine runs its own routine — waiting for Idle.")
+        _ = await waitForStatus(timeout: 8) { $0.state != .idle }
+        let finished = await waitForStatus(timeout: 1800) { $0.state == .idle || $0.state == .alarm }
+        if !finished { return String(localized: "\(label) did not finish within 30 minutes.") }
+        if status.state == .alarm || alarmCode != nil { return String(localized: "\(label) stopped with an alarm.") }
+        log(.info, "\(label) done.")
+        return nil
+    }
+
+    /// `M495 X Y C D`: the probe laser traces `rect` (work coordinates).
+    func carveraTraceMargin(_ rect: CGRect) async -> String? {
+        let line = "M495 X\(GRBLCommand.number(rect.minX)) Y\(GRBLCommand.number(rect.minY)) C\(GRBLCommand.number(rect.maxX)) D\(GRBLCommand.number(rect.maxY))"
+        return await runCarveraAutomation(line, label: String(localized: "Margin"))
+    }
+
+    /// `M495 X Y O F`: the wireless probe sets work Z0 at a work XY.
+    func carveraProbeZ(atWork point: CGPoint) async -> String? {
+        let line = "M495 X\(GRBLCommand.number(point.x)) Y\(GRBLCommand.number(point.y)) O0 F0"
+        return await runCarveraAutomation(line, label: String(localized: "Z probe"))
+    }
+
+    /// `M495 X Y A B I J H`: the firmware probes an nx×ny grid over `rect`
+    /// starting `height` mm above the surface and corrects every move
+    /// from then on (until `M370`).
+    func carveraLevel(_ rect: CGRect, nx: Int, ny: Int, height: Double) async -> String? {
+        let line = "M495 X\(GRBLCommand.number(rect.minX)) Y\(GRBLCommand.number(rect.minY)) A\(GRBLCommand.number(rect.width)) B\(GRBLCommand.number(rect.height)) I\(nx) J\(ny) H\(GRBLCommand.number(height))"
+        let failure = await runCarveraAutomation(line, label: String(localized: "Auto leveling"))
+        if failure == nil { carveraLevelingActive = true }
+        return failure
+    }
+
+    /// `M370`: the firmware forgets its leveling grid.
+    func carveraClearLeveling() async -> String? {
+        let failure = await runCarveraAutomation("M370", label: String(localized: "Clear leveling"))
+        if failure == nil { carveraLevelingActive = false }
+        return failure
+    }
 
     /// Prepares the loaded program again with the current `applyHeightMap`
     /// (and the stored map of its side), when that changes its options.

@@ -91,7 +91,9 @@ final class PreviewController: ObservableObject {
     /// Jobs of the current run that are in flight, by id → label.
     private var running: [Int: String] = [:]
     private var finishedSteps = 0
-    @Published private(set) var document: PreviewDocument?
+    @Published private(set) var document: PreviewDocument? {
+        didSet { app?.machine.simulatorBoardChanged() }
+    }
     @Published private(set) var lastRenderedSignature: String?
     /// Signature of the most recently *scheduled* run (debounced or running).
     /// Guards against re-running for changes that don't affect the G-code.

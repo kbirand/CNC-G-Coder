@@ -192,6 +192,8 @@ nonisolated struct GRBLStatus: Equatable, Sendable {
     var playedLines: Int?
     var playedPercent: Int?
     var isPlaying: Bool?
+    /// Carvera `W:` — the wireless probe's battery voltage.
+    var probeVoltage: Double?
     /// Carvera `H:` — why it halted.
     var haltReason: Int?
 
@@ -267,6 +269,9 @@ nonisolated struct GRBLStatus: Equatable, Sendable {
                 if numbers.count >= 4 { status.isPlaying = numbers[3] != 0 }
             case "H":
                 status.haltReason = numbers.first.map { Int($0) }
+            case "W":
+                // Carvera `W:voltage` — the wireless probe's battery.
+                status.probeVoltage = numbers.first
             case "Bf":
                 if numbers.count >= 2 {
                     status.plannerBlocks = Int(numbers[0])

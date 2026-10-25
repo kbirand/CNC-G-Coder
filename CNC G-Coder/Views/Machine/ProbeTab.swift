@@ -31,6 +31,7 @@ struct ProbeControls: View {
     @State private var probing = false
     @State private var resultMessage: String?
     @State private var resultIsFailure = false
+    @State private var carveraProbing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -46,9 +47,26 @@ struct ProbeControls: View {
     private var zProbeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             MachineSectionLabel(title: "Z probe")
-            Text("Clip the probe lead to the board, position the bit over bare copper, then probe. The fast pass finds the surface, the slow pass refines it; work Z then reads the plate thickness at the trigger point.")
+            Text(machine.isCarvera
+                 ? "The Carvera probes with its wireless probe, no clip: position the spindle over the board, press Probe with the Carvera, and the machine fetches the probe, touches the surface twice, sets work Z0 there and retracts. Probe Z below is the plain G38.2 probe for a bit wired to the probe input."
+                 : "Clip the probe lead to the board, position the bit over bare copper, then probe. The fast pass finds the surface, the slow pass refines it; work Z then reads the plate thickness at the trigger point.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if machine.isCarvera {
+                HStack(spacing: 10) {
+                    Button {
+                        runCarveraProbe()
+                    } label: {
+                        Label(carveraProbing ? "Probing…" : "Probe with the Carvera", systemImage: "scope")
+                            .frame(minWidth: 100)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(carveraProbing || probing || !machine.isConnected || machine.streamer.isActive || machine.status.workPosition == nil)
+                    .help("M495 at the spindle's work XY: the firmware changes to its wireless probe (T0), probes fast and slow, sets work Z0 at the surface and retracts. The probe must be in its rack slot.")
+                    if carveraProbing { ProgressView().controlSize(.small) }
+                }
+            }
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                     Text("Max travel")
@@ -149,6 +167,18 @@ struct ProbeControls: View {
     }
 
     private var canProbe: Bool { !probing && refusal == nil }
+
+    private func runCarveraProbe() {
+        guard let work = machine.status.workPosition else { return }
+        carveraProbing = true
+        resultMessage = nil
+        Task {
+            let failure = await machine.carveraProbeZ(atWork: CGPoint(x: work.x, y: work.y))
+            carveraProbing = false
+            resultIsFailure = failure != nil
+            resultMessage = failure ?? String(localized: "Probed with the Carvera's probe — work Z0 is on the surface there.")
+        }
+    }
 
     private func runProbe() {
         probing = true

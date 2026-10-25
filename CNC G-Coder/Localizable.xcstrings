@@ -897,19 +897,63 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ cubre %2$@–%3$@, el agujero es de %4$@ %5$@"
+            "value": "%@ cubre %@–%@, el agujero es de %@ %@"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ couvre %2$@–%3$@, le trou fait %4$@ %5$@"
+            "value": "%@ couvre %@–%@, le trou fait %@ %@"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ %2$@–%3$@ kapsıyor, delik %4$@ %5$@"
+            "value": "%@ %@–%@ kapsıyor, delik %@ %@"
+          }
+        }
+      }
+    },
+    "%@ did not finish within 30 minutes.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ no terminó en 30 minutos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ne s'est pas terminé en 30 minutes."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 30 dakikada bitmedi."
+          }
+        }
+      }
+    },
+    "%@ done.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ hecho."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ terminé."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ bitti."
           }
         }
       }
@@ -1042,6 +1086,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ geçerli adım/mm:"
+          }
+        }
+      }
+    },
+    "%@ stopped with an alarm.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ se detuvo con una alarma."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ s'est arrêté sur une alarme."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ bir alarmla durdu."
           }
         }
       }
@@ -3541,6 +3607,28 @@
         }
       }
     },
+    "Auto leveling": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nivelado automático"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nivellement automatique"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik tesviye"
+          }
+        }
+      }
+    },
     "Automatic": {
       "localizations": {
         "es": {
@@ -4793,6 +4881,50 @@
         }
       }
     },
+    "Calibrate": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calibrar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Étalonner"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalibre Et"
+          }
+        }
+      }
+    },
+    "Calibrate Tool Length (M491)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calibrar longitud de herramienta (M491)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Étalonner la longueur d'outil (M491)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Takım Boyunu Kalibre Et (M491)"
+          }
+        }
+      }
+    },
     "Cancel": {
       "localizations": {
         "es": {
@@ -4899,6 +5031,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Harflerin büyük harf yüksekliği."
+          }
+        }
+      }
+    },
+    "Carvera auto leveling": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nivelado automático de la Carvera"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nivellement automatique du Carvera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carvera otomatik tesviye"
           }
         }
       }
@@ -5193,6 +5347,28 @@
         }
       }
     },
+    "Change to": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambiar a"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changer pour"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Şuna değiştir"
+          }
+        }
+      }
+    },
     "Change track widths, pad and hole sizes, or move and delete features. The original file is left as it is.": {
       "localizations": {
         "es": {
@@ -5255,6 +5431,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kontrol"
+          }
+        }
+      }
+    },
+    "Check Tool for Breakage (M491.1)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobar rotura de herramienta (M491.1)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier la casse de l'outil (M491.1)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Takım Kırılması Kontrolü (M491.1)"
           }
         }
       }
@@ -5809,6 +6007,28 @@
         }
       }
     },
+    "Clamp Collet (M490.1)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apretar pinza (M490.1)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serrer la pince (M490.1)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pensi Sık (M490.1)"
+          }
+        }
+      }
+    },
     "Clamp Z to top": {
       "localizations": {
         "es": {
@@ -5915,6 +6135,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Menüyü Temizle"
+          }
+        }
+      }
+    },
+    "Clear leveling": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Borrar nivelado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effacer le nivellement"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesviyeyi temizle"
           }
         }
       }
@@ -9371,6 +9613,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Buraya bırak: %@"
+          }
+        }
+      }
+    },
+    "Drop tool": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soltar herramienta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déposer l'outil"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Takımı bırak"
           }
         }
       }
@@ -13783,6 +14047,28 @@
         }
       }
     },
+    "How far above the surface the probe starts each point (the firmware's H, mm)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Altura sobre la superficie desde la que el palpador empieza cada punto (la H del firmware, mm)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hauteur au-dessus de la surface d'où le palpeur part à chaque point (le H du firmware, mm)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Probun her noktaya yüzeyin ne kadar üstünden başladığı (aygıt yazılımının H'si, mm)"
+          }
+        }
+      }
+    },
     "How far down a probe may go before it gives up; the probe fails (no alarm) if nothing is touched": {
       "localizations": {
         "es": {
@@ -15469,6 +15755,72 @@
         }
       }
     },
+    "Level with the Machine": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nivelar con la máquina"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niveler avec la machine"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makineyle Tesviye Et"
+          }
+        }
+      }
+    },
+    "Leveled — the machine corrects Z itself now.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nivelado — la máquina corrige Z por sí misma ahora."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nivelé — la machine corrige Z elle-même désormais."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesviye edildi — makine Z'yi artık kendisi düzeltiyor."
+          }
+        }
+      }
+    },
+    "Lights the wireless probe's pointer laser (it goes off by itself)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enciende el láser puntero del palpador inalámbrico (se apaga solo)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allume le laser pointeur du palpeur sans fil (il s'éteint tout seul)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kablosuz probun işaret lazerini yakar (kendiliğinden söner)"
+          }
+        }
+      }
+    },
     "Line": {
       "localizations": {
         "es": {
@@ -16085,6 +16437,28 @@
         }
       }
     },
+    "M495 at the spindle's work XY: the firmware changes to its wireless probe (T0), probes fast and slow, sets work Z0 at the surface and retracts. The probe must be in its rack slot.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M495 en el XY de trabajo del husillo: el firmware cambia a su palpador inalámbrico (T0), palpa rápido y lento, fija el Z0 de trabajo en la superficie y se retira. El palpador debe estar en su posición del almacén."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M495 au XY pièce de la broche : le firmware passe à son palpeur sans fil (T0), palpe vite puis lentement, règle le Z0 pièce sur la surface et remonte. Le palpeur doit être dans son emplacement du râtelier."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İş milinin iş XY'sinde M495: aygıt yazılımı kablosuz probuna (T0) geçer, hızlı ve yavaş problar, iş Z0'ını yüzeye koyar ve geri çekilir. Prob raf yuvasında olmalı."
+          }
+        }
+      }
+    },
     "M5 — spindle off": {
       "localizations": {
         "es": {
@@ -16643,6 +17017,50 @@
         }
       }
     },
+    "Margin": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Margen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marge"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kenar"
+          }
+        }
+      }
+    },
+    "Margin traced.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Margen trazado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marge tracée."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kenar çizildi."
+          }
+        }
+      }
+    },
     "Mask": {
       "localizations": {
         "es": {
@@ -16913,6 +17331,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "X ve Y eksenlerindeki boşluğu ölçer (75 × 75 mm). Eksen başına bir düz çizgi, zıt yönlerden ulaşılan iki yarım olarak kesilir: yarımların birleştiği yerdeki basamak o eksenin boşluğudur. 50 mm'lik bir kare ve Ø30 bir daire de bunu gösterir — kısa kenarlar, oval. Basamağı Machine setup → Backlash compensation'a girin ve iki çizgi de düz olana kadar yeniden kesin."
+          }
+        }
+      }
+    },
+    "Measures the tool again and halts if its length changed by more than 0.1 mm": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vuelve a medir la herramienta y se detiene si su longitud cambió más de 0,1 mm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remesure l'outil et s'arrête si sa longueur a changé de plus de 0,1 mm"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Takımı yeniden ölçer ve boyu 0,1 mm'den fazla değiştiyse durur"
           }
         }
       }
@@ -19001,6 +19441,28 @@
         }
       }
     },
+    "Nothing (T-1)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nada (T-1)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rien (T-1)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hiçbiri (T-1)"
+          }
+        }
+      }
+    },
     "Nothing to generate — open a project, or draw on a custom layer.": {
       "localizations": {
         "es": {
@@ -19019,6 +19481,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Üretilecek bir şey yok — bir proje açın ya da özel bir katmana çizin."
+          }
+        }
+      }
+    },
+    "Nothing — drop the tool (T-1)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nada — soltar la herramienta (T-1)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rien — déposer l'outil (T-1)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hiçbiri — takımı bırak (T-1)"
           }
         }
       }
@@ -19463,6 +19947,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Malzeme başına bir satır. Machine setup → Material, takım bir katmana uygulandığında değerleri aşağıdaki kesme verilerinin yerine geçen satırı seçer (ilerlemeler %@, paso %@); satırı olmayan bir malzeme aşağıdaki alanları olduğu gibi kullanır."
+          }
+        }
+      }
+    },
+    "Only a Makera Carvera has this routine.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo una Makera Carvera tiene esta rutina."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seul un Makera Carvera a cette routine."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu rutin yalnızca Makera Carvera'da var."
           }
         }
       }
@@ -20547,6 +21053,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Lehim maskesini boyayıp kürleyin, kart bağlı kalsın. 1F aşamasının ızgarası yeniden kullanılsın diye Auto Leveling işaretsiz çalıştırın."
+          }
+        }
+      }
+    },
+    "Pair Wireless Probe (M471)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emparejar palpador inalámbrico (M471)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appairer le palpeur sans fil (M471)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kablosuz Probu Eşleştir (M471)"
+          }
+        }
+      }
+    },
+    "Pairing mode set — now hold the probe's button until its light confirms. Its voltage appears here once it talks.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modo de emparejamiento activado — mantenga ahora el botón del palpador hasta que su luz confirme. Su voltaje aparece aquí en cuanto comunica."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode appairage activé — maintenez maintenant le bouton du palpeur jusqu'à ce que son voyant confirme. Sa tension apparaît ici dès qu'il communique."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşleştirme kipi açıldı — şimdi probun ışığı onaylayana dek düğmesini basılı tutun. Konuşmaya başlayınca gerilimi burada görünür."
           }
         }
       }
@@ -21679,6 +22229,28 @@
         }
       }
     },
+    "Probe %lld grid points — heights relative to work Z0, so zero Z on the board first": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpar %lld puntos de la rejilla — alturas relativas al Z0 de trabajo: fije antes el Z0 sobre la placa"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palper %lld points de grille — hauteurs relatives au Z0 pièce : réglez d'abord le Z0 sur la carte"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ızgara noktasını probla — yükseklikler iş Z0'ına göre, önce Z'yi kart üzerinde sıfırlayın"
+          }
+        }
+      }
+    },
     "Probe & Restore Z0": {
       "localizations": {
         "es": {
@@ -21719,6 +22291,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Prob (T0)"
+          }
+        }
+      }
+    },
+    "Probe Laser On (M472)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Láser del palpador encendido (M472)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Laser du palpeur allumé (M472)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prob Lazeri Açık (M472)"
           }
         }
       }
@@ -21965,6 +22559,28 @@
         }
       }
     },
+    "Probe with the Carvera": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpar con la Carvera"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palper avec le Carvera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carvera ile Probla"
+          }
+        }
+      }
+    },
     "Probed on the other side of the board": {
       "localizations": {
         "es": {
@@ -21983,6 +22599,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kartın diğer tarafında problandı"
+          }
+        }
+      }
+    },
+    "Probed with the Carvera's probe — work Z0 is on the surface there.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpado con el palpador de la Carvera — el Z0 de trabajo está en la superficie ahí."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpé avec le palpeur du Carvera — le Z0 pièce est sur la surface à cet endroit."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carvera'nın probuyla problandı — iş Z0'ı orada yüzeyde."
           }
         }
       }
@@ -22417,6 +23055,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu kitaplık ucunu T%lld'ye koy"
+          }
+        }
+      }
+    },
+    "Puts the machine's receiver into pairing mode; then hold the probe's button until its light shows it paired. Needed once for a new probe.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pone el receptor de la máquina en modo de emparejamiento; luego mantenga el botón del palpador hasta que su luz indique el emparejamiento. Necesario una vez para un palpador nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Met le récepteur de la machine en mode appairage ; maintenez ensuite le bouton du palpeur jusqu'à ce que son voyant indique l'appairage. Nécessaire une fois pour un palpeur neuf."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makinenin alıcısını eşleştirme kipine alır; sonra probun ışığı eşleştiğini gösterene dek düğmesini basılı tutun. Yeni bir prob için bir kez gerekir."
           }
         }
       }
@@ -25479,6 +26139,28 @@
         }
       }
     },
+    "Set Tool Number Without Changing": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fijar número de herramienta sin cambiar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Définir le numéro d'outil sans changer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Değiştirmeden Takım Numarasını Ayarla"
+          }
+        }
+      }
+    },
     "Set Zero": {
       "localizations": {
         "es": {
@@ -27591,6 +28273,28 @@
         }
       }
     },
+    "Start height": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Altura inicial"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hauteur de départ"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başlangıç yüksekliği"
+          }
+        }
+      }
+    },
     "Start milling?": {
       "localizations": {
         "es": {
@@ -27653,6 +28357,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Başlıyor"
+          }
+        }
+      }
+    },
+    "Starting…": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Iniciando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Démarrage…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başlıyor…"
           }
         }
       }
@@ -28773,6 +29499,72 @@
         }
       }
     },
+    "The Carvera levels with its wireless probe and keeps the grid in its firmware, correcting every move it runs — streamed from here included. Level over the border above, then send with the app's map off. Margin traces the border with the probe laser first.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La Carvera nivela con su palpador inalámbrico y guarda la rejilla en su firmware, corrigiendo cada movimiento que ejecuta — incluidos los transmitidos desde aquí. Nivele sobre el borde de arriba y luego envíe con el mapa de la aplicación apagado. Margin traza antes el borde con el láser del palpador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le Carvera nivelle avec son palpeur sans fil et garde la grille dans son firmware, corrigeant chaque mouvement qu'il exécute — y compris ceux diffusés d'ici. Nivelez sur la bordure ci-dessus, puis envoyez avec la carte de l'application désactivée. Margin trace d'abord la bordure au laser du palpeur."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carvera kablosuz probuyla tesviye eder ve ızgarayı aygıt yazılımında tutar; çalıştırdığı her hareketi, buradan akıtılanlar dahil, düzeltir. Yukarıdaki sınır üzerinde tesviye edin, sonra uygulamanın haritası kapalıyken gönderin. Margin önce sınırı prob lazeriyle çizer."
+          }
+        }
+      }
+    },
+    "The Carvera probes with its wireless probe, no clip: position the spindle over the board, press Probe with the Carvera, and the machine fetches the probe, touches the surface twice, sets work Z0 there and retracts. Probe Z below is the plain G38.2 probe for a bit wired to the probe input.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La Carvera palpa con su palpador inalámbrico, sin pinza: coloque el husillo sobre la placa, pulse Probe with the Carvera, y la máquina coge el palpador, toca la superficie dos veces, fija ahí el Z0 de trabajo y se retira. Probe Z, más abajo, es el palpado G38.2 normal para una broca cableada a la entrada del palpador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le Carvera palpe avec son palpeur sans fil, sans pince : placez la broche au-dessus de la carte, appuyez sur Probe with the Carvera, et la machine va chercher le palpeur, touche la surface deux fois, y règle le Z0 pièce et remonte. Probe Z ci-dessous est le palpage G38.2 ordinaire pour une fraise câblée à l'entrée palpeur."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carvera kablosuz probuyla problar, klips yok: iş milini kartın üstüne getirin, Probe with the Carvera'ya basın; makine probu alır, yüzeye iki kez dokunur, iş Z0'ını oraya koyar ve geri çekilir. Aşağıdaki Probe Z, prob girişine kablolanmış bir uç için sıradan G38.2 problamasıdır."
+          }
+        }
+      }
+    },
+    "The Carvera's probe laser traces this program's border on the board (M495 X Y C D), so you see where it will cut before sending": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El láser del palpador de la Carvera traza el borde de este programa sobre la placa (M495 X Y C D), para ver dónde cortará antes de enviar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le laser du palpeur du Carvera trace la bordure de ce programme sur la carte (M495 X Y C D), pour voir où il coupera avant l'envoi"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carvera'nın prob lazeri bu programın sınırını kart üzerinde çizer (M495 X Y C D); böylece göndermeden önce nereyi keseceğini görürsünüz"
+          }
+        }
+      }
+    },
     "The FluidNC config file to save into; empty = the one the controller reports with Read": {
       "localizations": {
         "es": {
@@ -28879,6 +29671,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "T%lld yuvasındaki uç. Bir uç yalnızca bir yuvada durur: burada seçmek eski yuvasını boşaltır."
+          }
+        }
+      }
+    },
+    "The bit in the spindle, as the machine reports it. Change to any slot (T<n> M6: the changer parks the current bit, picks the new one and probes its length), calibrate the tool length, or tell the firmware what you inserted by hand.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La broca en el husillo, tal como la informa la máquina. Cambie a cualquier posición (T<n> M6: el cambiador guarda la broca actual, toma la nueva y palpa su longitud), calibre la longitud de herramienta, o diga al firmware qué insertó a mano."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La fraise dans la broche, telle que la machine la signale. Changez pour n'importe quel emplacement (T<n> M6 : le changeur range la fraise actuelle, prend la nouvelle et palpe sa longueur), étalonnez la longueur d'outil, ou dites au firmware ce que vous avez inséré à la main."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makinenin bildirdiği haliyle iş milindeki uç. Herhangi bir yuvaya değiştirin (T<n> M6: değiştirici mevcut ucu bırakır, yenisini alır ve boyunu problar), takım boyunu kalibre edin ya da elle taktığınızı aygıt yazılımına söyleyin."
           }
         }
       }
@@ -29121,6 +29935,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Makineye %@ boyunca hareket etmesini söylediğiniz mesafe (boşluk alındıktan sonra)"
+          }
+        }
+      }
+    },
+    "The firmware fetches its wireless probe, probes the grid over the border (points X × Y) and corrects every move from then on (M495 … A B I J H)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El firmware coge su palpador inalámbrico, palpa la rejilla sobre el borde (puntos X × Y) y corrige cada movimiento desde entonces (M495 … A B I J H)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le firmware va chercher son palpeur sans fil, palpe la grille sur la bordure (points X × Y) et corrige chaque mouvement ensuite (M495 … A B I J H)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aygıt yazılımı kablosuz probunu alır, sınır üzerindeki ızgarayı problar (X × Y nokta) ve bundan sonra her hareketi düzeltir (M495 … A B I J H)"
+          }
+        }
+      }
+    },
+    "The firmware forgets its leveling grid (M370)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El firmware olvida su rejilla de nivelado (M370)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le firmware oublie sa grille de nivellement (M370)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aygıt yazılımı tesviye ızgarasını unutur (M370)"
           }
         }
       }
@@ -29411,6 +30269,50 @@
         }
       }
     },
+    "The machine must be connected and idle.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La máquina debe estar conectada y en reposo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La machine doit être connectée et au repos."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makine bağlı ve boşta olmalı."
+          }
+        }
+      }
+    },
+    "The machine must be idle (%@).": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La máquina debe estar en reposo (%@)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La machine doit être au repos (%@)."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makine boşta olmalı (%@)."
+          }
+        }
+      }
+    },
     "The machine seeks its limit switches on every axis and re-references the machine position.": {
       "localizations": {
         "es": {
@@ -29429,6 +30331,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Makine her eksende sınır anahtarlarını arar ve makine konumunu yeniden referanslar."
+          }
+        }
+      }
+    },
+    "The machine's leveling grid is cleared.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La rejilla de nivelado de la máquina está borrada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La grille de nivellement de la machine est effacée."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makinenin tesviye ızgarası temizlendi."
+          }
+        }
+      }
+    },
+    "The machine's leveling is on: it corrects Z itself. The app's map stays off for sending.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El nivelado de la máquina está activo: corrige Z por sí misma. El mapa de la aplicación queda apagado para enviar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le nivellement de la machine est actif : elle corrige Z elle-même. La carte de l'application reste désactivée pour l'envoi."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makinenin tesviyesi açık: Z'yi kendisi düzeltiyor. Uygulamanın haritası gönderim için kapalı kalır."
           }
         }
       }
@@ -29715,6 +30661,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Önceki sonuç, yenisi hazır olana kadar görünür kalır."
+          }
+        }
+      }
+    },
+    "The probe laser traces the grid border on the board (M495 X Y C D) — check the job sits where you think before probing or cutting": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El láser del palpador traza el borde de la rejilla sobre la placa (M495 X Y C D) — compruebe que el trabajo está donde cree antes de palpar o cortar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le laser du palpeur trace la bordure de la grille sur la carte (M495 X Y C D) — vérifiez que le travail est où vous le pensez avant de palper ou de couper"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prob lazeri ızgara sınırını kart üzerinde çizer (M495 X Y C D) — problamadan ya da kesmeden önce işin düşündüğünüz yerde olduğunu doğrulayın"
           }
         }
       }
@@ -30133,6 +31101,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Takım merkezi çizilen her çizgi boyunca ilerler. Takımdan geniş bir çizgi kalınlığı örtüşen pasolarla temizlenir; dolu şekiller cep olarak boşaltılır."
+          }
+        }
+      }
+    },
+    "The tool setter measures the bit (or the wireless probe) in the spindle and the firmware stores its length — what clears “Probe not calibrated”": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El medidor mide la broca (o el palpador inalámbrico) en el husillo y el firmware guarda su longitud — lo que borra «Probe not calibrated»"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le palpeur d'outil mesure la fraise (ou le palpeur sans fil) dans la broche et le firmware mémorise sa longueur — ce qui efface « Probe not calibrated »"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Takım ölçer iş milindeki ucu (ya da kablosuz probu) ölçer ve aygıt yazılımı boyunu saklar — \"Probe not calibrated\"ı temizleyen şey"
+          }
+        }
+      }
+    },
+    "The wireless probe's battery, as the machine reports it (W:). Charge it below about 3.5 V.": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La batería del palpador inalámbrico, tal como la informa la máquina (W:). Cárguela por debajo de unos 3,5 V."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La batterie du palpeur sans fil, telle que la machine la signale (W:). Rechargez-la sous 3,5 V environ."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makinenin bildirdiği haliyle kablosuz probun pili (W:). Yaklaşık 3,5 V'un altında şarj edin."
           }
         }
       }
@@ -30731,6 +31743,28 @@
         }
       }
     },
+    "Tool break check": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobación de rotura"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification de casse"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kırılma kontrolü"
+          }
+        }
+      }
+    },
     "Tool change": {
       "localizations": {
         "es": {
@@ -30749,6 +31783,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Takım değişimi"
+          }
+        }
+      }
+    },
+    "Tool change to T%lld": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambio de herramienta a T%lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changement d'outil vers T%lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "T%lld'ye takım değişimi"
+          }
+        }
+      }
+    },
+    "Tool change to the probe": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambio de herramienta al palpador"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changement d'outil vers le palpeur"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proba takım değişimi"
           }
         }
       }
@@ -31561,6 +32639,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Arka Tarafın Aynalamasını Kaldır"
+          }
+        }
+      }
+    },
+    "Unclamp Collet (M490.2)": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aflojar pinza (M490.2)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desserrer la pince (M490.2)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pensi Gevşet (M490.2)"
           }
         }
       }
@@ -33165,6 +34265,50 @@
         }
       }
     },
+    "Wireless probe": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpador inalámbrico"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpeur sans fil"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kablosuz prob"
+          }
+        }
+      }
+    },
+    "Wireless probe %@ V": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpador inalámbrico %@ V"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Palpeur sans fil %@ V"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kablosuz prob %@ V"
+          }
+        }
+      }
+    },
     "With %@ mm of backlash measured, a climbing cutter can pull the axis into the cut; conventional milling pushes against the play and keeps the width true.": {
       "localizations": {
         "es": {
@@ -33611,6 +34755,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bunu daha sonra Makine kurulumu → Başlangıç altında değiştirebilirsiniz."
+          }
+        }
+      }
+    },
+    "You put a bit in by hand: tell the firmware which one (M493.2), then calibrate": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Puso una broca a mano: diga al firmware cuál (M493.2) y luego calibre"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez mis une fraise à la main : dites au firmware laquelle (M493.2), puis étalonnez"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elle bir uç taktınız: aygıt yazılımına hangisi olduğunu söyleyin (M493.2), sonra kalibre edin"
           }
         }
       }
@@ -35005,6 +36171,28 @@
         }
       }
     },
+    "mm relative to work Z0": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mm respecto al Z0 de trabajo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mm par rapport au Z0 pièce"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iş Z0'ına göre mm"
+          }
+        }
+      }
+    },
     "mm · travel / limit": {
       "localizations": {
         "es": {
@@ -35384,6 +36572,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "delme dosyaları"
+          }
+        }
+      }
+    },
+    "the machine's own probe and grid": {
+      "localizations": {
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "el palpador y la rejilla de la máquina"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "le palpeur et la grille de la machine"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "makinenin kendi probu ve ızgarası"
           }
         }
       }

@@ -13,6 +13,9 @@ struct MachineControls: View {
     @AppStorage(MachineSettings.Keys.spindleMax) private var spindleMax = MachineSettings.Defaults.spindleMax
 
     @State private var rpmText = ""
+    @State private var toolBusy = false
+    @State private var toolMessage: String?
+    @State private var toolFailed = false
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -100,26 +103,105 @@ struct MachineControls: View {
         .disabled(!machine.manualControlsEnabled)
     }
 
-    /// Carvera: the tool the status reports (`T:`), named from the rack,
-    /// and a manual `T<n> M6` to any slot of the changer.
+    /// Carvera: the tool the status reports (`T:`), named from the rack;
+    /// a manual `T<n> M6` to any slot; and the changer's own chores —
+    /// calibrate the tool length on the tool setter (`M491`, the probe
+    /// too), tell the firmware which bit was inserted by hand (`M493.2`),
+    /// drop the tool, clamp or unclamp the collet (`M490`).
     private var toolRow: some View {
         let slots = max(model.parameters.profile.toolChange.automaticSlots ?? 6, model.tools.rack.keys.max() ?? 0)
-        return HStack(spacing: 6) {
-            Menu {
-                ForEach(1...max(slots, 1), id: \.self) { slot in
-                    Button(rackLabel(slot)) { Task { try? await machine.send("T\(slot) M6") } }
-                        .disabled(machine.status.tool == slot)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Menu {
+                    Section("Change to") {
+                        ForEach(1...max(slots, 1), id: \.self) { slot in
+                            Button(rackLabel(slot)) { runTool("T\(slot) M6", label: String(localized: "Tool change to T\(slot)")) }
+                                .disabled(machine.status.tool == slot)
+                        }
+                        Button("Probe (T0)") { runTool("T0 M6", label: String(localized: "Tool change to the probe")) }
+                            .disabled(machine.status.tool == 0)
+                        Button("Nothing — drop the tool (T-1)") { runTool("T-1 M6", label: String(localized: "Drop tool")) }
+                            .disabled(machine.status.tool == -1)
+                    }
+                    Divider()
+                    Button("Calibrate Tool Length (M491)") { runTool("M491", label: String(localized: "Calibrate")) }
+                        .help("The tool setter measures the bit (or the wireless probe) in the spindle and the firmware stores its length — what clears “Probe not calibrated”")
+                    Button("Check Tool for Breakage (M491.1)") { runTool("M491.1", label: String(localized: "Tool break check")) }
+                        .help("Measures the tool again and halts if its length changed by more than 0.1 mm")
+                    Menu("Set Tool Number Without Changing") {
+                        ForEach(1...max(slots, 1), id: \.self) { slot in
+                            Button(rackLabel(slot)) { sendTool("M493.2 T\(slot)") }
+                        }
+                        Button("Probe (T0)") { sendTool("M493.2 T0") }
+                        Button("Nothing (T-1)") { sendTool("M493.2 T-1") }
+                    }
+                    .help("You put a bit in by hand: tell the firmware which one (M493.2), then calibrate")
+                    Divider()
+                    Button("Unclamp Collet (M490.2)") { sendTool("M490.2") }
+                    Button("Clamp Collet (M490.1)") { sendTool("M490.1") }
+                    Divider()
+                    Section("Wireless probe") {
+                        Button("Pair Wireless Probe (M471)") { pairProbe() }
+                            .help("Puts the machine's receiver into pairing mode; then hold the probe's button until its light shows it paired. Needed once for a new probe.")
+                        Button("Probe Laser On (M472)") { sendTool("M472") }
+                            .help("Lights the wireless probe's pointer laser (it goes off by itself)")
+                    }
+                } label: {
+                    Label(currentToolText, systemImage: "wrench.and.screwdriver")
                 }
-                Divider()
-                Button("Probe (T0)") { Task { try? await machine.send("T0 M6") } }
-                    .disabled(machine.status.tool == 0)
-            } label: {
-                Label(currentToolText, systemImage: "wrench.and.screwdriver")
+                .fixedSize()
+                .disabled(!machine.manualControlsEnabled || machine.machineState != .idle || toolBusy)
+                .help("The bit in the spindle, as the machine reports it. Change to any slot (T<n> M6: the changer parks the current bit, picks the new one and probes its length), calibrate the tool length, or tell the firmware what you inserted by hand.")
+                if toolBusy { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
             }
-            .fixedSize()
-            .disabled(!machine.manualControlsEnabled || machine.machineState != .idle)
-            .help("The bit in the spindle, as the machine reports it. Pick a slot to run a tool change now (T<n> M6: the changer parks the current bit, picks the new one and probes its length).")
-            Spacer(minLength: 0)
+            if let toolMessage {
+                Label(toolMessage, systemImage: toolFailed ? "xmark.octagon.fill" : "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(toolFailed ? .red : .green)
+                    .lineLimit(2)
+            }
+            if let volts = machine.status.probeVoltage, volts > 0 {
+                Text("Wireless probe \(formatMM(volts, decimals: 2)) V")
+                    .font(.caption)
+                    .foregroundStyle(volts < 3.5 ? Color.orange : Color.secondary)
+                    .help("The wireless probe's battery, as the machine reports it (W:). Charge it below about 3.5 V.")
+            }
+        }
+    }
+
+    /// `M471`: the receiver listens; the probe's own button finishes it.
+    private func pairProbe() {
+        toolMessage = nil
+        Task {
+            do {
+                try await machine.send("M471")
+                toolFailed = false
+                toolMessage = String(localized: "Pairing mode set — now hold the probe's button until its light confirms. Its voltage appears here once it talks.")
+            } catch {
+                toolFailed = true
+                toolMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// A changer routine the machine works through (tool change, calibration).
+    private func runTool(_ line: String, label: String) {
+        toolBusy = true
+        toolMessage = nil
+        Task {
+            let failure = await machine.runCarveraAutomation(line, label: label)
+            toolBusy = false
+            toolFailed = failure != nil
+            toolMessage = failure ?? String(localized: "\(label) done.")
+        }
+    }
+
+    /// A setting the firmware takes at once.
+    private func sendTool(_ line: String) {
+        toolMessage = nil
+        Task {
+            do { try await machine.send(line) } catch { toolFailed = true; toolMessage = error.localizedDescription }
         }
     }
 

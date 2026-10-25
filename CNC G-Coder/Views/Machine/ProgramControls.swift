@@ -50,6 +50,7 @@ private struct ProgramControlsBody<Middle: View>: View {
     @State private var prepareTask: Task<Void, Never>?
     @State private var awaitingExternal = false
     @State private var showSequenceSheet = false
+    @State private var tracingMargin = false
     @State private var validityPrompt: ValidityPrompt?
     @State private var refusal: String?
     @State private var resumePlan: ResumePlan?
@@ -182,6 +183,18 @@ private struct ProgramControlsBody<Middle: View>: View {
             }
             .disabled(streamer.isActive || preview.showsExternalFile)
             .help("Several layers as one program: the Carvera runs them back to back and its tool changer swaps the bits between them (T<n> M6)")
+        }
+        if machine.isCarvera {
+            // Makera's "Margin": the probe laser walks the program's border.
+            Button { traceMargin() } label: {
+                if tracingMargin {
+                    ProgressView().controlSize(.small)
+                } else {
+                    fileLabel("Margin", systemImage: "rectangle.dashed", iconOnly: iconOnly)
+                }
+            }
+            .disabled(program == nil || streamer.isActive || tracingMargin || !machine.isConnected)
+            .help("The Carvera's probe laser traces this program's border on the board (M495 X Y C D), so you see where it will cut before sending")
         }
         Spacer(minLength: 0)
         if preparing { ProgressView().controlSize(.small) }
@@ -656,6 +669,17 @@ private struct ProgramControlsBody<Middle: View>: View {
     }
 
     // MARK: Files
+
+    /// `M495 X Y C D` around the loaded program's cut area (work coordinates).
+    private func traceMargin() {
+        guard let program, let bounds = program.parsed.cutBounds ?? program.parsed.allBounds else { return }
+        tracingMargin = true
+        prepareError = nil
+        Task {
+            if let failure = await machine.carveraTraceMargin(bounds) { prepareError = failure }
+            tracingMargin = false
+        }
+    }
 
     private func openExternal() {
         let panel = NSOpenPanel()

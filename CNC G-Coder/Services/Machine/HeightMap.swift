@@ -45,13 +45,15 @@ nonisolated struct HeightMapError: LocalizedError {
 /// program XY through `T.inverted()`, the overlays draw through `T`.
 ///
 /// `points[row][col]` holds the surface height at `gridPoint(row:col:)`
-/// **relative to `referenceZ`**, the machine Z first probed at work X0/Y0
-/// (the design point `(0,0).applying(T.inverted())`). Storing the grid
-/// relative to that one spot keeps the map valid after Z is re-zeroed there
-/// following a tool change (the usual workflow: probe Z on the copper at
-/// the origin, run). A moved work origin — the board moved, or X0/Y0 put
-/// elsewhere on it without re-zeroing there — shows up in
-/// `validity(currentDesignOrigin:programSide:)` through
+/// **relative to `referenceZ`**, the machine Z of work Z0 when the grid was
+/// probed (the WCO's Z). So a point reads 0 wherever the surface is exactly
+/// at the height Z was zeroed on, and the streamed program — whose Z is
+/// relative to that same Z0 — needs no further reference. Work X0/Y0 may
+/// lie off the board (a design whose origin is the page corner): nothing is
+/// probed there. A bit change moves Z0 without moving the board; the map is
+/// then re-anchored by that Δ (`MachineController.reanchorHeightMap`). A
+/// moved work origin — the board moved, or X0/Y0 put elsewhere — shows up
+/// in `validity(currentDesignOrigin:programSide:)` through
 /// `probedDesignOrigin`, the machine coordinates of design (0,0) at probe
 /// time.
 nonisolated struct HeightMap: Codable, Equatable, Sendable {
@@ -75,7 +77,8 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
     /// `[row][col]`, `ny` rows of `nx`; nil until probed. Relative to
     /// `referenceZ`.
     var points: [[Double?]]
-    /// Machine Z of the reference probe at work X0/Y0; nil until probed.
+    /// Machine Z of work Z0 when the grid was probed (the WCO's Z); the
+    /// points are relative to it. Nil until probing starts.
     var referenceZ: Double?
     /// Machine coordinates of design (0,0) when the map was probed: XY =
     /// `(0,0).applying(T) + WCO`, Z = the work offset's Z. The same point
@@ -174,11 +177,10 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
     }
 
     /// The probe program in work coordinates (`frame` = design → work):
-    /// `G21 G90`, up to `zClear`, to the reference at work X0/Y0, probe,
-    /// then every grid point in `probeOrder()`: rapid to it at `zClear`,
-    /// `G38.2` down to `zMaxDepth` at `feedSlow`, back up. Each `G38.2` line
-    /// maps to its probe index through `probeIndex(forProgramLine:)` (−1 =
-    /// reference).
+    /// `G21 G90`, up to `zClear`, then every grid point in `probeOrder()`:
+    /// rapid to it at `zClear`, `G38.2` down to `zMaxDepth` at `feedSlow`,
+    /// back up. Each `G38.2` line maps to its probe index through
+    /// `probeIndex(forProgramLine:)`.
     func probeProgram(frame: CGAffineTransform) -> [String] { build(frame: frame).lines }
 
     /// The probe index of a `G38.2` line of `probeProgram(frame:)` (0-based
@@ -189,11 +191,8 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
     private func build(frame: CGAffineTransform) -> (lines: [String], probes: [Int: Int]) {
         let clear = "G0 Z" + GRBLCommand.number(zClear)
         let probe = "G38.2 Z" + GRBLCommand.number(zMaxDepth) + " " + GRBLCommand.feedWord(feedSlow)
-        var lines = ["G21 G90", clear, "G0 X0.000 Y0.000"]
+        var lines = ["G21 G90", clear]
         var probes: [Int: Int] = [:]
-        probes[lines.count] = -1
-        lines.append(probe)
-        lines.append(clear)
         for (index, p) in probeOrder().enumerated() {
             let point = gridPoint(row: p.row, col: p.col).applying(frame)
             lines.append("G0 X" + GRBLCommand.number(point.x) + " Y" + GRBLCommand.number(point.y))
@@ -204,10 +203,10 @@ nonisolated struct HeightMap: Codable, Equatable, Sendable {
         return (lines, probes)
     }
 
-    /// Stores a probe result: index −1 is the reference at work X0/Y0 and
-    /// sets `referenceZ`; any other index stores `machineZ − referenceZ` at
-    /// `probeOrder()[index]`. Points probed before the reference are dropped
-    /// (nothing to relate them to).
+    /// Stores a probe result: `machineZ − referenceZ` at
+    /// `probeOrder()[index]` (index −1 sets `referenceZ` itself, for maps
+    /// built by hand). Points recorded before `referenceZ` is known are
+    /// dropped (nothing to relate them to).
     mutating func record(probeIndex: Int, machineZ: Double) {
         if probeIndex < 0 {
             referenceZ = machineZ

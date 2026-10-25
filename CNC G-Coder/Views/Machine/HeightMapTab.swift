@@ -42,6 +42,11 @@ private struct HeightMapControlsBody: View {
 
     @State private var draft = HeightMapDraft()
     @State private var message: String?
+    /// Carvera: its own leveling (M495) — probe height and the running routine.
+    @State private var carveraHeight = "5"
+    @State private var carveraBusy = false
+    @State private var carveraMessage: String?
+    @State private var carveraFailed = false
     /// The "interpolation grid": lines of the wireframe the preview draws.
     @AppStorage(HeightMapSurface.interpolationXKey) private var interpolationX = HeightMapSurface.interpolationDefault
     @AppStorage(HeightMapSurface.interpolationYKey) private var interpolationY = HeightMapSurface.interpolationDefault
@@ -57,6 +62,7 @@ private struct HeightMapControlsBody: View {
         VStack(alignment: .leading, spacing: 12) {
             sideSection
             gridSection
+            if machine.isCarvera { carveraSection }
             progressSection
             summarySection
             if let map = displayedMap, map.probedCount > 0 {
@@ -153,6 +159,96 @@ private struct HeightMapControlsBody: View {
             }
         }
         .machinePanel()
+    }
+
+    // MARK: Carvera: the machine's own leveling
+
+    /// The grid border in the side's work frame, as the firmware wants it.
+    private var carveraRect: CGRect? {
+        guard let map = draft.map(side: side) else { return nil }
+        return CGRect(origin: map.origin, size: map.size).applying(model.heightMapFrame(side: side)).standardized
+    }
+
+    private var carveraSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MachineSectionLabel(title: "Carvera auto leveling", detail: String(localized: "the machine's own probe and grid"))
+            Text("The Carvera levels with its wireless probe and keeps the grid in its firmware, correcting every move it runs — streamed from here included. Level over the border above, then send with the app's map off. Margin traces the border with the probe laser first.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Text("Start height")
+                    .help("How far above the surface the probe starts each point (the firmware's H, mm)")
+                field($carveraHeight, help: "How far above the surface the probe starts each point (the firmware's H, mm)")
+                Text("mm").font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .controlSize(.small)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { carveraButtons }
+                VStack(alignment: .leading, spacing: 6) { carveraButtons }
+            }
+            .controlSize(.small)
+            if machine.carveraLevelingActive {
+                Label("The machine's leveling is on: it corrects Z itself. The app's map stays off for sending.", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let carveraMessage {
+                Label(carveraMessage, systemImage: carveraFailed ? "xmark.octagon.fill" : "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(carveraFailed ? .red : .green)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .machinePanel()
+    }
+
+    @ViewBuilder
+    private var carveraButtons: some View {
+        let ready = carveraRect != nil && machine.isConnected && !streamer.isActive && !carveraBusy
+        Button("Margin", systemImage: "rectangle.dashed") { runCarvera(.margin) }
+            .disabled(!ready)
+            .help("The probe laser traces the grid border on the board (M495 X Y C D) — check the job sits where you think before probing or cutting")
+        Button("Level with the Machine", systemImage: "square.grid.3x3") { runCarvera(.level) }
+            .buttonStyle(.borderedProminent)
+            .disabled(!ready)
+            .help("The firmware fetches its wireless probe, probes the grid over the border (points X × Y) and corrects every move from then on (M495 … A B I J H)")
+        Button("Clear", systemImage: "trash") { runCarvera(.clear) }
+            .disabled(machine.isConnected == false || carveraBusy)
+            .help("The firmware forgets its leveling grid (M370)")
+        if carveraBusy { ProgressView().controlSize(.small) }
+    }
+
+    private enum CarveraAction { case margin, level, clear }
+
+    private func runCarvera(_ action: CarveraAction) {
+        carveraBusy = true
+        carveraMessage = nil
+        Task {
+            let failure: String?
+            switch action {
+            case .margin:
+                guard let rect = carveraRect else { carveraBusy = false; return }
+                failure = await machine.carveraTraceMargin(rect)
+            case .level:
+                guard let rect = carveraRect, let map = draft.map(side: side) else { carveraBusy = false; return }
+                let height = Double(carveraHeight) ?? 5
+                failure = await machine.carveraLevel(rect, nx: map.nx, ny: map.ny, height: height)
+                if failure == nil, machine.applyHeightMap {
+                    machine.applyHeightMap = false
+                    _ = await machine.reprepareLoadedProgram()
+                }
+            case .clear:
+                failure = await machine.carveraClearLeveling()
+            }
+            carveraBusy = false
+            carveraFailed = failure != nil
+            carveraMessage = failure ?? (action == .clear ? String(localized: "The machine's leveling grid is cleared.")
+                                         : action == .margin ? String(localized: "Margin traced.")
+                                         : String(localized: "Leveled — the machine corrects Z itself now."))
+        }
     }
 
     /// The border's lower-left corner in the side's work frame, so the
@@ -258,7 +354,7 @@ private struct HeightMapControlsBody: View {
     }
 
     private func progressText(_ map: HeightMap) -> String {
-        guard map.referenceZ != nil else { return "Probing the reference at X0/Y0…" }
+        guard map.referenceZ != nil else { return "Starting…" }
         let next = min(map.probedCount + 1, map.totalCount)
         var text = String(localized: "Probing point \(next) of \(map.totalCount)")
         if let last = HeightMapSurface.lastProbed(map) {
@@ -381,7 +477,7 @@ private struct HeightMapControlsBody: View {
         if !machine.canProbe { return "Needs: connected, idle, no alarm, trusted position, known work offset" }
         if streamer.isActive { return "A job is active" }
         let n = draft.map(side: side)?.totalCount ?? 0
-        return String(localized: "Probe the reference at X0/Y0, then \(n) grid points")
+        return String(localized: "Probe \(n) grid points — heights relative to work Z0, so zero Z on the board first")
     }
 
     private func probe() {
@@ -493,7 +589,7 @@ private struct HeightMapTable: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            MachineSectionLabel(title: "Values", detail: String(localized: "mm relative to the reference at X0/Y0"))
+            MachineSectionLabel(title: "Values", detail: String(localized: "mm relative to work Z0"))
             ScrollView(.horizontal) {
                 Grid(horizontalSpacing: 6, verticalSpacing: 3) {
                     ForEach((0..<map.ny).reversed(), id: \.self) { row in

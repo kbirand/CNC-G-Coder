@@ -576,6 +576,12 @@ final class AppModel: ObservableObject {
         let exitWhenDone = defaults.bool(forKey: "debugMachineExitWhenDone")
 
         if let tcp, ["sim", "simulator"].contains(tcp.lowercased()) {
+            // `-debugMachineWaitPreview 1`: let the preview land before
+            // connecting (otherwise the board is re-placed when it does, as
+            // in the GUI).
+            if defaults.bool(forKey: "debugMachineWaitPreview") {
+                for _ in 0..<120 where preview.document == nil && preview.canPreview { try? await Task.sleep(for: .milliseconds(500)) }
+            }
             await machine.connectSimulator()
         } else if let tcp {
             let parts = tcp.split(separator: ":", maxSplits: 1).map(String.init)
@@ -795,6 +801,17 @@ final class AppModel: ObservableObject {
             switch verb {
             case "sleep":
                 try? await Task.sleep(for: .seconds(Double(argument) ?? 1))
+            case "line":
+                // A raw line, acknowledged: `line:M495 X0 Y0 C20 D20`.
+                do { try await m.send(argument) } catch { machineLog("line failed: \(error.localizedDescription)") }
+            case "margin":
+                machineLog("margin: " + (await m.carveraTraceMargin(CGRect(x: 0, y: 0, width: 20, height: 10)) ?? "ok"))
+            case "level":
+                machineLog("level: " + (await m.carveraLevel(CGRect(x: 0, y: 0, width: 20, height: 10), nx: 3, ny: 3, height: 5) ?? "ok") + " active \(m.carveraLevelingActive)")
+            case "cprobe":
+                machineLog("carvera probe: " + (await m.carveraProbeZ(atWork: CGPoint(x: 5, y: 5)) ?? "ok"))
+            case "calibrate":
+                machineLog("calibrate: " + (await m.runCarveraAutomation("M491", label: "Calibrate") ?? "ok") + " tool \(m.status.tool ?? 99)")
             case "jog":
                 let args = argument.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 guard let axis = args.first.flatMap({ Axis(rawValue: $0.uppercased()) }) else { machineLog("jog: bad axis"); continue }

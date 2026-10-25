@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Launches the bundled FluidNC simulator (`Scripts/fake-grbl.py`, copied
 /// into Contents/Resources by the "Bundle simulator" build phase) as a
@@ -74,9 +75,12 @@ actor SimulatorLauncher {
     var isRunning: Bool { process?.isRunning ?? false }
 
     /// Starts a fresh simulator and returns the port it listens on once it
-    /// accepts connections (≤ 5 s). `boardSize` is the loaded project's
-    /// extent, giving the simulated PCB its footprint.
-    func start(boardSize: CGSize? = nil) async throws -> UInt16 {
+    /// accepts connections (≤ 5 s). `boardRect` is the loaded project's
+    /// board in work coordinates (its design frame mapped to the front
+    /// side): the simulated PCB lies exactly where the programs expect it,
+    /// so a probe over the design finds copper, not the bed, whatever the
+    /// design's own origin is.
+    func start(boardRect: CGRect? = nil) async throws -> UInt16 {
         stop()
 
         guard let python = Self.findPython() else { throw SimulatorLauncherError.pythonMissing }
@@ -92,7 +96,7 @@ actor SimulatorLauncher {
             // machine coordinates) would otherwise be read as another option.
             "--wco=\(Self.number(Self.workZero.x)),\(Self.number(Self.workZero.y)),\(Self.number(Self.workZero.z))",
             "--surface=" + Self.number(Self.probeSurface),
-            "--board=" + Self.boardArgument(size: boardSize),
+            "--board=" + Self.boardArgument(rect: boardRect),
             // Like FluidNC: the axis runs on past the probe trigger before it
             // stops, so Probe Z must set the origin from the PRB contact.
             "--probe-overshoot=" + Self.number(Self.probeOvershoot),
@@ -257,11 +261,17 @@ actor SimulatorLauncher {
 
     /// `--board X,Y,W,H,T`: placement and thickness from Settings → Machine,
     /// footprint from the loaded project (`defaultBoardSize` without one).
-    private nonisolated static func boardArgument(size: CGSize?) -> String {
-        let width = (size?.width).flatMap { $0 > 1 ? Double($0) : nil } ?? defaultBoardSize.width
-        let height = (size?.height).flatMap { $0 > 1 ? Double($0) : nil } ?? defaultBoardSize.height
-        return [MachineSettings.simBoardX + bedShift.x, MachineSettings.simBoardY + bedShift.y,
-                width, height, max(0, MachineSettings.simBoardThickness)]
+    /// The board's machine rectangle: the preset work zero plus the
+    /// project's board rect in work coordinates (a project whose design
+    /// origin is off the board — KiCad's page corner — puts the board away
+    /// from work X0 Y0, and so does the simulator).
+    nonisolated static func boardArgument(rect: CGRect?) -> String {
+        let usable = rect.flatMap { $0.width > 1 && $0.height > 1 ? $0.standardized : nil }
+        let width = usable.map { Double($0.width) } ?? defaultBoardSize.width
+        let height = usable.map { Double($0.height) } ?? defaultBoardSize.height
+        let x = MachineSettings.simBoardX + bedShift.x + (usable.map { Double($0.minX) } ?? 0)
+        let y = MachineSettings.simBoardY + bedShift.y + (usable.map { Double($0.minY) } ?? 0)
+        return [x, y, width, height, max(0, MachineSettings.simBoardThickness)]
             .map(number).joined(separator: ",")
     }
 

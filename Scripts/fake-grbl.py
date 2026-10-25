@@ -323,6 +323,7 @@ class Machine:
         self.spindle_stopped_in_hold = False
         self.probe_pin = False
         self.atc_busy = False           # Carvera: a tool change in progress
+        self.automation_until = 0.0     # Carvera: an M495 routine running
         self.target_tool = -1
         self.jog_keepalive = 0.0        # Carvera: last `?1` during a `$J -c`
         self.continuous_jog = None
@@ -570,6 +571,8 @@ class Machine:
             # Smoothieware has no Jog state and no hold sub-state.
             if self.atc_busy:
                 return "Tool"
+            if self.automation_until > time.monotonic() and self.state == "Idle":
+                return "Run"
             return {"Jog": "Run", "Door": "Hold", "Check": "Idle"}.get(self.state, self.state)
         if self.state == "Hold":
             return "Hold:%d" % self.hold_sub
@@ -623,6 +626,7 @@ class Machine:
                  "F:%d,%d,%d" % (self.current_feed(), int(round(m["F"])), self.ov["feed"]),
                  "S:%d,%d,%d,0" % (self.current_spindle(), int(round(m["S"])), self.ov["spindle"]),
                  "T:%d,%s,%d,0" % (m["tool"], fmt(self.tlo), self.target_tool),
+                 "W:3.87",
                  "A:%d" % (1 if self.atc_busy else 0)]
         return "<" + "|".join(parts) + ">"
 
@@ -702,7 +706,8 @@ class Machine:
                            "distance": "G90", "feed_mode": "G94", "spindle": "M5",
                            "flood": False, "mist": False, "tool": 0, "F": 0.0, "S": 0.0})
         self.g92 = [0.0, 0.0, 0.0]
-        self.broadcast(self.banner())
+        if not self.is_carvera:
+            self.broadcast(self.banner())     # Smoothieware prints no banner on Ctrl-X
         if keep_alarm is not None:
             self.state = "Alarm"
             self.alarm_code = keep_alarm
@@ -780,6 +785,17 @@ class Machine:
                     raise LineError(ERR_UNSUPPORTED)
                 if self.is_grbl and len(raw) > GRBL_MAX_LINE:
                     raise LineError(ERR_LINE_OVERFLOW)
+                if raw.strip().lower().startswith("board "):
+                    # Ours: move the simulated PCB (machine X,Y,W,H,thickness)
+                    # so it follows the project the app shows.
+                    try:
+                        self.opts.board_rect = tuple(float(v) for v in raw.strip()[6:].split(","))
+                        assert len(self.opts.board_rect) == 5
+                        self.log("board moved to %s" % (self.opts.board_rect,))
+                        client.send_line("ok")
+                    except (ValueError, AssertionError):
+                        client.send_line("error:%s" % ("Bad number format" if self.is_carvera else "2"))
+                    return
                 if self.is_carvera and self.carvera_console(client, raw.strip()):
                     return
                 line = strip_comments(raw)
@@ -1237,6 +1253,7 @@ class Machine:
         feed = None
         tool_word = None
         s_word = None
+        words_letters = {letter for letter, _ in words}
         for letter, value in words:
             if letter == "G":
                 code = round(value, 1)
@@ -1268,7 +1285,7 @@ class Machine:
                     raise LineError(ERR_UNSUPPORTED)
             elif letter == "M":
                 code = int(value)
-                if self.is_carvera and code in (0, 1, 220, 223, 331, 332, 490, 491, 600, 801, 802):
+                if self.is_carvera and code in (0, 1, 220, 223, 331, 332, 370, 400, 471, 472, 490, 491, 493, 494, 495, 497, 600, 801, 802):
                     mcodes.append(code)     # M0/M1 are not implemented (no-ops)
                 elif code in (0, 1, 2, 30, 3, 4, 5, 7, 8, 9):
                     mcodes.append(code)
@@ -1298,6 +1315,8 @@ class Machine:
                 L = value
             elif letter == "N":
                 pass
+            elif self.is_carvera and 495 in mcodes and letter in "ABCDHOF":
+                pass    # M495's own words: margin corners, grid size, offsets, height
             else:
                 raise LineError(ERR_UNSUPPORTED)
 
@@ -1333,6 +1352,29 @@ class Machine:
                 self.sync()
                 self.state, self.hold_sub = "Hold", 0
                 self.cond.notify_all()
+            if 471 in mcodes:
+                self.broadcast("Set WP into pairing mode...")
+            if 472 in mcodes:
+                self.broadcast("Open WP Laser...")
+            if 491 in mcodes:
+                # Tool length calibration on the tool setter: a few seconds.
+                self.sync()
+                self.start_automation("calibrate", 2.0)
+                client.send_line("ok")
+                return
+            if 493 in mcodes and tool_word is not None:
+                self.log("tool number set to T%d without a change" % tool_word)
+            if 495 in mcodes:
+                # Margin / Z probe / auto level: the firmware runs its own
+                # script queue; here a few seconds of Run, then Idle.
+                self.sync()
+                what = "margin" if ("C" in words_letters and "D" in words_letters) else \
+                       "autolevel" if "A" in words_letters else "zprobe"
+                self.start_automation(what, 2.0)
+                client.send_line("ok")
+                return
+            if 370 in mcodes:
+                self.log("leveling grid cleared")
             if 6 in mcodes:
                 # `T<n> M6`: the firmware answers ok at once and the changer
                 # works on; status shows Tool, then Idle with the new tool.
@@ -1402,6 +1444,28 @@ class Machine:
             self.sync()
             self.apply_sync_mcodes([c for c in mcodes if c in (0, 1, 2, 30)])
         client.send_line("ok")
+
+    def start_automation(self, what, seconds):
+        """Carvera M495: Run for `seconds`, then Idle (the real machine
+        drives the probe laser / wireless probe meanwhile)."""
+        self.log("automation: %s" % what)
+        if what == "margin":
+            self.broadcast("Auto scan margin")
+        elif what == "calibrate":
+            self.broadcast("Saved XY position: X%.3f Y%.3f" % (self.mpos[0], self.mpos[1]))
+        elif what == "autolevel":
+            self.broadcast("Auto leveling")
+        else:
+            self.broadcast("Auto z probe")
+        self.atc_busy = False
+        self.automation_until = time.monotonic() + seconds
+
+        def run():
+            time.sleep(seconds)
+            with self.lock:
+                self.automation_until = 0.0
+                self.cond.notify_all()
+        threading.Thread(target=run, daemon=True).start()
 
     def start_tool_change(self, tool):
         if self.atc_busy:
@@ -1540,6 +1604,7 @@ class Machine:
         if self.homed and not self.within_travel(target):
             self.alarm(ALARM_SOFT_LIMIT)
             raise Flushed()
+        self.log("probe %s -> %s (planned %s, mpos %s)" % (fmt3(start), fmt3(target), fmt3(self.planned), fmt3(self.mpos)))
         block = Block("probe", start, target, self.modal["F"], client, probe=probe)
         self.plan(block)
         self.wait_until(lambda: block.done)
