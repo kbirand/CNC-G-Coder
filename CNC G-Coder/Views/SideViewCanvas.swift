@@ -107,7 +107,7 @@ struct SideViewCanvas: View {
             if let layer = model.customLayers.first(where: { $0.id == ref.id }) {
                 lines.append(("depth", layer.cutDepth, false))
             }
-        case .test:
+        case .test, .stage:
             break   // patches sweep multiple depths; Z0/zsafe suffice
         case nil:
             add("zwork", p.zWork)

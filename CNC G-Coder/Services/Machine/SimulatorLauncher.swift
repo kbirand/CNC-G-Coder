@@ -48,12 +48,20 @@ actor SimulatorLauncher {
     /// Machine coordinates of the simulated work zero (`--wco`): the board's
     /// lower-left corner, on its top face (bed + thickness).
     nonisolated static var workZero: (x: Double, y: Double, z: Double) {
-        (MachineSettings.simBoardX, MachineSettings.simBoardY,
+        (MachineSettings.simBoardX + bedShift.x, MachineSettings.simBoardY + bedShift.y,
          probeSurface + MachineSettings.simBoardThickness)
+    }
+    /// The simulated Carvera homes to the positive end of X and Y, so its
+    /// machine coordinates run -travel…0 (Z does on both). The board's
+    /// position in Settings is measured from the bed's near left corner
+    /// either way; this moves it into that range.
+    nonisolated static var bedShift: (x: Double, y: Double) {
+        guard MachineSettings.controller == .carvera else { return (0, 0) }
+        return (-(MachineProfile.carvera.travelX ?? 0), -(MachineProfile.carvera.travelY ?? 0))
     }
     /// How far a probe runs on past the contact before it stops (`--probe-overshoot`).
     nonisolated static let probeOvershoot = 0.04
-    nonisolated static let firmwareDescription = "FluidNC 3.9.9"
+    nonisolated static var firmwareDescription: String { MachineSettings.controller == .carvera ? "Carvera (simulated)" : "FluidNC 3.9.9" }
 
     private var process: Process?
     private var output = OutputCapture()
@@ -80,14 +88,19 @@ actor SimulatorLauncher {
         process.arguments = [
             script.path,
             "--port", String(port),
-            "--wco", "\(Self.number(Self.workZero.x)),\(Self.number(Self.workZero.y)),\(Self.number(Self.workZero.z))",
-            "--surface", Self.number(Self.probeSurface),
-            "--board", Self.boardArgument(size: boardSize),
+            // `--opt=value`: a value starting with "-" (the Carvera's negative
+            // machine coordinates) would otherwise be read as another option.
+            "--wco=\(Self.number(Self.workZero.x)),\(Self.number(Self.workZero.y)),\(Self.number(Self.workZero.z))",
+            "--surface=" + Self.number(Self.probeSurface),
+            "--board=" + Self.boardArgument(size: boardSize),
             // Like FluidNC: the axis runs on past the probe trigger before it
             // stops, so Probe Z must set the origin from the PRB contact.
-            "--probe-overshoot", Self.number(Self.probeOvershoot),
+            "--probe-overshoot=" + Self.number(Self.probeOvershoot),
             "--parent-pid", String(ProcessInfo.processInfo.processIdentifier),
         ]
+        if MachineSettings.controller == .carvera { process.arguments?.append("--carvera") }
+        // Dev: `-debugSimLog <file>` records every line the simulator receives.
+        if let logPath = UserDefaults.standard.string(forKey: "debugSimLog") { process.arguments? += ["--log", logPath] }
         process.currentDirectoryURL = script.deletingLastPathComponent()
         // A clean environment: the user's PYTHON* variables must not redirect
         // the interpreter, and the script needs nothing but the stdlib.
@@ -247,7 +260,7 @@ actor SimulatorLauncher {
     private nonisolated static func boardArgument(size: CGSize?) -> String {
         let width = (size?.width).flatMap { $0 > 1 ? Double($0) : nil } ?? defaultBoardSize.width
         let height = (size?.height).flatMap { $0 > 1 ? Double($0) : nil } ?? defaultBoardSize.height
-        return [MachineSettings.simBoardX, MachineSettings.simBoardY,
+        return [MachineSettings.simBoardX + bedShift.x, MachineSettings.simBoardY + bedShift.y,
                 width, height, max(0, MachineSettings.simBoardThickness)]
             .map(number).joined(separator: ",")
     }

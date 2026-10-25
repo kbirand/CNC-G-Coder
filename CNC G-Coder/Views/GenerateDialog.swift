@@ -14,6 +14,16 @@ struct GenerateDialog: View {
 
     @AppStorage("generate.target") private var targetRaw = AppModel.GenerateTarget.cnc.rawValue
 
+    /// Options of the Carvera stage files (read by AppModel at Generate).
+    enum Keys {
+        /// Compressed air (M7) while cutting; unset = the profile's default.
+        static let carveraAir = "generate.carveraAir"
+        /// Also copy the single-layer .ngc programs next to the stage files.
+        static let carveraKeepPrograms = "generate.carveraKeepPrograms"
+    }
+    @AppStorage(Keys.carveraAir) private var carveraAir = true
+    @AppStorage(Keys.carveraKeepPrograms) private var carveraKeepPrograms = false
+
     // Laser options, shared with the sidebar's per-layer export controls.
     @AppStorage(ArtworkExport.Keys.format) private var exportFormat = ArtworkExport.Format.svg.rawValue
     @AppStorage(ArtworkExport.Keys.polarity) private var exportPolarity = ArtworkExport.Polarity.whiteOnBlack.rawValue
@@ -68,6 +78,7 @@ struct GenerateDialog: View {
             Form {
                 targetSection
                 if target == .laser { laserSection }
+                if target == .cnc, model.parameters.profile.isCarvera { carveraSection }
                 destinationSection
                 if model.isGenerating || model.generationSummary != nil { progressSection }
             }
@@ -179,6 +190,8 @@ struct GenerateDialog: View {
             .disabled(model.isGenerating)
         } footer: {
             switch target {
+            case .cnc where model.parameters.profile.isCarvera:
+                Text("Generates the toolpaths with the current parameters and writes one .cnc file per machine session for the \(model.parameters.profile.name): tool changes become T<n> M6 for its tool changer, with no M0 pauses.")
             case .cnc:
                 Text("Generates the toolpaths with the current parameters and writes the .ngc programs — the files the preview is showing.")
             case .laser:
@@ -218,6 +231,51 @@ struct GenerateDialog: View {
                 }
             }
             .pickerStyle(.segmented)
+        }
+        .disabled(model.isGenerating)
+    }
+
+    /// The stage files a Carvera profile will write, from the preview.
+    @ViewBuilder
+    private var carveraSection: some View {
+        let plan = model.machinePlan()
+        Section {
+            if let plan {
+                ForEach(plan.stages) { stage in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(stage.stage.code)
+                            .font(.caption.weight(.semibold).monospaced())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(stage.title)
+                            Text("\(stage.fileName) · \(stage.slots.map { "T\($0)" }.joined(separator: " ")) · \(MachinePost.timeText(stage.estimatedTime))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                    }
+                    .help(stage.stage.before)
+                }
+                ForEach(plan.warnings, id: \.self) { warning in
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            } else {
+                Text("The stages appear once the preview has run.")
+                    .foregroundStyle(.secondary)
+            }
+            Toggle("Compressed air while cutting (M7)", isOn: $carveraAir)
+                .help("Turns the Carvera's compressed-air nozzle on after every spindle start and off before every tool change — Makera's own PCB programs do the same; it keeps the fibreglass dust off the cut.")
+            Toggle("Also write the single-layer programs", isOn: $carveraKeepPrograms)
+                .help("Copies the per-layer .ngc programs the preview shows next to the stage files, as the GRBL profile would write them (they still contain M0 pauses, which the Carvera ignores).")
+        } header: {
+            Text("Stage files")
+        } footer: {
+            Text("One file per machine session: front isolation; mask etch, drilling and cutout after the mask is cured; the same two for the back after the flip. The rack list is at the top of every file and under Machine setup.")
         }
         .disabled(model.isGenerating)
     }

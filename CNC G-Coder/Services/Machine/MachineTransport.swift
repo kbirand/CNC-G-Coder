@@ -57,17 +57,54 @@ nonisolated protocol MachineTransport: Actor {
     func send(line: String) async throws
     /// Sends a single real-time byte with no line terminator.
     func send(byte: UInt8) async throws
+    /// Sends several real-time bytes in one write (an E-stop sequence).
+    func send(realtime bytes: [UInt8]) async throws
+    /// Makera's framed protocol (CarveraFraming): on, every line and
+    /// real-time byte goes out as a frame and inbound frames are unwrapped
+    /// into lines; off (the default), plain text.
+    func setFraming(_ enabled: Bool)
     /// Non-fatal notes gathered while opening (serial ioctl failures), cleared on return.
     func takeWarnings() -> [String]
 }
 
 extension MachineTransport {
-    func send(line: String) async throws {
-        try await send(data: Data((line + "\n").utf8))
+    func send(byte: UInt8) async throws {
+        try await send(realtime: [byte])
+    }
+}
+
+/// The inbound byte stream → lines, in plain text or unwrapped from
+/// Makera frames. Both transports feed their chunks through one of these.
+nonisolated struct WireDecoder: Sendable {
+    private var splitter = LineSplitter()
+    private var frames = CarveraFraming.Decoder()
+    var framed = false
+
+    mutating func append(_ data: Data) -> [String] {
+        guard framed else { return splitter.append(data) }
+        var lines: [String] = []
+        for event in frames.append(data) {
+            switch event {
+            case .line(let text):
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { lines.append(trimmed) }
+            case .loadFinish, .loadError:
+                break
+            }
+        }
+        return lines
     }
 
-    func send(byte: UInt8) async throws {
-        try await send(data: Data([byte]))
+    /// A line as it goes on the wire in the current mode.
+    func encode(line: String) -> Data {
+        framed ? CarveraFraming.encode(line: line) : Data((line + "\n").utf8)
+    }
+
+    func encode(realtime bytes: [UInt8]) -> Data {
+        guard framed else { return Data(bytes) }
+        var out = Data()
+        for byte in bytes { out.append(CarveraFraming.encode(realtime: byte)) }
+        return out
     }
 }
 
@@ -112,7 +149,7 @@ actor TCPTransport: MachineTransport {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "CNCGCoder.TCPTransport")
     private let lineContinuation: AsyncStream<String>.Continuation
-    private var splitter = LineSplitter()
+    private var decoder = WireDecoder()
 
     private enum Phase { case idle, opening, open, closed }
     private var phase: Phase = .idle
@@ -174,6 +211,18 @@ actor TCPTransport: MachineTransport {
         timeoutTask = nil
         connection.cancel()
         lineContinuation.finish()
+    }
+
+    func send(line: String) async throws {
+        try await send(data: decoder.encode(line: line))
+    }
+
+    func send(realtime bytes: [UInt8]) async throws {
+        try await send(data: decoder.encode(realtime: bytes))
+    }
+
+    func setFraming(_ enabled: Bool) {
+        decoder.framed = enabled
     }
 
     func send(data: Data) async throws {
@@ -242,7 +291,7 @@ actor TCPTransport: MachineTransport {
 
     private func handleReceive(data: Data?, isComplete: Bool, error: NWError?) {
         if let data, !data.isEmpty {
-            for line in splitter.append(data) {
+            for line in decoder.append(data) {
                 lineContinuation.yield(line)
             }
         }
@@ -336,6 +385,21 @@ actor SerialTransport: MachineTransport {
         }
         fd = -1
         lineContinuation.finish()
+    }
+
+    func send(line: String) async throws {
+        try await send(data: framed ? CarveraFraming.encode(line: line) : Data((line + "\n").utf8))
+    }
+
+    func send(realtime bytes: [UInt8]) async throws {
+        var data = Data()
+        if framed { for byte in bytes { data.append(CarveraFraming.encode(realtime: byte)) } } else { data = Data(bytes) }
+        try await send(data: data)
+    }
+
+    func setFraming(_ enabled: Bool) {
+        framed = enabled
+        if let state = readState { readQueue.async { state.decoder.framed = enabled } }
     }
 
     func send(data: Data) async throws {
@@ -442,18 +506,23 @@ actor SerialTransport: MachineTransport {
     /// Owned by `readQueue`: the splitter must stay in arrival order, which a
     /// hop into the actor per chunk would not guarantee.
     private final class ReadState: @unchecked Sendable {
-        var splitter = LineSplitter()
+        var decoder = WireDecoder()
         var buffer = [UInt8](repeating: 0, count: 4096)
     }
+    /// Kept so `setFraming` can reach the decoder (on `readQueue`).
+    private var readState: ReadState?
+    private var framed = false
 
     private func startReading(_ descriptor: Int32) {
         let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: readQueue)
         let state = ReadState()
+        state.decoder.framed = framed
+        readState = state
         let continuation = lineContinuation
         source.setEventHandler { [weak self] in
             let count = state.buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
             if count > 0 {
-                for line in state.splitter.append(Data(state.buffer[0..<count])) {
+                for line in state.decoder.append(Data(state.buffer[0..<count])) {
                     continuation.yield(line)
                 }
             } else if count == 0 || (errno != EAGAIN && errno != EINTR) {

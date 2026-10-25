@@ -39,9 +39,34 @@ nonisolated struct ParameterSnapshot: Sendable {
     var rapidFeed = "2000"
     /// "pcb2gcode" or "native".
     var engine = "pcb2gcode"
+    /// `MachineProfile.id` the programs are written for.
+    var machineProfile = "grbl"
+    /// Hand-fixed rack slots, "bitKey=slot;…" (see ParametersStore.rackSlots).
+    var rackSlots = ""
+    /// The identity of each milling group's bit (MotionGroup raw value →
+    /// key), stable across sessions: the library tool's id when one was
+    /// picked, else the shape and size. The rack numbers bits by it.
+    var toolKeys: [String: String] = [:]
+    /// A readable name for each of those keys.
+    var toolLabels: [String: String] = [:]
+    /// Library names of the drill bits on hand, by formatted diameter.
+    var drillNames: [String: String] = [:]
+    /// Rack slots the library fixes for its bits (MachineTool.preferredSlot),
+    /// by bit key; and their shanks, for the collet word.
+    var preferredSlots: [String: Int] = [:]
+    var shankDiameters: [String: Double] = [:]
+    /// The machine's tool changer, by bit key (ToolLibrary.rack): a bit in
+    /// it keeps its slot unless the project fixed another.
+    var rackTools: [String: Int] = [:]
+    /// The changer's drills by slot with the hole range each covers: a
+    /// drill program's size (hole + tolerance) counts as loaded when a
+    /// loaded drill covers it.
+    var rackDrillRanges: [Int: ClosedRange<Double>] = [:]
     /// Drill files with settings of their own (by file name): a complete
     /// snapshot each, with that file's drilling and hole-milling values.
     var drillLayers: [String: ParameterSnapshot] = [:]
+
+    var profile: MachineProfile { MachineProfile.named(machineProfile) }
 
     /// The settings that drive the drill file `file` (its name): its own
     /// where it has them, otherwise these.
@@ -256,6 +281,42 @@ final class ParametersStore: ObservableObject {
     /// What turns the Gerbers into programs: "pcb2gcode" (built into the
     /// app) or "native" (NativeToolpathEngine).
     @AppStorage("param.engine") var engine = "pcb2gcode"
+    /// The machine the programs are written for (`MachineProfile.id`):
+    /// "grbl" keeps the classic per-program .ngc output; the Carvera
+    /// profiles write one .cnc file per machine session with `T<n> M6`
+    /// tool changes (see MachinePost).
+    @AppStorage("param.machineProfile") var machineProfile = "grbl"
+    /// Tool-rack slots the user fixed by hand for the Carvera profiles:
+    /// "bitKey=slot;bitKey=slot" (keys as MachinePost builds them). Bits
+    /// without an entry are numbered automatically.
+    @AppStorage("param.rackSlots") var rackSlots = ""
+    /// The stock of this job. Library tools with a preset for it (Makera's
+    /// libraries carry one row per material) apply that row's feeds, spindle
+    /// and depth per pass when picked for a layer; see AppModel.setMaterial,
+    /// which also re-applies the tools already picked.
+    @AppStorage("param.material") var material = "PCB"
+
+    /// The chosen machine profile.
+    var profile: MachineProfile { MachineProfile.named(machineProfile) }
+
+    /// The slots fixed by hand, by bit key.
+    var rackOverrides: [String: Int] {
+        get { Self.parseRackSlots(rackSlots) }
+        set {
+            let text = newValue.keys.sorted().map { "\($0)=\(newValue[$0]!)" }.joined(separator: ";")
+            if text != rackSlots { rackSlots = text }
+        }
+    }
+
+    nonisolated static func parseRackSlots(_ text: String) -> [String: Int] {
+        var result: [String: Int] = [:]
+        for entry in text.split(separator: ";") {
+            guard let eq = entry.lastIndex(of: "="), let slot = Int(entry[entry.index(after: eq)...]) else { continue }
+            let key = String(entry[..<eq])
+            if !key.isEmpty, slot > 0 { result[key] = slot }
+        }
+        return result
+    }
 
     // MARK: - Per drill file
 
@@ -369,7 +430,7 @@ final class ParametersStore: ObservableObject {
             case .millDrill: self = .holeMill
             case .maskTop, .maskBottom: self = .mask
             case .silkTop, .silkBottom: self = .silk
-            case .custom, .test: return nil
+            case .custom, .test, .stage: return nil
             }
         }
     }
@@ -429,7 +490,8 @@ final class ParametersStore: ObservableObject {
         ("maskDirection", \.maskDirection), ("maskSpindleDir", \.maskSpindleDir),
         ("silkTravelZ", \.silkTravelZ), ("silkChangeZ", \.silkChangeZ), ("silkExtraCut", \.silkExtraCut),
         ("silkDirection", \.silkDirection), ("silkSpindleDir", \.silkSpindleDir),
-        ("rapidFeed", \.rapidFeed), ("engine", \.engine)
+        ("rapidFeed", \.rapidFeed), ("engine", \.engine),
+        ("machineProfile", \.machineProfile), ("rackSlots", \.rackSlots), ("material", \.material)
     ]
 
     private static let boolFields: [(String, ReferenceWritableKeyPath<ParametersStore, Bool>)] = [
@@ -588,6 +650,57 @@ final class ParametersStore: ObservableObject {
         }
         snapshot.rapidFeed = t("rapidFeed")
         snapshot.engine = raw("engine")
+        snapshot.machineProfile = raw("machineProfile")
+        snapshot.rackSlots = raw("rackSlots")
+
+        // Bit identities for the tool rack (MachinePost).
+        func identity(group: MotionGroup, idKey: String, shapeKey: String?, diameterKey: String,
+                      tipKey: String, angleKey: String, flatName: String) {
+            let id = t(idKey)
+            if !id.isEmpty, let tool = library?.tool(id: id) {
+                snapshot.toolKeys[group.rawValue] = "id:" + id
+                snapshot.toolLabels[group.rawValue] = tool.name
+                return
+            }
+            // Numbers normalised ("0.10" and "0.1" are the same bit).
+            func n(_ key: String) -> String { Double(t(key)).map(Self.format) ?? t(key) }
+            let key: String, label: String
+            if let shapeKey, raw(shapeKey) == "vbit" {
+                let tip = n(tipKey), angle = n(angleKey)
+                key = "vbit:\(tip):\(angle)"
+                label = String(localized: "V-bit \(angle)° · \(tip) mm tip")
+            } else {
+                let d = n(diameterKey)
+                key = "flat:\(d)"
+                label = String(localized: "\(flatName) \(d) mm")
+            }
+            snapshot.toolKeys[group.rawValue] = key
+            snapshot.toolLabels[group.rawValue] = label
+        }
+        identity(group: .iso, idKey: "millToolID", shapeKey: "millShape", diameterKey: "millDiameter",
+                 tipKey: "millVTip", angleKey: "millVAngle", flatName: String(localized: "End mill"))
+        identity(group: .cut, idKey: "cutToolID", shapeKey: nil, diameterKey: "cutterDiameter",
+                 tipKey: "", angleKey: "", flatName: String(localized: "End mill"))
+        identity(group: .holeMill, idKey: "holeMillToolID", shapeKey: nil, diameterKey: "holeMillDiameter",
+                 tipKey: "", angleKey: "", flatName: String(localized: "End mill"))
+        identity(group: .mask, idKey: "maskToolID", shapeKey: "maskShape", diameterKey: "maskTool",
+                 tipKey: "maskVTip", angleKey: "maskVAngle", flatName: String(localized: "End mill"))
+        identity(group: .silk, idKey: "silkToolID", shapeKey: "silkShape", diameterKey: "silkTool",
+                 tipKey: "silkVTip", angleKey: "silkVAngle", flatName: String(localized: "End mill"))
+        let onHand = Set(raw("drillBitIDs").split(separator: ",").map(String.init))
+        for bit in library?.drills ?? [] where onHand.contains(bit.id.uuidString) {
+            let key = "drill:" + Self.format(bit.diameter)
+            snapshot.drillNames[Self.format(bit.diameter)] = bit.name
+            if bit.preferredSlot > 0 { snapshot.preferredSlots[key] = bit.preferredSlot }
+            snapshot.shankDiameters[key] = bit.shankDiameter
+        }
+        for tool in library?.tools ?? [] {
+            let key = "id:" + tool.id.uuidString
+            if tool.preferredSlot > 0 { snapshot.preferredSlots[key] = tool.preferredSlot }
+            snapshot.shankDiameters[key] = tool.shankDiameter
+        }
+        snapshot.rackTools = library?.rackSlotsByKey ?? [:]
+        snapshot.rackDrillRanges = library?.rackDrillRanges(defaultTolerance: Double(t("drillBitTolerance")) ?? 0.1) ?? [:]
         return snapshot
     }
 
@@ -737,6 +850,8 @@ final class ParametersStore: ObservableObject {
     /// Zero feeds and speeds mean "not set" in FlatCAM databases and leave
     /// the layer's own value alone.
     func toolValues(_ tool: MachineTool, for section: SettingsSection) -> [String: String] {
+        // The job's material picks the tool's preset (Makera libraries).
+        let tool = tool.applying(material: material)
         let f = Self.format
         var v: [String: String] = [:]
         func positive(_ key: String, _ value: Double) { if value > 0 { v[key] = f(value) } }
@@ -827,6 +942,8 @@ final class ParametersStore: ObservableObject {
     /// one is given.
     func applyTool(_ tool: MachineTool, to section: SettingsSection, drill file: String? = nil) {
         let values = toolValues(tool, for: section)
+        // A drill picked as the group's Tool is one of the bits on hand too.
+        if section == .drilling, tool.use == .drilling { setDrillBit(tool.id, onHand: true, file: file) }
         guard let file, section.isDrilling else { return apply(values) }
         for (key, value) in values { setDrillValue(key, value, file: file) }
     }
@@ -854,6 +971,20 @@ final class ParametersStore: ObservableObject {
         case .silk: "silkToolID"
         case .custom, .setup: nil
         }
+    }
+
+    /// Every settings group (and every drill file's drilling groups) set from
+    /// a library tool, with that tool — what a material change re-applies.
+    func pickedTools() -> [(section: SettingsSection, drill: String?, tool: MachineTool)] {
+        var picked: [(SettingsSection, String?, MachineTool)] = []
+        for section in SettingsSection.allCases where Self.toolIDKey(section) != nil {
+            if let tool = library?.tool(id: toolID(for: section)) { picked.append((section, nil, tool)) }
+            guard section.isDrilling else { continue }
+            for file in drillLayerValues.keys.sorted() {
+                if let tool = library?.tool(id: toolID(for: section, drill: file)) { picked.append((section, file, tool)) }
+            }
+        }
+        return picked
     }
 
     /// The library tool a group was set from (drilling groups: for the drill

@@ -34,6 +34,10 @@ nonisolated struct ProgramOptions: Equatable, Sendable {
     /// Replace pcb2gcode's chord polylines by G2/G3 arcs in the streamed
     /// copy (`ArcFitter`; Settings → Machine). Off by default.
     var fitArcs: Bool = false
+    /// Leave the tool-change lines in the text (a Carvera's `T<n> M6` is a
+    /// real change its changer performs; the streamer sends it and waits).
+    /// The lines are still listed in `toolChangeLines`.
+    var keepToolChanges: Bool = false
     /// Token of the preview document the program was prepared from. A
     /// regeneration changes the token, so the Program tab's unforced
     /// prepare stops matching and re-prepares from the new files, and Send
@@ -285,6 +289,7 @@ nonisolated enum ProgramPreparer {
             toolChangeLines.insert(number)
             toolChangeKinds[number] = marker
             if let lastMessage { messageAt[number] = lastMessage }
+            if options.keepToolChanges { continue }
             // Keep the words that matter next to the marker in the comment
             // so the program tab still reads like the original.
             let original = line.trimmingCharacters(in: .whitespaces)

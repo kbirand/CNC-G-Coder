@@ -12,6 +12,7 @@ CNC G-Coder drives [pcb2gcode](https://github.com/pcb2gcode/pcb2gcode) under the
 - **Board cutout** with configurable holding bridges (width, count, depth)
 - **Solder mask etching** — after you paint and UV-cure the mask, generated programs mill the pad/via openings clear (pcb2gcode's `--invert-gerbers` pocketing; also supports SVG export for laser ablation instead)
 - One-click **Generate** writes all `.ngc` programs into a folder you choose (create one on the spot with the dialog's New Folder button)
+- **Makera Carvera** profiles (Machine setup → Machine) — one `.cnc` stage file per machine session (front isolation · mask etch + drills + cutout · back isolation · back mask etch), `T<n> M6` tool changes for the automatic tool changer with the rack list at the top of every file; Carvera's firmware has no `M0`, so plain GRBL files would run through a tool change. The Tool Library ships with Makera's Carvera bits (Makera Studio's set: 121 bits, fifteen materials, Studio's groups) and can re-import Studio's library in one click or Makera's Fusion libraries (`.tools` / `.csv`), with one cutting-data row per material picked by the job's Material setting the way Makera's library does, and filters big libraries by group and search
 - **Localized** in English, French, Spanish and Turkish (Settings → General → Language, or the macOS language), guide included
 
 ### Live preview
@@ -67,7 +68,7 @@ The native engine uses [Clipper2](https://github.com/AngusJohnson/Clipper2)
 2. Launch CNC G-Coder → **Choose Folder** — layers are detected by filename: EasyEDA's `Gerber_TopLayer.GTL`, `Gerber_BottomLayer.GBL`, `Gerber_BoardOutlineLayer.GKO`, `.GTS`/`.GBS` masks and `.DRL` files, or KiCad's `board-F_Cu.gbr`, `board-B_Cu.gbr`, `board-Edge_Cuts.gbr`, `board-F_Mask.gbr`/`board-B_Mask.gbr` and `board-PTH.drl`/`board-NPTH.drl` (Protel-extension exports work too). In KiCad, export drills as Excellon, not Gerber X2.
 3. Set tools, depths and feeds — the sidebar shows the selected program's settings (Machine setup holds the shared ones); watch the preview and the Σ time estimate update.
 4. Inspect each program: play it back, check depths in the side view.
-5. **Generate G-code**, then open the **Machine** window (⇧⌘M) to connect to your GRBL/FluidNC controller, zero, probe and send each program — or save the `.ngc` files for another sender.
+5. **Generate G-code**, then open the **Machine** window (⇧⌘M) to connect to your GRBL/FluidNC controller or Makera Carvera, zero, probe and send each program — or save the `.ngc` files for another sender.
 
 Machining order: front isolation → drills (bit changes at M0 pauses) → flip → back isolation → outline cutout → snap/file the bridge tabs → paint & cure solder mask → run the mask etch programs.
 
@@ -92,10 +93,11 @@ The built-in test board is the cross-check: measure the 0.2 mm test trace after 
 - Choose the flip direction (*Board flips*) to match how you physically turn the board and verify with *Un-mirror Back Side* — the flipped back must sit exactly over the front.
 - Probing and height maps are done live from the Machine panel (Probe and Height Map tabs); the generated programs themselves stay plain G-code, and the height map is applied to the copy that is streamed.
 - Playback rapids are simulated at 2000 mm/min (G-code carries no rapid feed); cutting times are exact per the programmed feeds.
+- On a Makera Carvera, run stage 1 of each side with the controller's Auto Leveling on and stage 2 with it off (the painted mask is not probed again; the grid from stage 1 is reused); the Machine panel connects to a Carvera too (Controller → Makera Carvera: Wi‑Fi port 2222 with LAN discovery, or USB; plain-text or framed protocol detected on connect) and sends layers in the Carvera flavour, waiting for the tool changer at every `T<n> M6`; Send Stage to Machine… / Send Layers… sends a whole stage or any set of layers as one program; Tool Changer… (Machine setup, Tool Library) records which bit sits in each slot, so jobs are numbered around what is loaded, the Tool menus offer the loaded bits first and the Machine panel names the tool in the spindle and can run a `T<n> M6` by hand — or upload the stage files with the Carvera controller.
 
 ## Machine control
 
-The **Machine** panel (toolbar button or View → Machine Panel, ⇧⌘M; a right-hand inspector of the main window, also openable as its own window) is a native sender for GRBL 1.1 and FluidNC controllers, over Wi‑Fi (TCP/telnet, port 23) or USB serial:
+The **Machine** panel (toolbar button or View → Machine Panel, ⇧⌘M; a right-hand inspector of the main window, also openable as its own window) is a native sender for GRBL 1.1, FluidNC and Makera Carvera controllers, over Wi‑Fi (TCP/telnet port 23; the Carvera's port 2222) or USB serial:
 
 - Connection bar with live state, firmware badge and decoded alarms; DRO with work and machine positions, feed/spindle, buffer and pin readouts; zero X/Y/Z, set an axis, go to work zero, safe Z; saved machine positions and go-to.
 - Jog pad with step and continuous (hold) jogging, diagonals and keyboard control; feed, rapid and spindle overrides; spindle and coolant control; Home, Unlock, Reset, Hold/Resume, Check mode.
@@ -103,7 +105,7 @@ The **Machine** panel (toolbar button or View → Machine Panel, ⇧⌘M; a righ
 - **Probe tab**: two-pass Z touch-off (bit on copper with a clip, or a touch plate of known thickness) that sets the active work origin from the exact trigger point.
 - **Height Map tab**: probe a grid over the board, see the deviation, and warp the streamed program to the measured surface (bilinear, per side).
 - Console with command history and user macros.
-- **Simulator** transport (shown in the connection picker once enabled in Settings → Machine): a built-in FluidNC simulator (`Scripts/fake-grbl.py`, bundled; needs python3) the app launches on a private port, for trying the whole Machine panel — jogging, programs, probing, height maps — without a machine. The state pill is tagged SIM while it is connected.
+- **Simulator** transport (shown in the connection picker once enabled in Settings → Machine): a built-in simulator (`Scripts/fake-grbl.py`, bundled; needs python3; a FluidNC, or a Carvera with `--carvera` when the Controller menu says Makera Carvera) the app launches on a private port, for trying the whole Machine panel — jogging, programs, probing, height maps — without a machine. The state pill is tagged SIM while it is connected.
 
 ## Roadmap
 

@@ -40,6 +40,12 @@ final class AppModel: ObservableObject {
     /// Set by the sidebar's "Send … to Machine…" before the Machine panel
     /// opens; the Program controls consume it.
     @Published var requestedMachineLayer: LayerKind?
+    /// "Send stage … to Machine…": the layers to load as one multi-layer
+    /// program (empty = open the chooser). Consumed by the Program tab.
+    @Published var requestedMachineSequence: [LayerKind]?
+    /// The layers of the last multi-layer program loaded, so the Program
+    /// tab can re-prepare it after a regeneration.
+    var machineSequence: [LayerKind] = []
     /// The Machine inspector in the main window (toolbar toggle, View →
     /// Machine Panel ⇧⌘M, "Send … to Machine…"). Remembered across launches.
     @Published var showMachineInspector = UserDefaults.standard.bool(forKey: "ui.machineInspector") {
@@ -467,6 +473,41 @@ final class AppModel: ObservableObject {
             print(report)
             exit(0)
         }
+        // Dev hook: `-debugMakeraBundle "/path/makera_library.db|/path/MakeraTools.json"`
+        // writes the app's bundled Makera tool set from Studio's library and quits.
+        if let spec = UserDefaults.standard.string(forKey: "debugMakeraBundle") {
+            let parts = spec.split(separator: "|").map(String.init)
+            do {
+                let parsed = try MakeraLibraryImport.parse(url: URL(fileURLWithPath: parts[0]))
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                try encoder.encode(ToolLibrary.ExchangeFile(tools: parsed)).write(to: URL(fileURLWithPath: parts[1]), options: .atomic)
+                print("BUNDLE \(parsed.count) tools → \(parts[1])")
+            } catch {
+                print("BUNDLE ERROR \(error.localizedDescription)")
+            }
+            exit(0)
+        }
+        // Dev hook: `-debugImportTools /a.tools,/b.csv` imports tool libraries
+        // into the library, prints every tool and quits.
+        if let paths = UserDefaults.standard.string(forKey: "debugImportTools") {
+            for path in paths.split(separator: ",") {
+                do {
+                    let r = try tools.importTools(from: URL(fileURLWithPath: String(path)))
+                    print("IMPORT \(path): \(r.source): \(r.added) added, \(r.updated) updated")
+                } catch {
+                    print("IMPORT \(path): ERROR \(error.localizedDescription)")
+                }
+            }
+            print("MATERIAL \(parameters.material) of \(tools.materials.joined(separator: ", ")) | groups: \(tools.groups.joined(separator: ", "))")
+            for tool in tools.tools {
+                let r = tool.applying(material: parameters.material)
+                print("TOOL | \(tool.name) | \(tool.group) | \(tool.use.rawValue) \(tool.shape.rawValue) | d \(tool.diameter) tip \(tool.tipDiameter) \(tool.tipAngle)° | feed \(tool.feedXY)/\(tool.feedZ) rpm \(tool.spindle) step \(tool.depthPerPass) overlap \(tool.overlap) depth \(tool.cutDepth) | resolved feed \(r.feedXY)/\(r.feedZ) rpm \(r.spindle) step \(r.depthPerPass) | shank \(tool.shankDiameter) slot \(tool.preferredSlot) | presets \(tool.presets.map { "\($0.material):\(Int($0.spindle))/\(Int($0.feedXY))/\(Int($0.feedZ))/\($0.depthPerPass)" }.joined(separator: " ")) | \(tool.notes)")
+            }
+            if UserDefaults.standard.bool(forKey: "debugImportToolsKeep") { return }
+            exit(0)
+        }
         // Dev hook: `-debugHoleTest /path/out.ngc` writes a hole fit test
         // (2/3/4 mm, six variants, a 2 mm corn bit) and shows it in the preview.
         if let holePath = UserDefaults.standard.string(forKey: "debugHoleTest") {
@@ -596,6 +637,47 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// `-debugMachineSend stage:2F` / `layers:masktop,drill0,outline`: several
+    /// layers as one Carvera program.
+    private func machineSendSequence(_ target: String) async -> Bool {
+        let parts = target.lowercased().split(separator: ":", maxSplits: 1).map(String.init)
+        let verb = parts.first ?? ""
+        let argument = parts.count > 1 ? parts[1] : ""
+        var kinds: [LayerKind] = []
+        if verb == "stage" {
+            _ = await machineResolveLayer("front")   // waits for the preview
+            guard let plan = machinePlan(), let stage = plan.stages.first(where: { $0.stage.code.lowercased() == argument }) else {
+                machineLog("no stage \(argument) — have: " + (machinePlan()?.stages.map(\.stage.code).joined(separator: ", ") ?? "none"))
+                return false
+            }
+            kinds = stage.programs.map(\.layer)
+        } else {
+            for name in argument.split(separator: ",") {
+                guard let layer = await machineResolveLayer(String(name)) else { return false }
+                kinds.append(layer.id)
+            }
+        }
+        let side: BoardSide = kinds.contains { $0.isBackSide } ? .back : .front
+        let options = ProgramOptions(applyBacklash: MachineSettings.applyBacklash,
+                                     heightMap: UserDefaults.standard.bool(forKey: "debugMachineApplyMap") ? heightMaps[side] : nil,
+                                     applyBelowZ: MachineSettings.heightMapApplyBelowZ,
+                                     frame: heightMapFrame(side: side),
+                                     clampZAboveWork: UserDefaults.standard.bool(forKey: "debugMachineClampZ") ? machine.clampZWork() : nil,
+                                     fitArcs: MachineSettings.fitArcs,
+                                     documentToken: preview.document?.token)
+        do {
+            let program = try await prepareMachineSequence(kinds, options: options)
+            requestedMachineSequence = kinds
+            machineLog("loaded \(program.name) (\(program.kind.displayName)): \(program.lines.count) lines, \(program.segments.count) segments, "
+                       + "tool changes at \(program.toolChangeLines.sorted()), est. \(Int(program.parsed.totalTime)) s → \(program.url.path)")
+            _ = await machine.waitForStatus(timeout: 10) { $0.state == .idle }
+            return true
+        } catch {
+            machineLog("prepare failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// Resolves a hook's layer name (or .ngc path) against the preview
     /// document, waiting for it to exist.
     private func machineResolveLayer(_ target: String) async -> ParsedLayer? {
@@ -636,6 +718,9 @@ final class AppModel: ObservableObject {
 
     /// Prepares and loads a program for the hooks. True when loaded.
     private func machineSend(_ target: String) async -> Bool {
+        if target.lowercased().hasPrefix("stage:") || target.lowercased().hasPrefix("layers:") {
+            return await machineSendSequence(target)
+        }
         guard let layer = await machineResolveLayer(target) else { return false }
         // `-debugMachineClampZ 1`: prepare with "Clamp Z to top" (air tests).
         let options = ProgramOptions(applyBacklash: MachineSettings.applyBacklash,
@@ -949,6 +1034,7 @@ final class AppModel: ObservableObject {
         generationTotal = (detectedFiles.hasAnything ? Pcb2GcodeService.stepCount(parameters.snapshot(), files: detectedFiles, pcb2gcode: pcb2gcodeURL) : 0)
             + (customLayers.hasShapes ? 1 : 0)
             + (target == .laser ? 1 : 0)   // plus the rendering pass
+            + (target == .cnc && parameters.profile.isCarvera ? 1 : 0)   // plus the stage files
         appendLog("\n--- \(target == .cnc ? "Generating" : "Exporting laser artwork") into \(destination.path) ---\n")
 
         let snapshot = parameters.snapshot()
@@ -1017,19 +1103,58 @@ final class AppModel: ObservableObject {
                     let maskResult = Pcb2GcodeService.exportMaskSVGs(files: files, outputDir: destination)
                     self.appendLog(maskResult.log)
                 }
-                var count = 0
-                for output in batch.outputs {
-                    let target = destination.appendingPathComponent(output.url.lastPathComponent)
-                    do {
-                        if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
-                        try FileManager.default.copyItem(at: output.url, to: target)
-                        count += 1
-                    } catch {
-                        self.appendLog("ERROR writing \(target.path): \(error.localizedDescription)\n")
+                @MainActor func copy(_ urls: [URL]) -> Int {
+                    var count = 0
+                    for url in urls {
+                        let target = destination.appendingPathComponent(url.lastPathComponent)
+                        do {
+                            if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+                            try FileManager.default.copyItem(at: url, to: target)
+                            count += 1
+                        } catch {
+                            self.appendLog("ERROR writing \(target.path): \(error.localizedDescription)\n")
+                        }
                     }
+                    return count
                 }
-                self.finishGeneration(summary: "\(count) program\(count == 1 ? "" : "s") written.",
-                                      failed: count < batch.outputs.count)
+
+                guard snapshot.profile.isCarvera else {
+                    let count = copy(batch.outputs.map(\.url))
+                    self.finishGeneration(summary: "\(count) program\(count == 1 ? "" : "s") written.",
+                                          failed: count < batch.outputs.count)
+                    return
+                }
+
+                // Carvera: the programs become stage files (MachinePost).
+                let stepID = 100_001
+                self.reportStep(.started(id: stepID, label: String(localized: "Assembling stage files")), total: self.generationTotal)
+                let parsed = await GCodeParser.parseLayers(batch.outputs)
+                let programs = parsed.sorted { $0.id < $1.id }.map(MachinePost.Program.init(parsed:))
+                let context = self.machineContext(snapshot: snapshot, files: files, customLayers: custom)
+                let plan = MachinePost.plan(programs: programs, context: context)
+                self.appendLog(self.rackDescription(plan))
+                let written: [MachinePost.WrittenFile]
+                do {
+                    let result = try await Task.detached(priority: .userInitiated) {
+                        try MachinePost.write(plan: plan, context: context, outputDir: workDir)
+                    }.value
+                    self.appendLog(result.log)
+                    written = result.files
+                } catch {
+                    self.reportStep(.finished(id: stepID), total: self.generationTotal)
+                    self.finishGeneration(summary: String(localized: "Stage files failed: \(error.localizedDescription)"), failed: true)
+                    return
+                }
+                self.reportStep(.finished(id: stepID), total: self.generationTotal)
+                var urls = written.map(\.url)
+                if UserDefaults.standard.bool(forKey: GenerateDialog.Keys.carveraKeepPrograms) {
+                    urls += batch.outputs.map(\.url)
+                }
+                let count = copy(urls)
+                let slots = plan.rack.map { "T\($0.slot)" }.joined(separator: " ")
+                self.finishGeneration(
+                    summary: String(localized: "\(written.count) stage files written · rack \(slots)."),
+                    failed: count < urls.count || written.isEmpty)
 
             case .laser:
                 self.reportStep(.started(id: self.generationTotal, label: "Rendering \(options.format.title) artwork"),
@@ -1106,9 +1231,10 @@ final class AppModel: ObservableObject {
             return
         }
 
+        let profile = parameters.profile
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = layer.fileSlug + ".ngc"
-        panel.allowedContentTypes = [UTType(filenameExtension: "ngc") ?? .plainText]
+        panel.nameFieldStringValue = layer.fileSlug + "." + profile.fileExtension
+        panel.allowedContentTypes = [UTType(filenameExtension: profile.fileExtension) ?? .plainText]
         panel.allowsOtherFileTypes = true
         panel.canCreateDirectories = true
         panel.directoryURL = chosenOutputDir ?? projectFolder
@@ -1121,9 +1247,184 @@ final class AppModel: ObservableObject {
             try fm.copyItem(at: parsed.fileURL, to: url)
             appendLog("\nExported \(layer.displayName) → \(url.path)\n")
             appendLog(BacklashCompensation.apply(.current, files: [url]))
+            if profile.isCarvera {
+                // The compensated copy, rewritten for the machine in place:
+                // the one program as a stage of its own.
+                var program = MachinePost.Program(parsed: parsed)
+                program = MachinePost.Program(layer: program.layer, url: url, toolDiameter: program.toolDiameter,
+                                              drillSizes: program.drillSizes, estimatedTime: program.estimatedTime)
+                let context = machineContext(snapshot: parameters.snapshot(), files: detectedFiles, customLayers: customLayers)
+                let rendered = try MachinePost.renderSingle(program: program, context: context)
+                try rendered.text.write(to: url, atomically: true, encoding: .utf8)
+                appendLog("Rewritten for \(profile.name): " + rendered.notes.joined(separator: "; ") + "\n")
+            }
         } catch {
             appendLog("\nERROR exporting \(layer.displayName): \(error.localizedDescription)\n")
         }
+    }
+
+    // MARK: - Tool suggestions
+
+    /// What the suggestions know about the job — for the drilling groups,
+    /// the drill file's holes as the programs will need them (designed size
+    /// plus the hole tolerance, which is what the bit ranges are matched
+    /// against) and which of them are milled instead.
+    func suggestionContext(drill file: String?) -> ToolSuggestions.Context {
+        var context = ToolSuggestions.Context(material: parameters.material)
+        context.tolerance = Double(parameters.drillValue("drillBitTolerance", file: file).trimmingCharacters(in: .whitespaces)) ?? 0.1
+        let allowance = Double(parameters.drillValue("drillHoleAllowance", file: file).trimmingCharacters(in: .whitespaces)) ?? 0
+        if let file, let url = detectedFiles.drills.first(where: { $0.lastPathComponent == file }) {
+            context.holeSizes = (drillHoleSizes[url] ?? []).map { ($0 + allowance) * 1000 }.map { $0.rounded() / 1000 }
+        } else {
+            context.holeSizes = Array(drillHoleSizes.values.joined()).map { (($0 + allowance) * 1000).rounded() / 1000 }
+        }
+        if parameters.drillBool("drillMillLarge", file: file) {
+            context.millFrom = Double(parameters.drillValue("drillMillFrom", file: file).trimmingCharacters(in: .whitespaces))
+        }
+        return context
+    }
+
+    /// The library's best bits for a settings group (drilling groups: for
+    /// the drill file), best first.
+    func suggestedTools(for section: SettingsSection, drill file: String? = nil) -> [ToolSuggestions.Suggestion] {
+        ToolSuggestions.suggest(for: section, tools: tools.tools, context: suggestionContext(drill: section.isDrilling ? file : nil))
+    }
+
+    /// The best bits for a drawn layer of `type`.
+    func suggestedTools(forCustomType type: CustomLayer.LayerType) -> [ToolSuggestions.Suggestion] {
+        var context = suggestionContext(drill: nil)
+        if type == .drill { context.holeSizes = [] }
+        return ToolSuggestions.suggest(for: ToolSuggestions.section(for: type), tools: tools.tools, context: context)
+    }
+
+    // MARK: - Material
+
+    /// Changes the job's material and re-applies every tool picked for a
+    /// settings group, a drill file or a drawn layer that has a preset for
+    /// it — so the feeds follow the stock the way Makera's library fills
+    /// them in. Groups set by hand, or from tools without a row for the
+    /// material, are left alone.
+    func setMaterial(_ material: String) {
+        let material = material.trimmingCharacters(in: .whitespaces)
+        guard !material.isEmpty, material != parameters.material else { return }
+        parameters.material = material
+        var reapplied = 0
+        for picked in parameters.pickedTools() where picked.tool.preset(for: material) != nil {
+            parameters.applyTool(picked.tool, to: picked.section, drill: picked.drill)
+            reapplied += 1
+        }
+        for layer in customLayers where !layer.toolID.isEmpty {
+            if let tool = tools.tool(id: layer.toolID), tool.preset(for: material) != nil {
+                applyTool(tool, toCustomLayer: layer.id)
+                reapplied += 1
+            }
+        }
+        appendLog("Material: \(material)" + (reapplied > 0 ? " — \(reapplied) tool setting\(reapplied == 1 ? "" : "s") re-applied from the library presets.\n" : ".\n"))
+    }
+
+    // MARK: - Machine post (Carvera stage files)
+
+    /// What MachinePost needs besides the programs, from the current state.
+    func machineContext(snapshot: ParameterSnapshot, files: DetectedFiles, customLayers: [CustomLayer]) -> MachinePost.Context {
+        var names: [String: String] = [:]
+        for tool in tools.tools { names[tool.id.uuidString] = tool.name }
+        let defaults = UserDefaults.standard
+        let air = defaults.object(forKey: GenerateDialog.Keys.carveraAir) == nil
+            ? snapshot.profile.airDefault : defaults.bool(forKey: GenerateDialog.Keys.carveraAir)
+        return MachinePost.Context(profile: snapshot.profile, snapshot: snapshot, files: files, customLayers: customLayers,
+                                   toolNames: names, jobName: projectURL == nil ? "" : projectName, air: air)
+    }
+
+    /// The rack and stages the current preview would produce on a Carvera
+    /// profile; nil on the GRBL profile or without a preview. Pure and
+    /// cheap (no file access), so views may ask for it in their bodies.
+    func machinePlan() -> MachinePost.Plan? {
+        guard parameters.profile.isCarvera, let document = preview.document else { return nil }
+        let programs = document.layers.map(MachinePost.Program.init(parsed:))
+        guard !programs.isEmpty else { return nil }
+        let context = machineContext(snapshot: parameters.snapshot(), files: detectedFiles, customLayers: customLayers)
+        return MachinePost.plan(programs: programs, context: context)
+    }
+
+    /// The program of `layer` rewritten for a Carvera — `T<n> M6` for the
+    /// changer, slots from the whole preview's rack, no M0 — as a temporary
+    /// file for the machine window to send. Nil when the profile is not a
+    /// Carvera or the rewrite fails (the plain program is sent then).
+    func carveraProgramURL(for layer: ParsedLayer) -> URL? {
+        guard parameters.profile.isCarvera else { return nil }
+        let context = machineContext(snapshot: parameters.snapshot(), files: detectedFiles, customLayers: customLayers)
+        let program = MachinePost.Program(parsed: layer)
+        let others = (preview.document?.layers ?? []).map(MachinePost.Program.init(parsed:))
+        let plan = MachinePost.plan(programs: others.contains(where: { $0.layer == layer.id }) ? others : others + [program], context: context)
+        do {
+            let rendered = try MachinePost.renderProgram(program, plan: plan, context: context)
+            let dir = PreviewPaths.machineDir
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("carvera-\(layer.id.fileSlug)-\(UUID().uuidString.prefix(8)).cnc")
+            try rendered.text.write(to: url, atomically: true, encoding: .utf8)
+            appendLog("[machine] \(layer.displayName) rewritten for the Carvera: " + rendered.notes.joined(separator: "; ") + "\n")
+            return url
+        } catch {
+            appendLog("[machine] Carvera rewrite failed for \(layer.displayName): \(error.localizedDescription) — sending the plain program.\n")
+            return nil
+        }
+    }
+
+    /// What sending `kinds` as one program would mean — order, title, slots,
+    /// time, warnings — for the chooser. Nil without a Carvera preview.
+    func machineSequencePreview(_ kinds: [LayerKind]) -> MachinePost.Sequence? {
+        guard parameters.profile.isCarvera, let document = preview.document, !preview.showsExternalFile else { return nil }
+        let context = machineContext(snapshot: parameters.snapshot(), files: detectedFiles, customLayers: customLayers)
+        return MachinePost.sequence(kinds, programs: document.layers.map(MachinePost.Program.init(parsed:)), context: context)
+    }
+
+    /// Renders `kinds` as one Carvera program (mask, drills, cutout… in
+    /// machining order, `T<n> M6` between them with the job's rack slots)
+    /// and loads it into the streamer like any other program. The preview
+    /// document is left alone; the canvases follow the job from its own
+    /// parse while it runs.
+    func prepareMachineSequence(_ kinds: [LayerKind], options: ProgramOptions) async throws -> MachineProgram {
+        guard parameters.profile.isCarvera else {
+            throw MachinePost.Failure(reason: String(localized: "Several layers in one program need a Makera Carvera profile (Machine setup → Machine)."))
+        }
+        guard let document = preview.document, !preview.showsExternalFile else {
+            throw MachinePost.Failure(reason: String(localized: "The project's preview is not available — generate it first."))
+        }
+        let programs = document.layers.map(MachinePost.Program.init(parsed:))
+        let context = machineContext(snapshot: parameters.snapshot(), files: detectedFiles, customLayers: customLayers)
+        guard let sequence = MachinePost.sequence(kinds, programs: programs, context: context) else {
+            throw MachinePost.Failure(reason: String(localized: "None of the chosen layers is in the preview."))
+        }
+        let rendered = try MachinePost.render(sequence: sequence, programs: programs, context: context)
+        let dir = PreviewPaths.machineDir
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("sequence-\(UUID().uuidString.prefix(8))-" + sequence.stage.fileName)
+        try rendered.text.write(to: url, atomically: true, encoding: .utf8)
+        var options = options
+        options.keepToolChanges = true
+        let layer = ParsedLayer(id: .stage(sequence.ref), fileURL: url)
+        let program = try await machine.prepareProgram(layer: layer, name: sequence.stage.fileName, options: options)
+        machineSequence = kinds
+        var log = "[machine] \(sequence.ref.code) \(sequence.ref.title): " + sequence.ref.layers.map(\.displayName).joined(separator: " → ")
+            + " · T" + sequence.stage.slots.map(String.init).joined(separator: " T") + " · " + rendered.notes.joined(separator: "; ") + "\n"
+        for warning in sequence.warnings { log += "[machine] ⚠︎ \(warning)\n" }
+        appendLog(log)
+        return program
+    }
+
+    /// The rack as a log block.
+    private func rackDescription(_ plan: MachinePost.Plan) -> String {
+        var text = "Tool rack for this job:\n"
+        for entry in plan.rack {
+            text += "  T\(entry.slot)  \(entry.bit.label) — \(entry.programs.joined(separator: ", "))\(entry.fixed ? " (fixed)" : "")\n"
+        }
+        for stage in plan.stages {
+            text += "  Stage \(stage.stage.code) \(stage.title): " + stage.programs.map(\.layer.displayName).joined(separator: ", ")
+                + " — " + stage.slots.map { "T\($0)" }.joined(separator: " ") + ", est. \(MachinePost.timeText(stage.estimatedTime))\n"
+        }
+        for warning in plan.warnings { text += "WARNING: \(warning)\n" }
+        for note in plan.notes { text += "Note: \(note)\n" }
+        return text
     }
 
     // MARK: - Backlash compensation (Machine setup)

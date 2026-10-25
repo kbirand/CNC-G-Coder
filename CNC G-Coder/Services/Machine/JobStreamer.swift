@@ -90,8 +90,9 @@ final class JobStreamer {
     /// `player.currentTime` when the run began: pace is measured from here,
     /// so Send from line… does not count the skipped part as progress.
     @ObservationIgnored private var clockBase: TimeInterval = 0
-    /// Wall seconds spent in feed hold (or Door) during the run — excluded
-    /// from the pace, or a long hold would inflate `remaining` for good.
+    /// Wall seconds spent in feed hold (or Door) or waiting for a tool
+    /// change during the run — excluded from the pace, or a long hold
+    /// would inflate `remaining` for good.
     @ObservationIgnored private var heldTime: TimeInterval = 0
     @ObservationIgnored private var lastReportAt: ContinuousClock.Instant?
     /// ~1 Hz (active wall seconds, estimate seconds) samples while running,
@@ -174,6 +175,11 @@ final class JobStreamer {
     private var allSent = false
     @ObservationIgnored private var awaitingIdle = false
     private var suspending = false
+    /// Carvera: a `T<n> M6` went out and the changer is at work; nothing
+    /// follows until the machine has been busy and is Idle again.
+    @ObservationIgnored private var awaitingToolChange = false
+    @ObservationIgnored private var toolChangeSeenBusy = false
+    @ObservationIgnored private var toolChangeStarted: ContinuousClock.Instant?
     @ObservationIgnored private var startedAt: ContinuousClock.Instant?
     @ObservationIgnored private var elapsedBase: TimeInterval = 0
     /// `moveStartByLine[n]` = index of the first move whose `sourceLine` ≥ n.
@@ -442,6 +448,9 @@ final class JobStreamer {
         awaitingIdle = false
         idleReports = 0
         suspending = false
+        awaitingToolChange = false
+        toolChangeSeenBusy = false
+        toolChangeStarted = nil
         suspensionTask?.cancel()
         suspensionTask = nil
         errorPrompt = nil
@@ -738,15 +747,30 @@ final class JobStreamer {
     }
 
     private func feed() {
-        guard let controller, canFeed else { return }
+        guard let controller, canFeed, !awaitingToolChange else { return }
         while cursor < sequence.count {
             let item = sequence[cursor]
-            if mode == .run, item.index >= 1, let program, program.toolChangeLines.contains(item.index),
-               let next = program.segment(after: item.index) {
-                // Let the planner finish what it has before parking.
-                guard window.isEmpty else { return }
-                beginSuspension(atLine: item.index, next: next, program: program)
-                return
+            if mode == .run, item.index >= 1, let program, program.toolChangeLines.contains(item.index) {
+                if program.options.keepToolChanges {
+                    // A real tool change (Carvera `T<n> M6`): alone into an
+                    // empty window, then the changer's work is waited for.
+                    guard window.isEmpty else { return }
+                    window.didSend(item.text, index: item.index)
+                    cursor += 1
+                    sentLine = item.index
+                    controller.enqueueJobLine(item.text)
+                    awaitingToolChange = true
+                    toolChangeSeenBusy = false
+                    toolChangeStarted = .now
+                    controller.noteJob("Tool change at line \(item.index): \(item.text.trimmingCharacters(in: .whitespaces)) — waiting for the machine.")
+                    return
+                }
+                if let next = program.segment(after: item.index) {
+                    // Let the planner finish what it has before parking.
+                    guard window.isEmpty else { return }
+                    beginSuspension(atLine: item.index, next: next, program: program)
+                    return
+                }
             }
             guard window.canSend(item.text) else { return }
             window.didSend(item.text, index: item.index)
@@ -968,10 +992,27 @@ final class JobStreamer {
         if isActive, let last = lastReportAt {
             switch status.state {
             case .hold, .door: heldTime += last.duration(to: now).seconds
-            default: break
+            default:
+                // A tool changer at work (or an operator at a manual change)
+                // is not cutting either: left out of the pace as well, or
+                // the first change would inflate `remaining` for minutes.
+                if awaitingToolChange { heldTime += last.duration(to: now).seconds }
             }
         }
         lastReportAt = now
+        if awaitingToolChange {
+            // Busy (Run, Tool, Home…) then Idle again: the bit is in. A
+            // change the machine finished between two polls shows as Idle
+            // for two seconds without ever looking busy.
+            if status.state != .idle {
+                toolChangeSeenBusy = true
+            } else if toolChangeSeenBusy || (toolChangeStarted.map { $0.duration(to: now) > .seconds(2) } ?? false) {
+                awaitingToolChange = false
+                toolChangeStarted = nil
+                controller?.noteJob("Tool change done" + (status.tool.map { " — T\($0) in the spindle." } ?? "."))
+                if state == .running { feed() }
+            }
+        }
         if let blocks = status.plannerBlocks { maxPlannerBlocks = max(maxPlannerBlocks ?? 0, blocks) }
         if let rx = status.rxBytes { maxRxBytes = max(maxRxBytes ?? 0, rx) }
         if awaitingIdle, errorPrompt == nil {

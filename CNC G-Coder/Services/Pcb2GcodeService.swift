@@ -650,7 +650,7 @@ nonisolated enum Pcb2GcodeService {
         case .millDrill: p.holeMillDwell
         case .maskTop, .maskBottom: p.maskDwell
         case .silkTop, .silkBottom: p.silkDwell
-        case .custom, .test: nil   // drawn layers carry their own dwell
+        case .custom, .test, .stage: nil   // drawn layers carry their own dwell
         }
         return value.flatMap(Double.init)
     }

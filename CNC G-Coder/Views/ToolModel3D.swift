@@ -391,6 +391,8 @@ extension AppModel {
             return ToolGeometry(kind: .endMill, diameter: max(layer.toolDiameter, 0.05))
         case .test:
             return ToolGeometry(kind: .vBit, diameter: 0, tipDiameter: 0.1, angle: 30)
+        case .stage:
+            return nil      // several bits in one file: no single model
         }
     }
 }

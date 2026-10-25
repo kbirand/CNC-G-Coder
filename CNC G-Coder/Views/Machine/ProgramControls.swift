@@ -49,6 +49,7 @@ private struct ProgramControlsBody<Middle: View>: View {
     @State private var prepareError: String?
     @State private var prepareTask: Task<Void, Never>?
     @State private var awaitingExternal = false
+    @State private var showSequenceSheet = false
     @State private var validityPrompt: ValidityPrompt?
     @State private var refusal: String?
     @State private var resumePlan: ResumePlan?
@@ -71,6 +72,7 @@ private struct ProgramControlsBody<Middle: View>: View {
         }
         .onAppear { adoptLoadedProgram(); consumeRequest(); if selectedKind == nil { selectedKind = preview.document?.layers.first?.id } }
         .onChange(of: model.requestedMachineLayer) { _, _ in consumeRequest() }
+        .onChange(of: model.requestedMachineSequence) { _, _ in consumeSequenceRequest() }
         .onChange(of: selectedKind) { _, _ in prepare() }
         .onChange(of: preview.document?.token) { _, _ in documentChanged() }
         // A regeneration that lands while a job streams is deferred (the
@@ -107,6 +109,9 @@ private struct ProgramControlsBody<Middle: View>: View {
         }
         .sheet(item: $resumePlan) { plan in
             ResumePreambleSheet(machine: machine, plan: plan)
+        }
+        .sheet(isPresented: $showSequenceSheet) {
+            SequenceSheet(model: model, initial: model.machineSequence) { kinds in loadSequence(kinds) }
         }
     }
 
@@ -171,6 +176,13 @@ private struct ProgramControlsBody<Middle: View>: View {
         }
         .disabled(streamer.isActive)
         .help("Send a G-code file that is not part of this project")
+        if model.parameters.profile.isCarvera {
+            Button { showSequenceSheet = true } label: {
+                fileLabel("Send Layers…", systemImage: "square.stack.3d.up", iconOnly: iconOnly)
+            }
+            .disabled(streamer.isActive || preview.showsExternalFile)
+            .help("Several layers as one program: the Carvera runs them back to back and its tool changer swaps the bits between them (T<n> M6)")
+        }
         Spacer(minLength: 0)
         if preparing { ProgressView().controlSize(.small) }
         Button { saveSentProgram() } label: {
@@ -217,6 +229,11 @@ private struct ProgramControlsBody<Middle: View>: View {
             }
             ForEach(preview.document?.layers ?? []) { layer in
                 Text(layer.displayName).tag(LayerKind?.some(layer.id))
+            }
+            if let kind = selectedKind, kind.isStage {
+                // A multi-layer program is not in the document.
+                Divider()
+                Text(kind.displayName).tag(LayerKind?.some(kind))
             }
         }
         .frame(minWidth: 160, maxWidth: 280)
@@ -406,6 +423,30 @@ private struct ProgramControlsBody<Middle: View>: View {
         selectedKind = program.kind
     }
 
+    /// "Send stage … to Machine…" from the sidebar, or the dev hook: load
+    /// the layers as one program (an empty list opens the chooser).
+    private func consumeSequenceRequest() {
+        guard let kinds = model.requestedMachineSequence else { return }
+        model.requestedMachineSequence = nil
+        guard !streamer.isActive else { return }
+        if kinds.isEmpty { showSequenceSheet = true; return }
+        if let program, case .stage(let ref) = program.kind, ref.layers == kinds || Set(ref.layers) == Set(kinds) {
+            // Already loaded (the hook prepared it): adopt it as is.
+            applyBacklash = program.options.applyBacklash
+            clampZ = program.options.clampZAboveWork != nil
+            machine.applyHeightMap = program.options.heightMap != nil
+            model.machineSequence = kinds
+            selectedKind = program.kind
+            return
+        }
+        loadSequence(kinds)
+    }
+
+    private func loadSequence(_ kinds: [LayerKind]) {
+        model.machineSequence = kinds
+        prepareSequence(force: true)
+    }
+
     private func consumeRequest() {
         guard let kind = model.requestedMachineLayer else { return }
         model.requestedMachineLayer = nil
@@ -425,6 +466,11 @@ private struct ProgramControlsBody<Middle: View>: View {
             if selectedKind == .test { prepare() } else { selectedKind = .test }
             return
         }
+        if let selectedKind, selectedKind.isStage, !preview.showsExternalFile {
+            // The multi-layer program follows the regenerated files.
+            prepareSequence(force: true)
+            return
+        }
         if let selectedKind, layers.contains(where: { $0.id == selectedKind }) {
             prepare(force: true)
         } else if let loaded = program?.kind, layers.contains(where: { $0.id == loaded }) {
@@ -432,6 +478,41 @@ private struct ProgramControlsBody<Middle: View>: View {
             if selectedKind == loaded { prepare() }
         } else {
             selectedKind = layers.first?.id
+        }
+    }
+
+    /// Several layers as one program (`AppModel.prepareMachineSequence`);
+    /// the same options as a single layer, the side that of the layers.
+    private func prepareSequence(force: Bool) {
+        prepareTask?.cancel()
+        guard !streamer.isActive else { return }
+        let kinds = model.machineSequence
+        guard !kinds.isEmpty else { prepareError = nil; return }
+        let side: BoardSide = kinds.contains { $0.isBackSide } ? .back : .front
+        var options = ProgramOptions(applyBacklash: applyBacklash,
+                                     heightMap: machine.applyHeightMap ? model.heightMaps[side] : nil,
+                                     applyBelowZ: MachineSettings.heightMapApplyBelowZ,
+                                     frame: model.heightMapFrame(side: side),
+                                     clampZAboveWork: clampZ ? machine.clampZWork() : nil,
+                                     fitArcs: MachineSettings.fitArcs,
+                                     documentToken: preview.document?.token)
+        options.keepToolChanges = true
+        if !force, let program, program.kind.isStage, program.options == options {
+            preparing = false
+            prepareError = nil
+            return
+        }
+        preparing = true
+        prepareError = nil
+        prepareTask = Task {
+            do {
+                let program = try await model.prepareMachineSequence(kinds, options: options)
+                if selectedKind != program.kind { selectedKind = program.kind }
+            } catch is CancellationError {
+            } catch {
+                prepareError = error.localizedDescription
+            }
+            preparing = false
         }
     }
 
@@ -446,6 +527,7 @@ private struct ProgramControlsBody<Middle: View>: View {
     private func prepare(force: Bool = false) {
         prepareTask?.cancel()
         guard !streamer.isActive else { return }
+        if let kind = selectedKind, kind.isStage { prepareSequence(force: force); return }
         guard let kind = selectedKind, let layer = preview.document?.layers.first(where: { $0.id == kind }) else {
             prepareError = nil
             return
@@ -579,7 +661,7 @@ private struct ProgramControlsBody<Middle: View>: View {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = ["ngc", "nc", "gcode", "tap"].compactMap { UTType(filenameExtension: $0) } + [.plainText]
+        panel.allowedContentTypes = ["ngc", "nc", "cnc", "gcode", "tap"].compactMap { UTType(filenameExtension: $0) } + [.plainText]
         panel.message = String(localized: "Choose a G-code file to send (absolute metric G0/G1/G2/G3).")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         awaitingExternal = true

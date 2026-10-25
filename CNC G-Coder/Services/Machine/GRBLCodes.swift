@@ -8,8 +8,12 @@ import Foundation
 
 /// `error:n` descriptions.
 nonisolated enum GRBLError {
+    /// A textual error (Smoothieware / Carvera): the line itself says why.
+    static let textualCode = -1
+
     static func description(for code: Int) -> String {
         switch code {
+        case textualCode: "the controller refused the line (its message is in the console)."
         // Grbl 1.1 + FluidNC common table
         case 1: "Expected command letter: a G-code word has a letter and a value; the letter was not found."
         case 2: "Bad number format: missing value or invalid numeric format."
@@ -103,8 +107,12 @@ nonisolated enum GRBLError {
 
 /// `ALARM:n` descriptions and what each alarm means for the machine position.
 nonisolated enum GRBLAlarm {
+    /// A textual alarm (Carvera: `ALARM: Invalid tool`): the line says why.
+    static let textualCode = -1
+
     static func description(for code: Int) -> String {
         switch code {
+        case textualCode: "the controller halted — its message is in the console. Unlock ($X) and check the position."
         case 1: "Hard limit triggered. Machine position is probably lost from the sudden halt; re-homing is strongly recommended."
         case 2: "Soft limit: the motion target exceeds machine travel. Position retained; the alarm can be unlocked safely."
         case 3: "Reset while in motion. Machine position is probably lost; re-homing is strongly recommended."

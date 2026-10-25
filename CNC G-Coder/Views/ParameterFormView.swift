@@ -60,7 +60,7 @@ extension LayerKind {
         case .maskTop, .maskBottom: .mask
         case .silkTop, .silkBottom: .silk
         case .custom: .custom
-        case .test: nil
+        case .test, .stage: nil
         }
     }
 }
@@ -607,7 +607,8 @@ struct ParameterFormView: View {
         } footer: {
             Text("\(drillScopeText) Each drill file becomes its own program — change bits at the M0 pauses.")
         }
-        DrillBitsSection(params: params, library: model.tools, drill: drillFile, openLibrary: { openWindow(id: "tools") })
+        DrillBitsSection(params: params, library: model.tools, drill: drillFile, openLibrary: { openWindow(id: "tools") },
+                         context: model.suggestionContext(drill: drillFile))
         Section {
             millLargeHolesToggle
             if millLarge {
@@ -951,6 +952,7 @@ struct ParameterFormView: View {
         } footer: {
             Text("Back-side programs are always mirrored so they machine correctly after you turn the board over; the setting above only says which way you turn it. The origin is the same machine point on both sides: flip the board in place about its centre line and the back programs land where the front ones were — nothing is re-zeroed. Verify the flip direction with 'Un-mirror Back Side' in View Options: with the correct axis chosen, the un-mirrored back overlays the front.")
         }
+        MachineProfileSection(model: model, params: params)
         if !ToolLocator.isAppStoreBuild {
             Section {
                 Picker("Engine", selection: params.$engine) {
@@ -990,6 +992,18 @@ struct ParameterFormView: View {
             }
             .pickerStyle(.segmented)
             .help("Direction the cutter travels relative to its rotation, for isolation, outline, mask and legend milling. Any: whichever gives the shortest path. Climb: cleaner edges on rigid machines with little backlash. Conventional: safer on hobby machines with backlash. Fixing a direction switches off 2-opt path shortening, so programs get a little longer.")
+            // The machine profile and the measured backlash say which way.
+            if let suggested = ToolSuggestions.direction(profile: params.profile, backlash: .current),
+               suggested.value != params.millDirection {
+                Button {
+                    params.millDirection = suggested.value
+                } label: {
+                    Label(suggested.value == "climb" ? "Suggested: Climb" : "Suggested: Conventional", systemImage: "sparkles")
+                        .font(.caption)
+                }
+                .buttonStyle(.link)
+                .help(suggested.reason)
+            }
         } header: {
             Text("Milling direction")
         } footer: {
@@ -1079,6 +1093,28 @@ struct ParameterFormView: View {
                 .help(model.machine.isStreaming
                       ? "A program is already being sent — stop it in the Machine panel first."
                       : "Stream this program to the connected controller from the Machine panel: connect, zero, probe, then Send.")
+                if params.profile.isCarvera, let plan = model.machinePlan() {
+                    // Several layers in one program for the tool changer: a
+                    // whole stage, or a hand-picked set (the Program tab's chooser).
+                    Menu {
+                        ForEach(plan.stages) { stage in
+                            Button("Stage \(stage.stage.code) · \(stage.title)") {
+                                model.requestedMachineSequence = stage.programs.map(\.layer)
+                                model.showMachineInspector = true
+                            }
+                        }
+                        Divider()
+                        Button("Choose Layers…") {
+                            model.requestedMachineSequence = []
+                            model.showMachineInspector = true
+                        }
+                    } label: {
+                        Label("Send Stage to Machine…", systemImage: "square.stack.3d.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(stale || model.machine.isStreaming)
+                    .help("Send several layers as one program: the Carvera runs them back to back and its tool changer swaps the bits between them (T<n> M6). A stage is everything between two moments you must touch the board.")
+                }
                 LabeledContent("X0 Y0 at") {
                     Button(originSummary) { select(section: .setup) }
                         .buttonStyle(.link)
@@ -1185,7 +1221,9 @@ struct ParameterFormView: View {
     private func toolPicker(_ section: SettingsSection) -> some View {
         ToolPickerRow(section: section, params: params, library: model.tools,
                       drill: section.isDrilling ? drillFile : nil,
-                      openLibrary: { openWindow(id: "tools") })
+                      openLibrary: { openWindow(id: "tools") },
+                      setMaterial: model.setMaterial,
+                      suggestions: model.suggestedTools(for: section, drill: drillFile))
     }
 
     private func bitShapePicker(_ shape: Binding<String>) -> some View {
@@ -1279,12 +1317,34 @@ private struct ToolPickerRow: View {
     /// Drilling groups: the drill file whose settings the tool fills in.
     var drill: String? = nil
     let openLibrary: () -> Void
+    let setMaterial: (String) -> Void
+    /// The best bits for this group (AppModel.suggestedTools).
+    var suggestions: [ToolSuggestions.Suggestion] = []
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
 
     var body: some View {
         let current = library.tool(id: params.toolID(for: section, drill: drill))
         let edited = current.map { !params.matches($0, for: section, drill: drill) } ?? false
+        VStack(alignment: .trailing, spacing: 2) {
+            toolRow(current: current, edited: edited)
+            // No tool picked yet: offer the best one in a word.
+            if current == nil, let best = suggestions.first {
+                Button {
+                    params.applyTool(best.tool, to: section, drill: drill)
+                } label: {
+                    Label("Suggested: \(best.tool.name)", systemImage: "sparkles")
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .buttonStyle(.link)
+                .help("\(best.reason). Click to use this bit's settings; the Tool menu lists more.")
+            }
+        }
+    }
+
+    private func toolRow(current: MachineTool?, edited: Bool) -> some View {
         LabeledContent("Tool") {
             HStack(spacing: 6) {
                 if let current, edited {
@@ -1295,24 +1355,15 @@ private struct ToolPickerRow: View {
                         .help("These values no longer match \"\(current.name)\" in the library. Click to restore the tool's values.")
                 }
                 Menu {
-                    let choices = library.tools(for: section)
-                    if choices.isEmpty {
-                        Text("No \(section.title.lowercased()) tools in the library")
-                    }
-                    ForEach(choices) { tool in
-                        Toggle(isOn: Binding(
-                            get: { current?.id == tool.id },
-                            set: { _ in params.applyTool(tool, to: section, drill: drill) }
-                        )) {
-                            Text("\(tool.name)  ·  \(detail(tool))")
-                        }
-                    }
-                    Divider()
-                    Toggle("Custom", isOn: Binding(
-                        get: { current == nil },
-                        set: { _ in params.clearToolID(for: section, drill: drill) }
-                    ))
-                    Button("Edit Tool Library…", action: openLibrary)
+                    ToolMenuContent(
+                        library: library, choices: library.tools(for: section), currentID: current?.id,
+                        emptyText: String(localized: "No \(section.title.lowercased()) tools in the library"),
+                        material: params.material, setMaterial: setMaterial, suggestions: suggestions,
+                        rack: params.profile.isCarvera ? library.rackChoices(in: library.tools) : [],   // every loaded slot, whatever its use
+                        detail: detail,
+                        pick: { params.applyTool($0, to: section, drill: drill) },
+                        clear: { params.clearToolID(for: section, drill: drill) },
+                        openLibrary: openLibrary)
                 } label: {
                     Text(current?.name ?? String(localized: "Custom"))
                         .lineLimit(1)
@@ -1331,52 +1382,267 @@ private struct ToolPickerRow: View {
     }
 }
 
-/// The drill bits you own. Checked bits replace exact hole sizes: every hole
-/// within a bit's range is drilled with it, so a job needs only the bits on
-/// hand (pcb2gcode --drills-available).
+/// The items of a tool-picking menu: the choices, as submenus per library
+/// group once a library has been imported, the Material the feeds follow,
+/// Custom, and the way to the library.
+struct ToolMenuContent: View {
+    @ObservedObject var library: ToolLibrary
+    let choices: [MachineTool]
+    let currentID: UUID?
+    let emptyText: String
+    /// The job's material and how to change it (AppModel.setMaterial).
+    let material: String
+    let setMaterial: (String) -> Void
+    /// The best bits for this group, shown first (ToolSuggestions).
+    var suggestions: [ToolSuggestions.Suggestion] = []
+    /// The machine's tool changer, slots whose bit fits this group (Carvera).
+    var rack: [ToolLibrary.RackChoice] = []
+    let detail: (MachineTool) -> String
+    let pick: (MachineTool) -> Void
+    let clear: () -> Void
+    let openLibrary: () -> Void
+
+    var body: some View {
+        if choices.isEmpty { Text(emptyText) }
+        if !rack.isEmpty {
+            Section("Tool changer") {
+                ForEach(rack) { entry in
+                    Toggle(isOn: Binding(get: { currentID == entry.tool.id }, set: { _ in pick(entry.tool) })) {
+                        Text("T\(entry.slot)  ·  \(entry.tool.name)  ·  \(detail(entry.tool))")
+                    }
+                }
+            }
+            Divider()
+        }
+        if !suggestions.isEmpty {
+            Section("Suggested") {
+                ForEach(suggestions) { suggestion in
+                    Toggle(isOn: Binding(get: { currentID == suggestion.tool.id }, set: { _ in pick(suggestion.tool) })) {
+                        Text("\(suggestion.tool.name)  ·  \(detail(suggestion.tool)) — \(suggestion.reason)")
+                    }
+                }
+            }
+            Divider()
+        }
+        let groups = ToolMenuContent.groups(of: choices)
+        if groups.count <= 1 {
+            toggles(choices)
+        } else {
+            toggles(choices.filter { $0.group.isEmpty })
+            ForEach(groups.filter { !$0.isEmpty }, id: \.self) { group in
+                Menu(group) { toggles(choices.filter { $0.group == group }) }
+            }
+        }
+        Divider()
+        if !library.materials.isEmpty {
+            Menu("Material: \(material)") {
+                ForEach(library.materials, id: \.self) { option in
+                    Toggle(isOn: Binding(
+                        get: { material.caseInsensitiveCompare(option) == .orderedSame },
+                        set: { _ in setMaterial(option) }
+                    )) { Text(option) }
+                }
+            }
+        }
+        Toggle("Custom", isOn: Binding(get: { currentID == nil }, set: { _ in clear() }))
+        Button("Edit Tool Library…", action: openLibrary)
+    }
+
+    private func toggles(_ tools: [MachineTool]) -> some View {
+        ForEach(tools) { tool in
+            Toggle(isOn: Binding(get: { currentID == tool.id }, set: { _ in pick(tool) })) {
+                Text("\(tool.name)  ·  \(detail(tool))")
+            }
+        }
+    }
+
+    /// Distinct groups, hand-made tools ("") first.
+    static func groups(of tools: [MachineTool]) -> [String] {
+        var seen: [String] = []
+        for tool in tools where !seen.contains(tool.group) { seen.append(tool.group) }
+        return seen.sorted { a, b in
+            if a.isEmpty != b.isEmpty { return a.isEmpty }
+            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+        }
+    }
+}
+
+/// "Bits on hand" of a drilling group: one row per hole size of the drill
+/// file — the designed size, and the library drill that drills it. The
+/// menu offers the drills whose range covers the size (closest at or above
+/// first), the changer's slot beside the ones loaded, and "designed size"
+/// to drill without a bit. Choosing a bit checks it in `drillBitIDs` (the
+/// engines map holes onto checked bits by range, exactly as before);
+/// nothing else of the library is listed.
 private struct DrillBitsSection: View {
     @ObservedObject var params: ParametersStore
     @ObservedObject var library: ToolLibrary
     /// The drill file these bits are for (nil: the defaults).
     let drill: String?
     let openLibrary: () -> Void
+    /// The file's holes (with the hole allowance) and the tolerance.
+    var context = ToolSuggestions.Context()
 
     @AppStorage(SettingsKeys.unitSystem) private var unitRaw = UnitSystem.metric.rawValue
 
     var body: some View {
         let units = UnitSystem(rawValue: unitRaw) ?? .metric
         let tolerance = Double(params.drillValue("drillBitTolerance", file: drill).trimmingCharacters(in: .whitespaces)) ?? 0.1
+        let allowance = Double(params.drillValue("drillHoleAllowance", file: drill).trimmingCharacters(in: .whitespaces)) ?? 0
         let onHand = params.drillBitIDSet(file: drill)
+        let checked = library.drills.filter { onHand.contains($0.id.uuidString) }
+        let sizes = Array(Set(context.holeSizes.map { ($0 * 1000).rounded() / 1000 })).sorted()
+            .filter { size in context.millFrom.map { size < $0 - 1e-6 } ?? true }
+        let matching = ToolSuggestions.drills(covering: context.holeSizes, tools: library.drills, context: context)
         Section {
             if library.drills.isEmpty {
                 Button("Add drill bits in the Tool Library…", action: openLibrary)
                     .buttonStyle(.link)
-            }
-            ForEach(library.drills) { bit in
-                let range = bit.drillRange(defaultTolerance: tolerance)
-                Toggle(isOn: Binding(
-                    get: { onHand.contains(bit.id.uuidString) },
-                    set: { params.setDrillBit(bit.id, onHand: $0, file: drill) }
-                )) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(bit.name)
-                        Text("holes \(units.length(range.lowerBound))–\(units.length(range.upperBound)) \(units.lengthSymbol)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            } else if sizes.isEmpty {
+                Text(drill == nil ? "No drill files in the project yet." : "No holes to drill in this file.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Button {
+                        for bit in matching.bits { params.setDrillBit(bit.id, onHand: true, file: drill) }
+                    } label: {
+                        Label("Pick bits for every hole", systemImage: "sparkles")
                     }
+                    .buttonStyle(.link)
+                    .disabled(matching.bits.isEmpty)
+                    .help("For every hole size, picks the library drill whose range covers it — the closest one at or above the size.")
+                    if params.profile.isCarvera, !library.rackChoices(in: library.drills).isEmpty {
+                        Button {
+                            for choice in library.rackChoices(in: library.drills) { params.setDrillBit(choice.tool.id, onHand: true, file: drill) }
+                        } label: {
+                            Label("Use the changer's drills", systemImage: "square.grid.3x3.square")
+                        }
+                        .buttonStyle(.link)
+                        .help("Lets the drills sitting in the machine's tool changer (Tool Changer…) take the holes they cover.")
+                    }
+                    Spacer(minLength: 0)
                 }
-            }
-            if !onHand.isEmpty {
-                ParamRow("Bit tolerance", value: params.drillBinding("drillBitTolerance", file: drill), kind: .length,
-                         help: "For bits without a hole range of their own in the library: the bit drills designed holes up to this much smaller or larger than itself.")
+                ForEach(sizes, id: \.self) { size in
+                    holeRow(size: size, allowance: allowance, checked: checked, tolerance: tolerance, units: units)
+                }
+                if !onHand.isEmpty {
+                    ParamRow("Bit tolerance", value: params.drillBinding("drillBitTolerance", file: drill), kind: .length,
+                             help: "For bits without a hole range of their own in the library: the bit drills designed holes up to this much smaller or larger than itself.")
+                }
             }
         } header: {
             Text("Bits on hand")
         } footer: {
             Text(onHand.isEmpty
-                 ? "None checked: every hole in this file is drilled at its designed size, one bit per size."
-                 : "Holes in this file are drilled with the checked bit whose range covers them. Holes no bit covers keep their designed size — the Log names them.")
+                 ? "Every hole is drilled at its designed size, one bit per size, until a bit is picked for it."
+                 : "Each hole size is drilled with the bit picked for it; the program changes bits between sizes. Holes drilled at their designed size keep it — the Log names them.")
         }
+    }
+
+    /// One hole size: its designed diameter, how many holes, and the bit.
+    private func holeRow(size: Double, allowance: Double, checked: [MachineTool], tolerance: Double, units: UnitSystem) -> some View {
+        let designed = max(0, size - allowance)
+        let current = ToolSuggestions.bestDrill(for: size, among: checked, tolerance: tolerance)
+        let fits = ToolSuggestions.drillsCovering(size, among: library.drills, tolerance: tolerance)
+        return LabeledContent {
+            Menu {
+                if fits.isEmpty {
+                    Text("No library drill covers Ø \(units.length(designed)) \(units.lengthSymbol)")
+                } else {
+                    Section("Fits this hole") {
+                        ForEach(fits) { bit in
+                            Toggle(isOn: Binding(get: { current?.id == bit.id }, set: { _ in choose(bit, for: size, checked: checked, tolerance: tolerance) })) {
+                                Text(bitLabel(bit, tolerance: tolerance, units: units))
+                            }
+                        }
+                    }
+                }
+                Toggle("Drill at the designed size", isOn: Binding(get: { current == nil }, set: { _ in choose(nil, for: size, checked: checked, tolerance: tolerance) }))
+                Divider()
+                let others = library.drills.filter { drill in !fits.contains(where: { $0.id == drill.id }) }
+                if !others.isEmpty {
+                    Menu("Other drills") {
+                        let groups = ToolMenuContent.groups(of: others)
+                        if groups.count <= 1 {
+                            ForEach(others) { bit in
+                                Button(bitLabel(bit, tolerance: tolerance, units: units)) { choose(bit, for: size, checked: checked, tolerance: tolerance) }
+                            }
+                        } else {
+                            ForEach(groups, id: \.self) { group in
+                                Menu(group.isEmpty ? String(localized: "My drills") : group) {
+                                    ForEach(others.filter { $0.group == group }) { bit in
+                                        Button(bitLabel(bit, tolerance: tolerance, units: units)) { choose(bit, for: size, checked: checked, tolerance: tolerance) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Button("Edit Tool Library…", action: openLibrary)
+            } label: {
+                Text(current.map { $0.name } ?? String(localized: "designed size"))
+                    .foregroundStyle(current == nil ? Color.secondary : Color.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .fixedSize()
+            .help(current.map { "\($0.name) — \(rangeText($0, tolerance: tolerance, units: units))" + (library.rackSlot(of: $0).map { "; in the changer at T\($0)" } ?? "") }
+                  ?? "No bit picked: this size is drilled with a bit of exactly this diameter (allowance included). Pick the drill you own that covers it.")
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Ø \(units.length(designed)) \(units.lengthSymbol)")
+                if let current, let slot = library.rackSlot(of: current) {
+                    Text("T\(slot) in the changer")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if current == nil, let near = nearestChecked(size: size, checked: checked, tolerance: tolerance) {
+                    // The bit the user meant does not reach the enlarged hole.
+                    let range = near.drillRange(defaultTolerance: tolerance)
+                    Text("\(near.name) covers \(units.length(range.lowerBound))–\(units.length(range.upperBound)), hole is \(units.length(size)) \(units.lengthSymbol)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if allowance > 0 {
+                    Text("drilled Ø \(units.length(size)) \(units.lengthSymbol)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// The checked drill closest to a hole no checked drill covers — the
+    /// one the user most likely meant (with Hole tolerance 0.125 a 1.0 mm
+    /// drill misses the 1.125 mm hole it was picked for).
+    private func nearestChecked(size: Double, checked: [MachineTool], tolerance: Double) -> MachineTool? {
+        checked.filter { abs($0.diameter - size) <= max(0.3, tolerance * 3) }
+            .min { abs($0.diameter - size) < abs($1.diameter - size) }
+    }
+
+    /// Checks `bit` for this hole size (nil = designed size) and unchecks
+    /// the bit that served the size before, unless another size needs it.
+    private func choose(_ bit: MachineTool?, for size: Double, checked: [MachineTool], tolerance: Double) {
+        let previous = ToolSuggestions.bestDrill(for: size, among: checked, tolerance: tolerance)
+        if let bit { params.setDrillBit(bit.id, onHand: true, file: drill) }
+        guard let previous, previous.id != bit?.id else { return }
+        let otherSizes = Set(context.holeSizes.map { ($0 * 1000).rounded() / 1000 }).filter { abs($0 - size) > 1e-6 }
+        let stillNeeded = otherSizes.contains { other in
+            ToolSuggestions.bestDrill(for: other, among: checked, tolerance: tolerance)?.id == previous.id
+        }
+        if !stillNeeded { params.setDrillBit(previous.id, onHand: false, file: drill) }
+    }
+
+    private func bitLabel(_ bit: MachineTool, tolerance: Double, units: UnitSystem) -> String {
+        var text = "\(bit.name)  ·  \(rangeText(bit, tolerance: tolerance, units: units))"
+        if let slot = library.rackSlot(of: bit) { text += "  ·  T\(slot)" }
+        return text
+    }
+
+    private func rangeText(_ bit: MachineTool, tolerance: Double, units: UnitSystem) -> String {
+        let range = bit.drillRange(defaultTolerance: tolerance)
+        return String(localized: "holes \(units.length(range.lowerBound))–\(units.length(range.upperBound)) \(units.lengthSymbol)")
     }
 }
 
@@ -1595,5 +1861,160 @@ struct ParamRow: View {
         }
         .onChange(of: value) { if !focused { text = display(value) } }
         .onChange(of: unitRaw) { text = display(value) }
+    }
+}
+
+/// Machine setup → Machine: which machine the programs are written for, and
+/// for the Carvera profiles the tool rack the job needs — one slot per
+/// distinct bit, numbered automatically in machining order, each fixable by
+/// hand — plus the stage files the preview would produce.
+private struct MachineProfileSection: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var params: ParametersStore
+
+    var body: some View {
+        let profile = params.profile
+        Section {
+            Picker("Machine", selection: params.$machineProfile) {
+                ForEach(MachineProfile.all) { option in
+                    Text(option.name).tag(option.id)
+                }
+            }
+            .help("The controller the programs are written for. Generic GRBL / FluidNC: one .ngc per layer, tool changes pause the program (M6 / M0) for a manual swap. Makera Carvera: one .cnc file per machine session, tool changes as T<n> M6 for the tool changer (the firmware does not implement M0), rack numbers shared by every file of the job. Saved with the project and in presets. Picking a Carvera also sets the milling direction to climb when it was Any.")
+            .onChange(of: params.machineProfile) { _, _ in
+                // A rigid machine with no direction chosen yet: climb.
+                if params.profile.isCarvera, params.millDirection == "any",
+                   let suggested = ToolSuggestions.direction(profile: params.profile, backlash: .current) {
+                    params.millDirection = suggested.value
+                    model.appendLog("Milling direction set to \(suggested.value) for the \(params.profile.name).\n")
+                }
+            }
+            materialRow
+            if profile.isCarvera {
+                rack
+            }
+        } header: {
+            Text("Machine")
+        } footer: {
+            Text(profile.summary)
+        }
+    }
+
+    /// The job's material: the row the library tools' presets follow.
+    @ViewBuilder
+    private var materialRow: some View {
+        let materials = model.tools.materials
+        if materials.isEmpty {
+            LabeledContent("Material") {
+                Text(params.material)
+                    .foregroundStyle(.secondary)
+            }
+            .help("The stock of this job. It picks the feeds of library tools that carry cutting data per material — none do yet: import a Fusion / Makera tool library (.tools or .csv) in the Tool Library. Saved with the project.")
+        } else {
+            Picker("Material", selection: Binding(get: { params.material }, set: { model.setMaterial($0) })) {
+                ForEach(materials, id: \.self) { material in
+                    Text(material).tag(material)
+                }
+                if !materials.contains(where: { $0.caseInsensitiveCompare(params.material) == .orderedSame }) {
+                    Text(params.material).tag(params.material)
+                }
+            }
+            .help("The stock of this job. Library tools with a preset for it (Makera's libraries carry one row per material) apply that row's feeds, plunge, spindle and depth per pass; changing it re-applies every layer and drill file set from such a tool, the way Makera's library fills them in. Saved with the project and in presets.")
+        }
+    }
+
+    @State private var showToolChanger = false
+
+    @ViewBuilder
+    private var rack: some View {
+        if let plan = model.machinePlan() {
+            let maxPick = max(plan.slotCount, params.profile.toolChange.automaticSlots ?? 0, 8)
+            if params.profile.toolChange.automaticSlots != nil {
+                Button {
+                    showToolChanger = true
+                } label: {
+                    Label(model.tools.rack.isEmpty ? "Tool Changer…" : "Tool Changer (\(model.tools.rack.count) loaded)…", systemImage: "square.grid.3x3.square")
+                }
+                .help("What sits in the machine's changer, slot by slot. Bits loaded there keep their slot in every job, and the Tool menus list them first.")
+                .sheet(isPresented: $showToolChanger) {
+                    ToolChangerView(model: model, params: params)
+                }
+                // Dev hook: `-debugToolChanger 1` opens the sheet for a snapshot.
+                .onAppear { if UserDefaults.standard.bool(forKey: "debugToolChanger") { showToolChanger = true } }
+            }
+            ForEach(plan.rack) { entry in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Picker("", selection: Binding(
+                        get: { entry.slot },
+                        set: { params.rackOverrides[entry.bit.key] = $0 }
+                    )) {
+                        ForEach(1...maxPick, id: \.self) { slot in
+                            Text("T\(slot)").tag(slot)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 66)
+                    .help("The rack slot this bit goes in. Pick another number to fix it; the rest are renumbered around it.")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.bit.label)
+                            .lineLimit(1)
+                        Text(entry.programs.joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                    if entry.loaded {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                            .help("Loaded in the tool changer at this slot")
+                    } else if !model.tools.rack.isEmpty {
+                        Image(systemName: "circle.dashed")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .help("Not in the tool changer yet — load it in this slot, or assign it under Tool Changer…")
+                    }
+                    if entry.fixed {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("Fixed by hand")
+                    }
+                }
+            }
+            ForEach(plan.warnings, id: \.self) { warning in
+                WarningPill(text: warning, color: .orange, icon: "exclamationmark.triangle.fill")
+            }
+            ForEach(plan.notes, id: \.self) { note in
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !params.rackOverrides.isEmpty {
+                Button("Number the rack automatically") { params.rackOverrides = [:] }
+                    .buttonStyle(.link)
+                    .help("Forgets the slots fixed by hand; bits are numbered in the order the stages use them.")
+            }
+            ForEach(plan.stages) { stage in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(stage.stage.code)
+                        .font(.caption.weight(.semibold).monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, alignment: .leading)
+                    Text(stage.title)
+                        .font(.caption)
+                    Spacer()
+                    Text(stage.slots.map { "T\($0)" }.joined(separator: " "))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                .help("\(stage.fileName) — \(stage.stage.before)")
+            }
+        } else {
+            Text("The rack and the stage files appear once the preview has run.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }

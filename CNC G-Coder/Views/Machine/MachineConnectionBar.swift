@@ -9,6 +9,7 @@ struct MachineConnectionBar: View {
     @Bindable var machine: MachineController
 
     @AppStorage(MachineSettings.Keys.transport) private var transport = MachineSettings.Defaults.transport
+    @AppStorage(MachineSettings.Keys.controller) private var controller = MachineSettings.ControllerFamily.grbl.rawValue
     @AppStorage(MachineSettings.Keys.host) private var host = MachineSettings.Defaults.host
     @AppStorage(MachineSettings.Keys.port) private var port = MachineSettings.Defaults.port
     @AppStorage(MachineSettings.Keys.serialPath) private var serialPath = MachineSettings.Defaults.serialPath
@@ -17,13 +18,19 @@ struct MachineConnectionBar: View {
 
     @State private var ports: [String] = []
     @State private var confirmDisconnect = false
+    /// Carvera discovery (UDP 3333): in progress, and what answered.
+    @State private var discovering = false
+    @State private var discovered: [CarveraDiscovery.Found] = []
+    @State private var showDiscovered = false
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 connectionRows
                 if kind == .simulator {
-                    Text("Simulated FluidNC with real-time motion. A PCB of set thickness lies on the bed (position and thickness in Settings → Machine) and work zero is preset on its top corner: the probe finds the board over it and the bed next to it.")
+                    Text(family == .carvera
+                         ? "Simulated Makera Carvera (Smoothieware rules: T<n> M6 runs the tool changer, $J jogs, no M0) with real-time motion. A PCB of set thickness lies on the bed (Settings → Machine) and work zero is preset on its top corner."
+                         : "Simulated FluidNC with real-time motion. A PCB of set thickness lies on the bed (position and thickness in Settings → Machine) and work zero is preset on its top corner: the probe finds the board over it and the bed next to it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -55,6 +62,7 @@ struct MachineConnectionBar: View {
     private var connectionRows: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {
+                controllerPicker
                 transportPicker
                 endpointFields
                 connectButton
@@ -64,13 +72,17 @@ struct MachineConnectionBar: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
+                    controllerPicker
                     transportPicker
                     endpointFields
                 }
                 stateRow
             }
             VStack(alignment: .leading, spacing: 8) {
-                transportPicker
+                HStack(spacing: 8) {
+                    controllerPicker
+                    transportPicker
+                }
                 HStack(spacing: 8) { endpointFields }
                 stateRow
             }
@@ -79,12 +91,32 @@ struct MachineConnectionBar: View {
     }
 
     private var kind: TransportKind { TransportKind(rawValue: transport) ?? .tcp }
+    private var family: MachineSettings.ControllerFamily { MachineSettings.ControllerFamily(rawValue: controller) ?? .grbl }
     /// The simulator entry is a setting; a stored "simulator" transport is
     /// shown regardless so nobody is stranded on an entry that disappeared.
     private var simulatorOffered: Bool { showSimulator || kind == .simulator }
     private var isTCP: Bool { kind == .tcp }
     private var editable: Bool { machine.phase == .disconnected }
     private var isSimulator: Bool { machine.isConnected && machine.transportKind == .simulator }
+
+    /// GRBL / FluidNC or Makera Carvera: the firmware family decides the
+    /// port, the framing and the dialect; switching it moves the port to
+    /// the family's default when it still has the other one's.
+    private var controllerPicker: some View {
+        Picker("", selection: $controller) {
+            ForEach(MachineSettings.ControllerFamily.allCases, id: \.rawValue) { option in
+                Text(option.title).tag(option.rawValue)
+            }
+        }
+        .labelsHidden()
+        .fixedSize()
+        .disabled(!editable)
+        .help("Which firmware the link talks to. GRBL / FluidNC: telnet or USB, $J= jogs, M0 pauses. Makera Carvera: TCP port 2222 or USB, plain-text or Makera's framed protocol (detected on connect), $J jogs, T<n> M6 for the tool changer.")
+        .onChange(of: controller) { old, new in
+            let before = MachineSettings.ControllerFamily(rawValue: old) ?? .grbl
+            if port == before.defaultPort { port = family.defaultPort }
+        }
+    }
 
     private var transportPicker: some View {
         Picker("", selection: $transport) {
@@ -99,8 +131,8 @@ struct MachineConnectionBar: View {
         .fixedSize()
         .disabled(!editable)
         .help(simulatorOffered
-              ? "Telnet over the LAN (port 23), the USB serial port, or the built-in FluidNC simulator"
-              : "Telnet over the LAN (port 23) or the USB serial port")
+              ? "Over the LAN, the USB serial port, or the built-in simulator (FluidNC or Carvera, after the controller picked on the left)"
+              : "Over the LAN or the USB serial port")
     }
 
     private var stateRow: some View {
@@ -129,7 +161,41 @@ struct MachineConnectionBar: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 56)
                 .disabled(!editable)
-                .help("TCP port of the telnet service — 23 on FluidNC")
+                .help(family == .carvera ? "TCP port of the Carvera — 2222" : "TCP port of the telnet service — 23 on FluidNC")
+            if family == .carvera {
+                Button {
+                    Task { await discoverCarveras() }
+                } label: {
+                    if discovering { ProgressView().controlSize(.small) } else { Image(systemName: "magnifyingglass") }
+                }
+                .disabled(!editable || discovering)
+                .help("Listens three seconds for Carveras announcing themselves on the LAN (UDP port 3333) and fills in the host.")
+                .popover(isPresented: $showDiscovered) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if discovered.isEmpty {
+                            Text("No Carvera announced itself. The machine must be on the same Wi‑Fi, and macOS must allow the app on the local network.")
+                                .frame(maxWidth: 280)
+                        } else {
+                            ForEach(discovered) { found in
+                                Button {
+                                    host = found.host
+                                    port = found.port
+                                    showDiscovered = false
+                                } label: {
+                                    HStack {
+                                        Text(found.name)
+                                        Spacer()
+                                        Text(found.host).foregroundStyle(.secondary)
+                                        if found.busy { Text("busy").foregroundStyle(.orange) }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .padding(12)
+                }
+            }
         } else {
             Picker("", selection: $serialPath) {
                 if serialPath.isEmpty || !ports.contains(serialPath) {
@@ -289,6 +355,13 @@ struct MachineConnectionBar: View {
         case .tcp: await machine.connect(tcpHost: host.trimmingCharacters(in: .whitespaces), port: UInt16(clamping: port))
         case .serial: await machine.connect(serialPath: serialPath, baud: baud)
         }
+    }
+
+    private func discoverCarveras() async {
+        discovering = true
+        discovered = await CarveraDiscovery.discover(seconds: 3)
+        discovering = false
+        showDiscovered = true
     }
 
     private func refreshPorts() {

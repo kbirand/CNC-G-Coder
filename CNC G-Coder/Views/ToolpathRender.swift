@@ -88,6 +88,7 @@ extension LayerKind {
             // Warm hues no generated layer uses, one per drawn layer.
             Color(hue: (0.0 + 0.11 * Double(ref.index)).truncatingRemainder(dividingBy: 1), saturation: 0.85, brightness: 1)
         case .test: .mint
+        case .stage: .indigo
         }
     }
 }

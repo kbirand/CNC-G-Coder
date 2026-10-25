@@ -66,6 +66,7 @@ extension AppModel {
     /// Copies a library tool's cutting data into a drawn layer.
     func applyTool(_ tool: MachineTool, toCustomLayer id: UUID) {
         guard var layer = customLayers.first(where: { $0.id == id }) else { return }
+        let tool = tool.applying(material: parameters.material)
         layer.toolID = tool.id.uuidString
         layer.toolDiameter = tool.shape == .vBit ? tool.effectiveDiameter(atDepth: tool.cutDepth) : tool.diameter
         layer.cutDepth = tool.cutDepth

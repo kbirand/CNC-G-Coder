@@ -13,6 +13,7 @@ struct MachineControls: View {
     @AppStorage(MachineSettings.Keys.spindleMax) private var spindleMax = MachineSettings.Defaults.spindleMax
 
     @State private var rpmText = ""
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -20,6 +21,7 @@ struct MachineControls: View {
             primaryRow
             holdRow
             spindleRow
+            if machine.isCarvera { toolRow }
         }
         .controlSize(.small)
         .machinePanel()
@@ -96,6 +98,42 @@ struct MachineControls: View {
             Spacer(minLength: 0)
         }
         .disabled(!machine.manualControlsEnabled)
+    }
+
+    /// Carvera: the tool the status reports (`T:`), named from the rack,
+    /// and a manual `T<n> M6` to any slot of the changer.
+    private var toolRow: some View {
+        let slots = max(model.parameters.profile.toolChange.automaticSlots ?? 6, model.tools.rack.keys.max() ?? 0)
+        return HStack(spacing: 6) {
+            Menu {
+                ForEach(1...max(slots, 1), id: \.self) { slot in
+                    Button(rackLabel(slot)) { Task { try? await machine.send("T\(slot) M6") } }
+                        .disabled(machine.status.tool == slot)
+                }
+                Divider()
+                Button("Probe (T0)") { Task { try? await machine.send("T0 M6") } }
+                    .disabled(machine.status.tool == 0)
+            } label: {
+                Label(currentToolText, systemImage: "wrench.and.screwdriver")
+            }
+            .fixedSize()
+            .disabled(!machine.manualControlsEnabled || machine.machineState != .idle)
+            .help("The bit in the spindle, as the machine reports it. Pick a slot to run a tool change now (T<n> M6: the changer parks the current bit, picks the new one and probes its length).")
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var currentToolText: String {
+        guard let tool = machine.status.tool else { return String(localized: "Tool: —") }
+        switch tool {
+        case -1: return String(localized: "Tool: none")
+        case 0: return String(localized: "Tool: T0 probe")
+        default: return "T\(tool)" + (model.tools.rackTool(slot: tool).map { " · \($0.name)" } ?? "")
+        }
+    }
+
+    private func rackLabel(_ slot: Int) -> String {
+        "T\(slot)" + (model.tools.rackTool(slot: slot).map { " · \($0.name)" } ?? String(localized: " · empty"))
     }
 
     private var spindleOn: Bool {

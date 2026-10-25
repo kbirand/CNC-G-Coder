@@ -138,6 +138,12 @@ nonisolated enum MachineState: Equatable, Sendable {
 
     /// `Hold:0` — the machine has come to rest and may be resumed.
     var isHoldComplete: Bool { self == .hold(0) }
+
+    /// Carvera: parked at the tool-change position, waiting for the
+    /// changer or the operator's confirmation.
+    var isToolChange: Bool { self == .other("Tool") }
+    /// Carvera: a suspended program (M600 / `suspend`).
+    var isCarveraPause: Bool { self == .other("Pause") || self == .other("Wait") }
 }
 
 // MARK: - Status report
@@ -175,6 +181,19 @@ nonisolated struct GRBLStatus: Equatable, Sendable {
     /// FluidNC `SD:pct,path` while a card job runs.
     var sdPercent: Double?
     var sdPath: String?
+    /// Carvera `T:tool,tlo,target,collet`: the tool in the spindle (0 = the
+    /// wireless probe, −1 = empty), its length offset, the tool being fetched.
+    var tool: Int?
+    var toolLengthOffset: Double?
+    var targetTool: Int?
+    /// Carvera `A:` — the tool changer's state (0 = idle).
+    var atcState: Int?
+    /// Carvera `P:lines,pct,secs,playing` while the firmware plays a file.
+    var playedLines: Int?
+    var playedPercent: Int?
+    var isPlaying: Bool?
+    /// Carvera `H:` — why it halted.
+    var haltReason: Int?
 
     /// Whether any position has been received.
     var hasPosition: Bool { machinePosition != nil || workPosition != nil }
@@ -221,7 +240,33 @@ nonisolated struct GRBLStatus: Equatable, Sendable {
                     status.spindleSpeed = numbers[1]
                 }
             case "F":
+                // GRBL `F:feed`; Carvera `F:current,target,override%`.
                 if let feed = numbers.first { status.feedRate = feed }
+                if numbers.count >= 3 {
+                    var ov = status.overrides ?? GRBLOverrides(feed: 100, rapid: 100, spindle: 100)
+                    ov.feed = Int(numbers[2])
+                    status.overrides = ov
+                }
+            case "S":
+                // Carvera `S:current,target,override%,vacuum,…`.
+                if let rpm = numbers.first { status.spindleSpeed = rpm }
+                if numbers.count >= 3 {
+                    var ov = status.overrides ?? GRBLOverrides(feed: 100, rapid: 100, spindle: 100)
+                    ov.spindle = Int(numbers[2])
+                    status.overrides = ov
+                }
+            case "T":
+                if let tool = numbers.first { status.tool = Int(tool) }
+                if numbers.count >= 2 { status.toolLengthOffset = numbers[1] }
+                if numbers.count >= 3 { status.targetTool = Int(numbers[2]) }
+            case "P":
+                if numbers.count >= 2 {
+                    status.playedLines = Int(numbers[0])
+                    status.playedPercent = Int(numbers[1])
+                }
+                if numbers.count >= 4 { status.isPlaying = numbers[3] != 0 }
+            case "H":
+                status.haltReason = numbers.first.map { Int($0) }
             case "Bf":
                 if numbers.count >= 2 {
                     status.plannerBlocks = Int(numbers[0])
@@ -234,7 +279,9 @@ nonisolated struct GRBLStatus: Equatable, Sendable {
             case "Pn":
                 status.pins = String(payload).trimmingCharacters(in: .whitespaces)
             case "A":
-                status.accessories = String(payload).trimmingCharacters(in: .whitespaces)
+                // GRBL: accessory letters (`SF`); Carvera: the changer's state, a number.
+                let text = String(payload).trimmingCharacters(in: .whitespaces)
+                if let state = Int(text) { status.atcState = state } else { status.accessories = text }
             case "Ln":
                 status.lineNumber = numbers.first.map { Int($0) }
             case "SD":
@@ -249,6 +296,10 @@ nonisolated struct GRBLStatus: Equatable, Sendable {
         }
 
         // GRBL reports either MPos or WPos depending on $10; derive the other from WCO.
+        // A controller that reports both (the Carvera) defines the offset itself.
+        if let machine, let work {
+            workOffset = MachinePosition(x: machine.x - work.x, y: machine.y - work.y, z: machine.z - work.z)
+        }
         status.workOffset = workOffset
         if let machine {
             status.machinePosition = machine
@@ -318,15 +369,18 @@ nonisolated enum GRBLResponse: Equatable, Sendable {
         let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .other(text) }
 
-        if text == "ok" { return .ok }
+        if text == "ok" || text.hasPrefix("ok ") || text.hasPrefix("ok -") { return .ok }
         if text.hasPrefix("error:") {
             if let code = leadingInt(text.dropFirst("error:".count)) { return .error(code) }
-            return .other(text)
+            // Smoothieware (Carvera) says why in words: `error:Alarm lock`,
+            // `error:Unsupported command - …`. Still one line's answer.
+            return .error(GRBLError.textualCode)
         }
         if text.hasPrefix("ALARM:") {
             if let code = leadingInt(text.dropFirst("ALARM:".count)) { return .alarm(code) }
-            return .other(text)
+            return .alarm(GRBLAlarm.textualCode)
         }
+        if text == "!!" { return .error(GRBLError.textualCode) }
         if text.hasPrefix("<"), text.hasSuffix(">") { return .status }
         if isBanner(text) { return .welcome(text) }
 
@@ -387,7 +441,11 @@ nonisolated enum GRBLResponse: Equatable, Sendable {
 
 /// Which firmware answered and its version, from the banner or `$I`'s `[VER:]`.
 nonisolated struct FirmwareInfo: Equatable, Sendable {
-    enum Kind: String, Sendable { case grbl, fluidnc, unknown }
+    enum Kind: String, Sendable { case grbl, fluidnc, carvera, unknown }
+    /// Carvera: "C1" (Carvera) or "CA1" (Carvera Air), from `model`.
+    var model: String = ""
+    /// Carvera: the firmware says it has a tool changer (FuncSetting bit 2).
+    var hasToolChanger = false
 
     var kind: Kind = .unknown
     /// `1.1h` / `3.9.9`.
@@ -398,6 +456,7 @@ nonisolated struct FirmwareInfo: Equatable, Sendable {
         switch kind {
         case .grbl: version.isEmpty ? "Grbl" : "Grbl \(version)"
         case .fluidnc: version.isEmpty ? "FluidNC" : "FluidNC \(version)"
+        case .carvera: (model == "CA1" ? "Carvera Air" : "Carvera") + (version.isEmpty ? "" : " \(version)")
         case .unknown: "Unknown"
         }
     }

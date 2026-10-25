@@ -62,6 +62,21 @@ Options:
                         travel -> error:15, cancelled jogs still run
                         (no in-flight cancel), lines > 80 chars -> error:14,
                         `\\r` ends a line (so `\\r\\n` yields an extra `ok`)
+    --carvera           pretend to be a Makera Carvera (Smoothieware): travel
+                        360x240x140 with machine coordinates -travel..0, no
+                        banner, status `<State|MPos|WPos|F:cur,tgt,ovr|
+                        S:cur,tgt,ovr,vac|T:tool,tlo,target,collet|A:atc>`,
+                        console commands `echo`/`version`/`model` without ok,
+                        `$I` silent, `$X` prints [Caution: Unlocked] only
+                        when halted, `$J X-0.1 F600` relative jogs and
+                        `$J -c X1 F600` continuous ones (no ok; `?1` keeps
+                        them alive, Ctrl-Y stops them and prints ^Y), M0/M1
+                        no-ops, `T<n> M6` answers ok at once then shows Tool
+                        for 1.5 s and the new tool, M220/M223 overrides,
+                        textual `error:…`/`ALARM: …`
+    --carvera-air       `model` says CA1 without a tool changer
+    --carvera-framed    wrap replies in Makera's 8668…55AA frames and accept
+                        framed commands (the newer firmware's protocol)
     --must-home         boot in ALARM:14 (FluidNC must-home); `$H` or `$X`
                         clears it
     --no-soft-limits    report `soft_limits=false` and never raise ALARM:2 or
@@ -137,6 +152,21 @@ FLUIDNC_VERSION = "3.9.9"
 FLUIDNC_BANNER = "Grbl 3.9 [FluidNC v%s (wifi) '$' for help]" % FLUIDNC_VERSION
 GRBL_BANNER = "Grbl 1.1h ['$' for help]"
 
+# Makera Carvera (Smoothieware fork). Travel per the C1; the firmware homes
+# to the positive end of every axis, so machine coordinates run -travel..0.
+CARVERA_TRAVEL = {"X": 360.0, "Y": 240.0, "Z": 140.0}
+CARVERA_POSITIVE = {"X": True, "Y": True, "Z": True}
+CARVERA_VERSION = "1.0.3c"
+CARVERA_ATC_SECONDS = 1.5                       # a simulated tool change
+CARVERA_JOG_KEEPALIVE = 1.0                     # s without `?1` ends a `$J -c`
+RT_CARVERA_JOG_STOP = 0x19                      # Ctrl-Y; the firmware answers ^Y
+FRAME_HEADER = b"\x86\x68"
+FRAME_FOOTER = b"\x55\xAA"
+PKT_CONTROL_SINGLE = 0xA1
+PKT_CONTROL_MULTI = 0xA2
+PKT_STATUS = 0x81
+PKT_NORMAL = 0x90
+
 # Realtime bytes (Grbl 1.1 / FluidNC)
 RT_STATUS = 0x3F
 RT_FEED_HOLD = 0x21
@@ -156,6 +186,33 @@ RT_FLOOD = 0xA0
 RT_MIST = 0xA1
 REALTIME_BYTES = {RT_STATUS, RT_FEED_HOLD, RT_CYCLE_START, RT_RESET, RT_DOOR,
                   RT_JOG_CANCEL, RT_SPINDLE_STOP, RT_FLOOD, RT_MIST} | set(RT_OVERRIDES)
+
+# Smoothieware says why in words.
+CARVERA_ERRORS = {
+    1: "Expected command letter", 2: "Bad number format", 3: "Invalid statement",
+    8: "Command not allowed while busy", 9: "Alarm lock", 14: "Line overflow",
+    15: "Travel exceeded", 20: "Unsupported command", 21: "Modal group violation",
+    22: "Undefined feed rate", 23: "Invalid jog command", 31: "Arc needs I/J or R",
+    130: "Jog cancelled",
+}
+CARVERA_ALARMS = {1: "Hard limit", 2: "Soft limit", 3: "Abort during cycle",
+                  5: "Probe fail", 14: "Homing required"}
+
+
+def crc16_ccitt(data):
+    crc = 0
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def frame(ptype, payload):
+    body = bytes([(len(payload) + 3) >> 8, (len(payload) + 3) & 0xFF, ptype]) + payload
+    crc = crc16_ccitt(body)
+    return FRAME_HEADER + body + bytes([crc >> 8, crc & 0xFF]) + FRAME_FOOTER
+
 
 # Error codes (Grbl 1.1 numbering, shared by FluidNC)
 ERR_EXPECTED_LETTER = 1
@@ -265,6 +322,10 @@ class Machine:
         self.ov = {"feed": 100, "rapid": 100, "spindle": 100}
         self.spindle_stopped_in_hold = False
         self.probe_pin = False
+        self.atc_busy = False           # Carvera: a tool change in progress
+        self.target_tool = -1
+        self.jog_keepalive = 0.0        # Carvera: last `?1` during a `$J -c`
+        self.continuous_jog = None
         if boot:
             self.mpos = self.home_position()
             self.homed = not self.opts.must_home
@@ -289,6 +350,10 @@ class Machine:
     def is_grbl(self):
         return self.opts.grbl
 
+    @property
+    def is_carvera(self):
+        return self.opts.carvera
+
     def banner(self):
         return GRBL_BANNER if self.is_grbl else FLUIDNC_BANNER
 
@@ -310,10 +375,15 @@ class Machine:
 
     @property
     def positive(self):
+        if self.is_carvera:
+            return CARVERA_POSITIVE
         return GRBL_POSITIVE if self.is_grbl else FLUIDNC_POSITIVE
 
+    def travel(self, a):
+        return CARVERA_TRAVEL[a] if self.is_carvera else TRAVEL[a]
+
     def axis_range(self, a):
-        return (-TRAVEL[a], 0.0) if self.positive[a] else (0.0, TRAVEL[a])
+        return (-self.travel(a), 0.0) if self.positive[a] else (0.0, self.travel(a))
 
     def home_position(self):
         return [-PULL_OFF if self.positive[a] else PULL_OFF for a in AXES]
@@ -344,14 +414,20 @@ class Machine:
 
     def msg(self, text, client=None):
         """A [MSG:...] line. FluidNC prefixes its level; Grbl does not."""
-        line = "[MSG:%s]" % text if self.is_grbl else "[MSG:INFO: %s]" % text
+        if self.is_carvera:
+            line = "[%s]" % text
+        else:
+            line = "[MSG:%s]" % text if self.is_grbl else "[MSG:INFO: %s]" % text
         self.broadcast(line)
 
     def alarm(self, code, flush=True):
         """Broadcast ALARM:n, enter Alarm. Critical codes flush everything."""
         self.alarm_code = code
         self.state = "Alarm"
-        self.broadcast("ALARM:%d" % code)
+        if self.is_carvera:
+            self.broadcast("ALARM: %s" % CARVERA_ALARMS.get(code, "Halted"))
+        else:
+            self.broadcast("ALARM:%d" % code)
         if code in CRITICAL_ALARMS:
             self.homed = False if code != ALARM_SOFT_LIMIT else self.homed
             if flush:
@@ -409,6 +485,9 @@ class Machine:
                 self.tick(dt, now)
 
     def tick(self, dt, now):
+        if self.continuous_jog is not None and now - self.jog_keepalive > CARVERA_JOG_KEEPALIVE:
+            self.log("jog keep-alive timed out")
+            self.jog_cancel()
         if self.state == "Hold" and self.hold_sub == 1 and now - self.hold_started >= HOLD_DECEL:
             self.hold_sub = 0
             self.cond.notify_all()
@@ -487,6 +566,11 @@ class Machine:
     # -- status report -------------------------------------------------------
 
     def state_text(self):
+        if self.is_carvera:
+            # Smoothieware has no Jog state and no hold sub-state.
+            if self.atc_busy:
+                return "Tool"
+            return {"Jog": "Run", "Door": "Hold", "Check": "Idle"}.get(self.state, self.state)
         if self.state == "Hold":
             return "Hold:%d" % self.hold_sub
         if self.state == "Door":
@@ -494,6 +578,8 @@ class Machine:
         return self.state
 
     def status_report(self):
+        if self.is_carvera:
+            return self.carvera_status_report()
         parts = [self.state_text()]
         if self.opts.wpos:
             w = self.wco()
@@ -524,6 +610,20 @@ class Machine:
             acc = self.accessories()
             if acc:
                 parts.append("A:" + acc)
+        return "<" + "|".join(parts) + ">"
+
+    def carvera_status_report(self):
+        """`<State|MPos:…|WPos:…|F:cur,tgt,ovr|S:cur,tgt,ovr,vac|T:tool,tlo,target,collet|A:atc>`
+        — every field on every report; no WCO, no Bf."""
+        w = self.wco()
+        m = self.modal
+        parts = [self.state_text(),
+                 "MPos:" + fmt3(self.mpos),
+                 "WPos:" + fmt3([self.mpos[i] - w[i] for i in range(3)]),
+                 "F:%d,%d,%d" % (self.current_feed(), int(round(m["F"])), self.ov["feed"]),
+                 "S:%d,%d,%d,0" % (self.current_spindle(), int(round(m["S"])), self.ov["spindle"]),
+                 "T:%d,%s,%d,0" % (m["tool"], fmt(self.tlo), self.target_tool),
+                 "A:%d" % (1 if self.atc_busy else 0)]
         return "<" + "|".join(parts) + ">"
 
     def accessories(self):
@@ -571,6 +671,10 @@ class Machine:
                 self.door()
             elif byte == RT_JOG_CANCEL:
                 self.jog_cancel()
+            elif byte == RT_CARVERA_JOG_STOP:
+                # Ctrl-Y ends a continuous jog; the firmware echoes ^Y.
+                self.jog_cancel()
+                client.send_line("^Y")
             elif byte in RT_OVERRIDES:
                 self.override(*RT_OVERRIDES[byte])
             elif byte == RT_SPINDLE_STOP:
@@ -634,6 +738,7 @@ class Machine:
     def jog_cancel(self):
         self.jog_cancel_serial += 1
         self.jog_cancel_time = time.monotonic()
+        self.continuous_jog = None
         if self.state == "Jog":
             self.queue.clear()
             self.planned = list(self.mpos)
@@ -675,6 +780,8 @@ class Machine:
                     raise LineError(ERR_UNSUPPORTED)
                 if self.is_grbl and len(raw) > GRBL_MAX_LINE:
                     raise LineError(ERR_LINE_OVERFLOW)
+                if self.is_carvera and self.carvera_console(client, raw.strip()):
+                    return
                 line = strip_comments(raw)
                 if line == "":
                     client.send_line("ok")
@@ -683,9 +790,38 @@ class Machine:
                 else:
                     self.cmd_gcode(client, line)
             except LineError as e:
-                client.send_line("error:%d" % e.code)
+                if self.is_carvera:
+                    client.send_line("error:%s" % CARVERA_ERRORS.get(e.code, "Unsupported command"))
+                else:
+                    client.send_line("error:%d" % e.code)
             except Flushed:
                 pass
+
+    # -- Carvera console commands (Smoothieware): no ok after them ----------------
+
+    def carvera_console(self, client, text):
+        """True when `text` was a console command (handled here)."""
+        word, _, rest = text.partition(" ")
+        key = word.lower()
+        if key == "$j":
+            # Jogs keep their spaces (`$J -c X1 F600`), so they bypass strip_comments.
+            self.cmd_carvera_jog(client, rest.upper())
+        elif key == "echo":
+            client.send_line(rest.strip() or "")
+        elif key == "version":
+            client.send_line("version = %s" % CARVERA_VERSION)
+        elif key == "model":
+            # model = <name>, MachineModel, FuncSetting (bit 2 = ATC), probe_addr
+            client.send_line("model = %s, 1, %d, 0" % (("CA1" if self.opts.carvera_air else "C1"),
+                                                       0 if self.opts.carvera_air else 4))
+        elif key in ("suspend", "resume", "abort"):
+            client.send_line("ok")
+        elif key in ("reset", "play", "progress", "config-get", "config-set", "ls", "cd",
+                     "pwd", "rm", "md5sum", "mem", "net", "wlan"):
+            pass
+        else:
+            return False
+        return True
 
     # -- $ commands ------------------------------------------------------------
 
@@ -697,6 +833,38 @@ class Machine:
         if line.startswith("$J="):
             return self.cmd_jog(client, line[3:])
         cmd = line[1:]
+        if self.is_carvera:
+            if cmd == "I":
+                return                      # Smoothieware: no reply at all
+            if cmd == "X":
+                if self.state == "Alarm":
+                    self.state = "Idle"
+                    self.alarm_code = None
+                    self.needs_reset = False
+                    client.send_line("[Caution: Unlocked]")
+                    client.send_line("ok")
+                return                      # nothing printed when not halted
+            if cmd == "G":
+                client.send_line(self.parser_state())
+                client.send_line("ok")
+                return
+            if cmd == "#":
+                for i in range(6):
+                    client.send_line("[G%d:%s]" % (54 + i, fmt3(self.wcs_offsets[i])))
+                client.send_line("[G28:%s]" % fmt3(self.g28))
+                client.send_line("[G30:%s]" % fmt3(self.g30))
+                client.send_line("[G92:%s]" % fmt3(self.g92))
+                client.send_line("[TLO:%s]" % fmt(self.tlo))
+                client.send_line("[PRB:%s:%d]" % (fmt3(self.probe_last[0]), 1 if self.probe_last[1] else 0))
+                client.send_line("ok")
+                return
+            if cmd == "H":
+                self.require_idle()
+                return self.cmd_home(client)
+            if cmd in ("", "$"):
+                client.send_line("ok")
+                return
+            raise LineError(ERR_UNSUPPORTED)
         if cmd in ("", "$"):
             if self.state in ("Run", "Hold", "Jog"):
                 raise LineError(ERR_IDLE)
@@ -915,6 +1083,61 @@ class Machine:
 
     # -- jogging ---------------------------------------------------------------
 
+    def cmd_carvera_jog(self, client, text):
+        """`$J X-0.1 Y0.2 F600` (relative, no ok) or `$J -c X1 F600`
+        (continuous toward the limit until Ctrl-Y or the `?1` keep-alives
+        stop; no ok either). Smoothieware ignores a jog while busy."""
+        if self.state not in ("Idle", "Jog"):
+            raise LineError(ERR_IDLE)
+        tokens = text.split()
+        continuous = False
+        feed = None
+        vector = {}
+        for tok in tokens:
+            if tok == "-C":
+                continuous = True
+                continue
+            if tok[0] == "F":
+                feed = float(tok[1:])
+            elif tok[0] in AXES:
+                vector[tok[0]] = float(tok[1:])
+            else:
+                raise LineError(ERR_INVALID_JOG)
+        if not vector:
+            raise LineError(ERR_INVALID_JOG)
+        if feed is None or feed <= 0:
+            feed = 1000.0
+        start = list(self.planned)
+        end = list(start)
+        for i, a in enumerate(AXES):
+            if a not in vector:
+                continue
+            if continuous:
+                lo, hi = self.axis_range(a)
+                end[i] = hi if vector[a] > 0 else lo
+            else:
+                end[i] = start[i] + vector[a]
+        end = self.clamp_travel(end)
+        if math.dist(start, end) < 1e-9:
+            return
+        serial = self.jog_cancel_serial
+        block = Block("jog", start, end, feed, client)
+        if continuous:
+            self.continuous_jog = block
+            self.jog_keepalive = time.monotonic()
+        self.plan(block)
+        if self.jog_cancel_serial != serial:
+            if block in self.queue:
+                self.queue.remove(block)
+            self.planned = list(self.mpos) if not self.queue else list(self.queue[-1].end)
+            if not self.queue and self.state == "Jog":
+                self.state = "Idle"
+
+    def jog_keep_alive(self):
+        with self.lock:
+            if self.continuous_jog is not None:
+                self.jog_keepalive = time.monotonic()
+
     def cmd_jog(self, client, text):
         if self.state not in ("Idle", "Jog"):
             raise LineError(ERR_IDLE)
@@ -1012,6 +1235,8 @@ class Machine:
         radius = None
         P = L = None
         feed = None
+        tool_word = None
+        s_word = None
         for letter, value in words:
             if letter == "G":
                 code = round(value, 1)
@@ -1043,7 +1268,9 @@ class Machine:
                     raise LineError(ERR_UNSUPPORTED)
             elif letter == "M":
                 code = int(value)
-                if code in (0, 1, 2, 30, 3, 4, 5, 7, 8, 9):
+                if self.is_carvera and code in (0, 1, 220, 223, 331, 332, 490, 491, 600, 801, 802):
+                    mcodes.append(code)     # M0/M1 are not implemented (no-ops)
+                elif code in (0, 1, 2, 30, 3, 4, 5, 7, 8, 9):
                     mcodes.append(code)
                 elif code == 6:
                     if self.is_grbl:
@@ -1062,9 +1289,9 @@ class Machine:
             elif letter == "F":
                 feed = value
             elif letter == "S":
-                m["S"] = max(0.0, value)
+                s_word = max(0.0, value)
             elif letter == "T":
-                m["tool"] = int(value)
+                tool_word = int(value)
             elif letter == "P":
                 P = value
             elif letter == "L":
@@ -1074,6 +1301,13 @@ class Machine:
             else:
                 raise LineError(ERR_UNSUPPORTED)
 
+        if s_word is not None:
+            if self.is_carvera and (220 in mcodes or 223 in mcodes):
+                self.ov["feed" if 220 in mcodes else "spindle"] = int(max(10, min(300 if 220 in mcodes else 200, s_word)))
+            else:
+                m["S"] = s_word
+        if tool_word is not None and not (self.is_carvera and 6 in mcodes):
+            m["tool"] = tool_word       # the Carvera's changer sets it when the bit is in
         scale = 25.4 if m["units"] == "G20" else 1.0
         if feed is not None:
             if feed <= 0 and (motion in ("G1", "G2", "G3", "G38") or
@@ -1094,6 +1328,18 @@ class Machine:
         if any(c in (3, 4, 5, 7, 8, 9) for c in mcodes):
             self.sync()
             self.apply_sync_mcodes([c for c in mcodes if c in (3, 4, 5, 7, 8, 9)])
+        if self.is_carvera:
+            if 600 in mcodes:
+                self.sync()
+                self.state, self.hold_sub = "Hold", 0
+                self.cond.notify_all()
+            if 6 in mcodes:
+                # `T<n> M6`: the firmware answers ok at once and the changer
+                # works on; status shows Tool, then Idle with the new tool.
+                self.sync()
+                self.start_tool_change(tool_word if tool_word is not None else m["tool"])
+                client.send_line("ok")
+                return
 
         if non_modal == 43.1:
             self.tlo = axis_words.get("Z", 0.0) * scale
@@ -1157,6 +1403,22 @@ class Machine:
             self.apply_sync_mcodes([c for c in mcodes if c in (0, 1, 2, 30)])
         client.send_line("ok")
 
+    def start_tool_change(self, tool):
+        if self.atc_busy:
+            return
+        self.atc_busy = True
+        self.target_tool = tool
+        self.log("ATC: change to T%d" % tool)
+
+        def run():
+            time.sleep(CARVERA_ATC_SECONDS)
+            with self.lock:
+                self.modal["tool"] = tool
+                self.target_tool = -1
+                self.atc_busy = False
+                self.cond.notify_all()
+        threading.Thread(target=run, daemon=True).start()
+
     def apply_sync_mcodes(self, codes, check=False):
         m = self.modal
         for c in codes:
@@ -1172,7 +1434,7 @@ class Machine:
                 m["flood"] = True
             elif c == 9:
                 m["flood"] = m["mist"] = False
-            elif c in (0, 1) and not check:
+            elif c in (0, 1) and not check and not self.is_carvera:
                 self.state, self.hold_sub = "Hold", 0
                 self.cond.notify_all()
             elif c in (2, 30):
@@ -1358,6 +1620,9 @@ class Client:
         if self.machine.opts.verbose:
             print("[%s] >> %s" % (self.name, text), flush=True)
         data = (text + "\r\n").encode("utf-8", "replace")
+        if self.machine.opts.carvera_framed:
+            ptype = PKT_STATUS if text.startswith("<") else PKT_NORMAL
+            data = frame(ptype, data if ptype == PKT_NORMAL else text.encode("utf-8", "replace"))
         jitter = getattr(self.machine.opts, "jitter", 0)
         if jitter:
             time.sleep(random.uniform(0, jitter / 1000.0))   # Wi-Fi-like reply latency
@@ -1382,13 +1647,60 @@ class Client:
     def reader(self):
         buf = bytearray()
         grbl = self.machine.is_grbl
+        carvera = self.machine.is_carvera
+        after_query = False
+        framed = self.machine.opts.carvera_framed
+        fbuf = bytearray()
         try:
             while not self.closed:
                 data = self.sock.recv(4096)
                 if not data:
                     break
+                if framed:
+                    # 8668 | len(2) | type | payload | crc(2) | 55AA. A1 = one
+                    # realtime byte, A2 = a command line without newline.
+                    fbuf += data
+                    while True:
+                        i = fbuf.find(FRAME_HEADER)
+                        if i < 0:
+                            fbuf.clear()
+                            break
+                        if len(fbuf) < i + 4:
+                            del fbuf[:i]
+                            break
+                        length = fbuf[i + 2] << 8 | fbuf[i + 3]
+                        if len(fbuf) < i + 4 + length + 2:
+                            del fbuf[:i]
+                            break
+                        body = bytes(fbuf[i + 2:i + 4 + length - 2])
+                        crc = fbuf[i + 4 + length - 2] << 8 | fbuf[i + 4 + length - 1]
+                        footer = bytes(fbuf[i + 4 + length:i + 4 + length + 2])
+                        del fbuf[:i + 4 + length + 2]
+                        if footer != FRAME_FOOTER or crc16_ccitt(body) != crc:
+                            self.machine.log("<bad frame>")
+                            continue
+                        ptype, payload = body[2], body[3:]
+                        if ptype == PKT_CONTROL_SINGLE and payload:
+                            b = payload[0]
+                            if b == RT_STATUS:
+                                self.machine.jog_keep_alive()   # the framed poll doubles as keep-alive
+                            self.machine.realtime(self, b)
+                        elif ptype == PKT_CONTROL_MULTI:
+                            line = payload.decode("utf-8", "replace").rstrip("\r\n")
+                            if line == "?1":
+                                self.machine.jog_keep_alive()
+                                self.machine.realtime(self, RT_STATUS)
+                                continue
+                            self._pending_bytes += len(line) + 1
+                            self.lines.put(line)
+                    continue
                 for b in data:
-                    if b in REALTIME_BYTES:
+                    if carvera and after_query and b == 0x31:
+                        after_query = False
+                        self.machine.jog_keep_alive()   # `?1`: the jog keep-alive
+                        continue
+                    after_query = carvera and b == RT_STATUS
+                    if b in REALTIME_BYTES or (carvera and b == RT_CARVERA_JOG_STOP):
                         if b != RT_STATUS or self.machine.opts.log_polls:
                             self.machine.log("<0x%02x>" % b)
                         self.machine.realtime(self, b)
@@ -1449,7 +1761,11 @@ def serve(opts):
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((opts.bind, opts.port))
     srv.listen(5)
-    mode = "Grbl 1.1h" if opts.grbl else "FluidNC %s" % FLUIDNC_VERSION
+    if opts.carvera:
+        mode = "Carvera %s %s%s" % ("Air" if opts.carvera_air else "C1", CARVERA_VERSION,
+                                    " (framed)" if opts.carvera_framed else "")
+    else:
+        mode = "Grbl 1.1h" if opts.grbl else "FluidNC %s" % FLUIDNC_VERSION
     print("fake-grbl: %s on %s:%d%s%s" % (mode, opts.bind, opts.port,
           " wco %s" % fmt3(opts.wco) if any(opts.wco) else "",
           " (ALARM:14, must home)" if opts.must_home else ""), flush=True)
@@ -1516,6 +1832,9 @@ def main(argv=None):
     p.add_argument("--wpos", action="store_true")
     p.add_argument("--clamp-jog", action="store_true")
     p.add_argument("--grbl", action="store_true")
+    p.add_argument("--carvera", action="store_true")
+    p.add_argument("--carvera-air", action="store_true")
+    p.add_argument("--carvera-framed", action="store_true")
     p.add_argument("--must-home", action="store_true")
     p.add_argument("--no-soft-limits", action="store_true")
     p.add_argument("--banner-on-connect", action="store_true")

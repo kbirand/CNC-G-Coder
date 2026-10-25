@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Combine
 
 /// One cutter in the tool library, with the cutting data that goes with it.
@@ -90,9 +91,63 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
     var direction: Direction = .machine
     /// M4 instead of M3 (FlatCAM's spindle direction CCW).
     var spindleCCW = false
+    /// Shank diameter, mm — the collet it needs (Carvera: S1 3.175, S2 4,
+    /// S3 6, S4 6.35, S5 8 in the community firmware's M6).
+    var shankDiameter: Double = 3.175
+    /// The rack slot this bit always sits in on a tool-changer machine;
+    /// 0 = numbered automatically (MachinePost).
+    var preferredSlot: Int = 0
+    /// Where the tool came from, for filtering a big library ("Makera Drill
+    /// Bits"); empty for tools made by hand.
+    var group: String = ""
+    /// Cutting data per material (Makera's libraries carry one row per
+    /// stock). The library's chosen material picks the row that replaces the
+    /// fields above when the tool is applied to a layer.
+    var presets: [MaterialPreset] = []
     var notes: String = ""
 
     init(name: String) { self.name = name }
+
+    /// Feeds, spindle and depth per pass for one material. 0 = not set
+    /// (the tool's own value stays).
+    nonisolated struct MaterialPreset: Codable, Hashable, Sendable {
+        var material: String
+        var feedXY: Double = 0
+        var feedZ: Double = 0
+        var spindle: Double = 0
+        var depthPerPass: Double = 0
+        var overlap: Double = 0
+    }
+
+    /// The preset for a material, matched without regard to case.
+    func preset(for material: String) -> MaterialPreset? {
+        let wanted = material.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty else { return nil }
+        return presets.first { $0.material.caseInsensitiveCompare(wanted) == .orderedSame }
+    }
+
+    /// The tool with the material's cutting data in place of its own fields
+    /// (unchanged when it has no preset for that material).
+    func applying(material: String) -> MachineTool {
+        guard let p = preset(for: material) else { return self }
+        var tool = self
+        if p.feedXY > 0 { tool.feedXY = p.feedXY }
+        if p.feedZ > 0 { tool.feedZ = p.feedZ }
+        if use == .drilling, p.feedZ > 0 { tool.feedXY = p.feedZ }
+        if p.spindle > 0 { tool.spindle = p.spindle }
+        if p.depthPerPass > 0, use != .drilling { tool.depthPerPass = p.depthPerPass }
+        if p.overlap > 0 { tool.overlap = p.overlap }
+        return tool
+    }
+
+    /// Carvera's collet index for the shank (community firmware `M6 S<n>`),
+    /// nil for a shank no standard collet takes.
+    var colletIndex: Int? { Self.colletIndex(forShank: shankDiameter) }
+
+    static func colletIndex(forShank shank: Double) -> Int? {
+        let table: [(Double, Int)] = [(3.175, 1), (3.0, 1), (4.0, 2), (6.0, 3), (6.35, 4), (8.0, 5)]
+        return table.first { abs($0.0 - shank) < 0.02 }?.1
+    }
 
     /// The width this tool actually cuts at `depth`. A V-bit widens with
     /// depth: tip + 2·|depth|·tan(angle/2) — the same rule FlatCAM uses.
@@ -122,6 +177,7 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
         case id, name, use, shape, diameter, tipDiameter, tipAngle, toleranceMin, toleranceMax
         case cutDepth, depthPerPass, feedXY, feedZ, spindle, overlap, dwell, notes
         case travelZ, toolChangeZ, extraCut, direction, spindleCCW
+        case shankDiameter, preferredSlot, group, presets
     }
 
     init(from decoder: Decoder) throws {
@@ -151,6 +207,10 @@ nonisolated struct MachineTool: Codable, Identifiable, Hashable, Sendable {
         extraCut = d(.extraCut, base.extraCut)
         direction = (try? c.decodeIfPresent(Direction.self, forKey: .direction)) ?? base.direction
         spindleCCW = (try? c.decodeIfPresent(Bool.self, forKey: .spindleCCW)) ?? base.spindleCCW
+        shankDiameter = d(.shankDiameter, base.shankDiameter)
+        preferredSlot = max(0, (try? c.decodeIfPresent(Int.self, forKey: .preferredSlot)) ?? 0)
+        group = (try? c.decodeIfPresent(String.self, forKey: .group)) ?? ""
+        presets = (try? c.decodeIfPresent([MaterialPreset].self, forKey: .presets)) ?? []
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
     }
 }
@@ -182,6 +242,13 @@ final class ToolLibrary: ObservableObject {
     }
     /// Last load/save/import problem, for the library window.
     @Published var lastError: String?
+    /// What sits in the machine's tool changer: slot → tool. Machine
+    /// state, not library content (kept in UserDefaults, never exported);
+    /// the rack numbering follows it and the Tool menus offer its bits.
+    @Published var rack: [Int: UUID] = [:] {
+        didSet { saveRack() }
+    }
+    static let rackKey = "machine.toolRack"
 
     private let fileURL: URL
 
@@ -191,6 +258,111 @@ final class ToolLibrary: ObservableObject {
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         fileURL = support.appendingPathComponent("ToolLibrary.json")
         load()
+        loadRack()
+    }
+
+    // MARK: Tool changer
+
+    /// A rack slot in a Tool menu.
+    struct RackChoice: Identifiable {
+        var id: Int { slot }
+        let slot: Int
+        let tool: MachineTool
+    }
+
+    func rackTool(slot: Int) -> MachineTool? {
+        guard let id = rack[slot] else { return nil }
+        return tools.first { $0.id == id }
+    }
+
+    /// The slot holding `tool`, if it is in the changer.
+    func rackSlot(of tool: MachineTool) -> Int? {
+        rack.first { $0.value == tool.id }?.key
+    }
+
+    /// The rack's bits among `choices`, by slot — the Tool menus' first
+    /// section lists every loaded slot (what is in the machine is what can
+    /// run, whatever the bit's library use).
+    func rackChoices(in choices: [MachineTool]) -> [RackChoice] {
+        rack.keys.sorted().compactMap { slot in
+            guard let id = rack[slot], let tool = choices.first(where: { $0.id == id }) else { return nil }
+            return RackChoice(slot: slot, tool: tool)
+        }
+    }
+
+    /// The bit keys MachinePost numbers by that `tool` satisfies: its own
+    /// id, and the shape-and-size key a layer set by hand gets ("flat:0.8",
+    /// "vbit:0.1:30", "drill:3.125") — a loaded 0.8 mm corn bit is the
+    /// 0.8 mm end mill a mask etch set by hand asks for.
+    static func bitKeys(of tool: MachineTool) -> [String] {
+        var keys = ["id:" + tool.id.uuidString]
+        if tool.use == .drilling {
+            keys.append("drill:" + ParametersStore.format(tool.diameter))
+        } else if tool.shape == .vBit {
+            keys.append("vbit:\(ParametersStore.format(tool.tipDiameter)):\(ParametersStore.format(tool.tipAngle))")
+        } else {
+            keys.append("flat:" + ParametersStore.format(tool.diameter))
+        }
+        return keys
+    }
+
+    /// The rack's slots by bit key (`bitKeys(of:)` of every loaded tool).
+    var rackSlotsByKey: [String: Int] {
+        var out: [String: Int] = [:]
+        for slot in rack.keys.sorted() {
+            guard let id = rack[slot], let tool = tools.first(where: { $0.id == id }) else { continue }
+            for key in Self.bitKeys(of: tool) where out[key] == nil { out[key] = slot }
+        }
+        return out
+    }
+
+    /// The loaded drills' covered hole ranges by slot.
+    func rackDrillRanges(defaultTolerance: Double) -> [Int: ClosedRange<Double>] {
+        var out: [Int: ClosedRange<Double>] = [:]
+        for (slot, id) in rack {
+            guard let tool = tools.first(where: { $0.id == id }), tool.use == .drilling else { continue }
+            out[slot] = tool.drillRange(defaultTolerance: defaultTolerance)
+        }
+        return out
+    }
+
+    /// Library tools that satisfy a rack entry's bit key — the tool itself
+    /// for a library bit, every bit of that shape and size for a layer set
+    /// by hand (Makera's names first, then the rest).
+    func candidates(forBitKey key: String, tolerance: Double = 0.1, holeAllowance: Double = 0) -> [MachineTool] {
+        if key.hasPrefix("id:") { return tool(id: String(key.dropFirst(3))).map { [$0] } ?? [] }
+        var found = tools.filter { Self.bitKeys(of: $0).contains(key) }
+        if key.hasPrefix("drill:"), let size = Double(key.dropFirst(6)) {
+            // A drill program's size is the hole plus tolerance; a drill
+            // whose range covers it serves too (tick it in Bits on hand and
+            // the program takes its exact diameter).
+            let hole = size - holeAllowance
+            for drill in drills where !found.contains(where: { $0.id == drill.id })
+                && (drill.drillRange(defaultTolerance: tolerance).contains(hole) || drill.drillRange(defaultTolerance: tolerance).contains(size)) {
+                found.append(drill)
+            }
+        }
+        return found
+    }
+
+    /// The library tool behind a rack entry's bit key, for "load this job's rack".
+    func tool(forBitKey key: String) -> MachineTool? {
+        candidates(forBitKey: key).first   // the library's default tolerance
+    }
+
+    private func loadRack() {
+        guard let stored = UserDefaults.standard.dictionary(forKey: Self.rackKey) as? [String: String] else { return }
+        var loaded: [Int: UUID] = [:]
+        for (slot, id) in stored {
+            if let n = Int(slot), let uuid = UUID(uuidString: id) { loaded[n] = uuid }
+        }
+        rack = loaded
+    }
+
+    private func saveRack() {
+        var stored: [String: String] = [:]
+        for (slot, id) in rack { stored[String(slot)] = id.uuidString }
+        UserDefaults.standard.set(stored, forKey: Self.rackKey)
     }
 
     func tool(id: String) -> MachineTool? {
@@ -207,15 +379,126 @@ final class ToolLibrary: ObservableObject {
         tools.filter { $0.use == .drilling }.sorted { $0.diameter < $1.diameter }
     }
 
+    // MARK: - Materials and groups
+
+    // The material being machined is a project parameter
+    // (ParametersStore.material, AppModel.setMaterial): the library only
+    // knows which materials its tools carry presets for.
+
+    /// Every material any tool has a preset for, PCB first.
+    var materials: [String] {
+        var seen: [String] = []
+        for tool in tools {
+            for preset in tool.presets where !seen.contains(where: { $0.caseInsensitiveCompare(preset.material) == .orderedSame }) {
+                seen.append(preset.material)
+            }
+        }
+        return seen.sorted { a, b in
+            if a.caseInsensitiveCompare("PCB") == .orderedSame { return true }
+            if b.caseInsensitiveCompare("PCB") == .orderedSame { return false }
+            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+        }
+    }
+
+    /// Where a new material row goes.
+    enum MaterialScope: Hashable {
+        case tool(UUID)
+        case group(String)
+        case all
+    }
+
+    /// Adds a preset row for `material` to the tools in `scope` that have
+    /// none yet. Each tool's row starts from its own row for `basedOn` when
+    /// it has one (a new aluminium alloy from "Aluminum"), else from the
+    /// tool's own cutting data. Returns how many tools gained a row.
+    @discardableResult
+    func addMaterial(_ material: String, basedOn source: String?, scope: MaterialScope) -> Int {
+        let name = material.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return 0 }
+        var updated = tools
+        var added = 0
+        for index in updated.indices {
+            let tool = updated[index]
+            switch scope {
+            case .tool(let id): guard tool.id == id else { continue }
+            case .group(let group): guard tool.group == group else { continue }
+            case .all: break
+            }
+            guard tool.preset(for: name) == nil else { continue }
+            var row = MachineTool.MaterialPreset(material: name)
+            if let source, let base = tool.preset(for: source) {
+                row = base
+                row.material = name
+            } else {
+                row.feedXY = tool.feedXY
+                row.feedZ = tool.feedZ
+                row.spindle = tool.spindle
+                row.depthPerPass = tool.use == .drilling ? 0 : tool.depthPerPass
+                row.overlap = tool.overlap
+            }
+            updated[index].presets.append(row)
+            added += 1
+        }
+        if added > 0 { tools = updated }
+        return added
+    }
+
+    // MARK: - Bundled Makera bits
+
+    /// Makera's Carvera bits with Studio's cutting data per material, shipped
+    /// inside the app (`MakeraTools.json`, written from Studio's library by
+    /// the `-debugMakeraBundle` hook). Ids are Studio's, so a later Makera
+    /// Studio… import updates these tools rather than adding copies.
+    nonisolated static let bundledMakeraTools: [MachineTool] = {
+        guard let url = Bundle.main.url(forResource: "MakeraTools", withExtension: "json"),
+              let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(ExchangeFile.self, from: data))?.tools ?? []
+    }()
+
+    /// Bundled bits the library does not hold (by id, then by name).
+    var missingBundledMakeraTools: Int {
+        let ids = Set(tools.map(\.id)), names = Set(tools.map(\.name))
+        return Self.bundledMakeraTools.filter { !ids.contains($0.id) && !names.contains($0.name) }.count
+    }
+
+    /// Adds the bundled bits that are not in the library yet; the ones
+    /// already there are left as the user has them.
+    @discardableResult
+    func addBundledMakeraTools() -> Int {
+        let ids = Set(tools.map(\.id)), names = Set(tools.map(\.name))
+        let missing = Self.bundledMakeraTools.filter { !ids.contains($0.id) && !names.contains($0.name) }
+        if !missing.isEmpty { tools += missing }
+        return missing.count
+    }
+
+    /// Set once the bundled bits have been offered to an existing library,
+    /// so a user who removed them is not given them again at every launch.
+    private static let seededKey = "tools.makeraBundleSeeded"
+
+    /// The distinct groups, sorted; "" (hand-made tools) is not listed.
+    var groups: [String] {
+        Array(Set(tools.map(\.group).filter { !$0.isEmpty })).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+
     // MARK: - Persistence
 
     private func load() {
+        let defaults = UserDefaults.standard
         guard let data = try? Data(contentsOf: fileURL) else {
             tools = Self.starterTools
+            defaults.set(true, forKey: Self.seededKey)
             return
         }
         do {
             tools = try JSONDecoder().decode([MachineTool].self, from: data)
+            // A library from before the bundled set gets it once.
+            if !defaults.bool(forKey: Self.seededKey) {
+                addBundledMakeraTools()
+                defaults.set(true, forKey: Self.seededKey)
+            }
         } catch {
             lastError = "Could not read the tool library: \(error.localizedDescription)"
         }
@@ -254,7 +537,8 @@ final class ToolLibrary: ObservableObject {
         mask.use = .mask; mask.diameter = 0.8
         mask.cutDepth = -0.1; mask.feedXY = 120; mask.feedZ = 60; mask.overlap = 40
 
-        return [vbit, drill(0.8), drill(1.0), cutter, mask]
+        // Plus Makera's Carvera bits with their per-material cutting data.
+        return [vbit, drill(0.8), drill(1.0), cutter, mask] + bundledMakeraTools
     }
 
     // MARK: - Exchange with other installs
@@ -290,6 +574,15 @@ final class ToolLibrary: ObservableObject {
         } else if let list = try? decoder.decode([MachineTool].self, from: data), !list.isEmpty {
             incoming = list
             source = "CNC G-Coder tool library"
+        } else if MakeraLibraryImport.isDatabase(data) {
+            incoming = try MakeraLibraryImport.parse(url: url)
+            source = "Makera Studio library"
+        } else if let fusion = try FusionToolImport.parse(data, filename: url.lastPathComponent) {
+            // A library of only thread mills, lasers or holders is valid and
+            // yields nothing — say so instead of calling the file corrupt.
+            incoming = fusion
+            source = fusion.isEmpty ? "Fusion / Makera tool library (no drills or milling bits in it)" : "Fusion / Makera tool library"
+            if fusion.isEmpty { return (0, 0, source) }
         } else {
             incoming = try Self.parseFlatCAM(data)
             source = "FlatCAM Tools Database"

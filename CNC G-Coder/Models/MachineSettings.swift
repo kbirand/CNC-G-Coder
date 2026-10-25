@@ -9,6 +9,7 @@ nonisolated enum MachineSettings {
 
     enum Keys {
         static let transport = "machine.transport"
+        static let controller = "machine.controller"
         static let host = "machine.host"
         static let port = "machine.port"
         static let serialPath = "machine.serialPath"
@@ -51,6 +52,27 @@ nonisolated enum MachineSettings {
         static let configFilename = "machine.configFilename"
         /// The DRO's button grid: a JSON array of `DROButton.storageString`.
         static let droButtons = "machine.droButtons"
+    }
+
+    /// Which firmware family the link talks to: GRBL 1.1 / FluidNC, or the
+    /// Makera Carvera's Smoothieware fork (port 2222, framed or plain text,
+    /// `$J X F` jogs, console commands without `ok`).
+    enum ControllerFamily: String, CaseIterable, Sendable {
+        case grbl, carvera
+
+        var title: String {
+            switch self {
+            case .grbl: "GRBL / FluidNC"
+            case .carvera: "Makera Carvera"
+            }
+        }
+
+        var defaultPort: Int { self == .carvera ? Int(CarveraCommand.tcpPort) : 23 }
+    }
+
+    static var controller: ControllerFamily {
+        get { ControllerFamily(rawValue: defaults.string(forKey: Keys.controller) ?? "") ?? .grbl }
+        set { defaults.set(newValue.rawValue, forKey: Keys.controller) }
     }
 
     enum Defaults {

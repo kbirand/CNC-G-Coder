@@ -3,6 +3,10 @@
 <plist version="1.0">
 <dict>
 	<!-- Merged into the generated Info.plist (GENERATE_INFOPLIST_FILE). -->
+	<!-- No encryption of our own (TCP/serial to the controller is plain text), so
+	     App Store Connect skips the export-compliance question on every upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

@@ -52,7 +52,7 @@ extension LayerKind {
         case .silkTop: .layer(.topSilk)
         case .silkBottom: .layer(.bottomSilk)
         case .drill(let index, _), .millDrill(let index, _): .drill(index)
-        case .custom, .test: nil
+        case .custom, .test, .stage: nil
         }
     }
 }

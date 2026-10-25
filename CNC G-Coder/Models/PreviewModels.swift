@@ -16,6 +16,21 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
     /// A layer drawn by hand in the shape editor (see CustomLayer).
     case custom(CustomLayerRef)
     case test
+    /// Several of the project's programs in one file for a machine with a
+    /// tool changer (`MachinePost.sequence`): run back to back, the changer
+    /// swapping bits between them. Never in the preview document — only a
+    /// loaded machine program.
+    case stage(StageRef)
+
+    nonisolated struct StageRef: Hashable, Sendable {
+        /// "2F", or "1F+2F" when the layers span machine sessions.
+        var code: String
+        /// "Front: mask etch, drilling, cutout"
+        var title: String
+        var back: Bool
+        /// The layers in machining order.
+        var layers: [LayerKind]
+    }
 
     var displayName: String {
         switch self {
@@ -30,7 +45,14 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         case .silkBottom: String(localized: "Bottom silkscreen")
         case .custom(let ref): ref.name
         case .test: String(localized: "Test board")
+        case .stage(let ref): "\(ref.code) · \(ref.title)"
         }
+    }
+
+    /// A multi-layer machine program (`.stage`).
+    var isStage: Bool {
+        if case .stage = self { return true }
+        return false
     }
 
     var isCustom: Bool {
@@ -99,6 +121,7 @@ nonisolated enum LayerKind: Hashable, Sendable, Comparable {
         case .silkBottom: 1101
         case .custom(let ref): 1500 + ref.index   // drawn layers, in their list order
         case .test: 2000
+        case .stage: 2100
         }
     }
 
@@ -254,6 +277,7 @@ extension LayerKind {
     /// Programs machined after flipping the board (mirrored coordinates).
     nonisolated var isBackSide: Bool {
         if case .custom(let ref) = self { return ref.back }
+        if case .stage(let ref) = self { return ref.back }
         return self == .back || self == .maskBottom || self == .silkBottom
     }
 }

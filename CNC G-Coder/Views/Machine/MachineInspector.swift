@@ -69,9 +69,12 @@ struct MachineInspector: View {
                              openWindow: { openWindow(id: "machine") })
             // "Send … to Machine…": the Program tab's controls consume the
             // request once they are on screen.
-            .onAppear { if model.requestedMachineLayer != nil { tabRaw = MachineInspectorTab.program.rawValue } }
+            .onAppear { if model.requestedMachineLayer != nil || model.requestedMachineSequence != nil { tabRaw = MachineInspectorTab.program.rawValue } }
             .onChange(of: model.requestedMachineLayer) { _, kind in
                 if kind != nil { tabRaw = MachineInspectorTab.program.rawValue }
+            }
+            .onChange(of: model.requestedMachineSequence) { _, kinds in
+                if kinds != nil { tabRaw = MachineInspectorTab.program.rawValue }
             }
     }
 }

@@ -1456,6 +1456,7 @@ struct ToolpathCanvasView: View {
         case .drill(let index, _), .millDrill(let index, _): 7 + index
         case .custom(let ref): 50 + ref.index
         case .test: 100
+        case .stage: 90
         }
     }
 

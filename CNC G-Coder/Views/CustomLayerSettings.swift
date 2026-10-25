@@ -112,22 +112,16 @@ struct CustomLayerSections: View {
         return Section {
             LabeledContent("Tool") {
                 Menu {
-                    let choices = model.tools.tools(for: layer.type.toolSection)
-                    if choices.isEmpty { Text("No \(layer.type == .drill ? "drills" : "matching tools") in the library") }
-                    ForEach(choices) { tool in
-                        Toggle(isOn: Binding(
-                            get: { current?.id == tool.id },
-                            set: { _ in model.applyTool(tool, toCustomLayer: layer.id) }
-                        )) {
-                            Text("\(tool.name)  ·  \(toolDetail(tool))")
-                        }
-                    }
-                    Divider()
-                    Toggle("Custom", isOn: Binding(
-                        get: { current == nil },
-                        set: { _ in update("Change Tool") { $0.toolID = "" } }
-                    ))
-                    Button("Edit Tool Library…", action: openLibrary)
+                    ToolMenuContent(
+                        library: model.tools, choices: model.tools.tools(for: layer.type.toolSection), currentID: current?.id,
+                        emptyText: layer.type == .drill ? String(localized: "No drills in the library") : String(localized: "No matching tools in the library"),
+                        material: model.parameters.material, setMaterial: model.setMaterial,
+                        suggestions: model.suggestedTools(forCustomType: layer.type),
+                        rack: model.parameters.profile.isCarvera ? model.tools.rackChoices(in: model.tools.tools) : [],
+                        detail: toolDetail,
+                        pick: { model.applyTool($0, toCustomLayer: layer.id) },
+                        clear: { update("Change Tool") { $0.toolID = "" } },
+                        openLibrary: openLibrary)
                 } label: {
                     Text(current?.name ?? String(localized: "Custom"))
                         .lineLimit(1)

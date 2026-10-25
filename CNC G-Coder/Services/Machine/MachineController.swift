@@ -121,6 +121,8 @@ final class MachineController {
 
     var isConnected: Bool { phase == .connected || phase == .unresponsive }
     var isStreaming: Bool { streamer.isActive }
+    /// The link is to a Makera Carvera (Smoothieware rules, see CarveraProtocol).
+    var isCarvera: Bool { firmware.kind == .carvera }
     /// A job that is running, paused or stopping blocks manual commands;
     /// a suspended one (tool change) hands the machine back to the operator.
     var jobBlocksCommands: Bool { streamer.isActive && !streamer.isSuspended }
@@ -181,9 +183,22 @@ final class MachineController {
     /// because the firmware answers strictly in order.
     private enum AckOwner { case command(PendingAck), job }
 
-    private struct Outbound {
-        let data: Data
+    private enum Outbound {
+        case line(String)
+        case realtime([UInt8])
+        /// Raw bytes, never framed (the Carvera protocol probe).
+        case raw(Data)
     }
+    /// Which firmware family the link was opened for (MachineSettings.controller).
+    private(set) var controllerFamily: MachineSettings.ControllerFamily = .grbl
+    /// A Carvera: the plain-text probe is out and its `echo` is awaited.
+    private var probingFraming = false
+    private var echoSeen = false
+    /// Carvera: `^Y` arrived after Ctrl-Y, the continuous jog has stopped.
+    private var jogStopAcknowledged = false
+    /// Carvera overrides are commands (M220/M223), not real-time bytes.
+    private var carveraFeedPercent = 100
+    private var carveraSpindlePercent = 100
 
     private var transport: (any MachineTransport)?
     private var endpoint: Endpoint?
@@ -262,6 +277,8 @@ final class MachineController {
         status = GRBLStatus()
         workOffset = nil
         firmware = FirmwareInfo()
+        controllerFamily = MachineSettings.controller
+        if controllerFamily == .carvera { firmware.kind = .carvera }
         axisRanges = [:]
         homePosition = [:]
         softLimits = [:]
@@ -330,8 +347,29 @@ final class MachineController {
             }
             self?.handleDisconnect()
         }
+        if controllerFamily == .carvera { await detectCarveraFraming(transport) }
         startPolling()
         await identify()
+    }
+
+    /// Makera's controllers probe with a plain `echo echo`: a plain `echo`
+    /// back means the firmware talks text; three silences mean it speaks
+    /// the framed protocol, which the transport then wraps everything in.
+    private func detectCarveraFraming(_ transport: any MachineTransport) async {
+        probingFraming = true
+        echoSeen = false
+        defer { probingFraming = false }
+        for _ in 0..<3 {
+            enqueue(.raw(Data((CarveraCommand.echoProbe + "\n").utf8)))
+            let deadline = ContinuousClock.now + .milliseconds(350)
+            while !echoSeen, ContinuousClock.now < deadline, isConnected {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            if echoSeen { log(.info, "Carvera: plain-text protocol."); return }
+            guard isConnected else { return }
+        }
+        await transport.setFraming(true)
+        log(.info, "Carvera: framed protocol (no echo to the plain probe).")
     }
 
     func disconnect() async {
@@ -417,6 +455,7 @@ final class MachineController {
     private func runIdentify() async {
         settingsSeen.removeAll()
         let timeout: Duration = .seconds(5)
+        if firmware.kind == .carvera { await runIdentifyCarvera(timeout: timeout); return }
         do { try await sendInternal(GRBLCommand.buildInfo, timeout: timeout) } catch { log(.warning, "$I: \(error.localizedDescription)") }
         if Task.isCancelled { return }
         if firmware.kind == .unknown, let banner = firmware.banner, let info = FirmwareInfo.parse(banner: banner) {
@@ -466,7 +505,7 @@ final class MachineController {
                     homePosition[axis] = 0
                 }
             }
-        case .unknown:
+        case .unknown, .carvera:
             break
         }
         let ranges = Axis.allCases.compactMap { axis -> String? in
@@ -474,6 +513,37 @@ final class MachineController {
             return "\(axis.rawValue) \(GRBLCommand.number(range.lowerBound))…\(GRBLCommand.number(range.upperBound))"
         }
         log(.info, "Identified \(firmware.description)" + (ranges.isEmpty ? "" : " — travel " + ranges.joined(separator: ", ")) + ".")
+    }
+
+    /// `version` and `model` print without `ok`, so they are fired and their
+    /// lines collected on the way in (`handle(line:)`); then the offsets.
+    /// The firmware does not report its travel: the ranges come from the
+    /// machine profile for the model, with the home corner at machine 0.
+    private func runIdentifyCarvera(timeout: Duration) async {
+        enqueueUnacked(CarveraCommand.version)
+        enqueueUnacked(CarveraCommand.model)
+        try? await Task.sleep(for: .milliseconds(700))
+        if Task.isCancelled { return }
+        do { try await sendInternal(GRBLCommand.parserState, timeout: timeout) } catch { log(.warning, "$G: \(error.localizedDescription)") }
+        if Task.isCancelled { return }
+        do { try await sendInternal(GRBLCommand.offsets, timeout: timeout) } catch { log(.warning, "$#: \(error.localizedDescription)") }
+        if Task.isCancelled { return }
+        seedWorkOffset()
+        await restoreG90IfNeeded(timeout: timeout)
+        await stopSpindleAfterLostJob(timeout: timeout)
+        if Task.isCancelled { return }
+        let profile: MachineProfile = firmware.model == "CA1" ? .carveraAir : .carvera
+        for (axis, travel) in [(Axis.x, profile.travelX), (.y, profile.travelY), (.z, profile.travelZ)] {
+            guard let travel else { continue }
+            axisRanges[axis] = (-travel)...0
+            homePosition[axis] = 0
+        }
+        let ranges = Axis.allCases.compactMap { axis -> String? in
+            guard let range = axisRanges[axis] else { return nil }
+            return "\(axis.rawValue) \(GRBLCommand.number(range.lowerBound))…\(GRBLCommand.number(range.upperBound))"
+        }
+        log(.info, "Identified \(firmware.description)" + (firmware.hasToolChanger ? " with tool changer" : "")
+            + " — travel " + ranges.joined(separator: ", ") + " (from the \(profile.name) profile; the firmware does not report it).")
     }
 
     /// The parser is in G91 (a probe sequence that failed mid-way, before or
@@ -532,6 +602,17 @@ final class MachineController {
             log(.received, line)
             controllerRebooting()
             return
+        }
+        if firmware.kind == .carvera {
+            if probingFraming, line.lowercased().contains("echo") { echoSeen = true; log(.received, line); return }
+            if let version = CarveraCommand.parseVersion(line) { firmware.version = version; log(.received, line); return }
+            if let model = CarveraCommand.parseModel(line) {
+                firmware.model = model.name
+                firmware.hasToolChanger = model.funcSetting & 0b100 != 0
+                log(.received, line)
+                return
+            }
+            if line == "^Y" { jogStopAcknowledged = true; isContinuousJogging = false; log(.received, line); return }
         }
         let response = GRBLResponse.classify(line)
 
@@ -748,7 +829,7 @@ final class MachineController {
                 }
             }
             if shouldLog { self.log(.sent, line) }
-            enqueue(Data((line + "\n").utf8))
+            enqueue(.line(line))
         }
         guard let pending else { throw GRBLCommandError.cancelled }
         return pending
@@ -793,18 +874,26 @@ final class MachineController {
     func enqueueJobLine(_ text: String) {
         guard transport != nil, isConnected, !isRebooting else { return }
         ackOrder.append(.job)
-        enqueue(Data((text + "\n").utf8))
+        enqueue(.line(text))
+    }
+
+    /// A line the firmware answers without `ok` (a Carvera's `version`,
+    /// `model`, `$J` jog): sent and logged, never waited for.
+    func enqueueUnacked(_ line: String) {
+        guard transport != nil, isConnected, !isRebooting else { return }
+        log(.sent, line)
+        enqueue(.line(line))
     }
 
     /// Sends a real-time byte ahead of anything queued. Never acknowledged.
     func sendRealtime(_ byte: UInt8) {
         guard transport != nil, isConnected else { return }
         if byte != GRBLRealtime.statusReport { log(.sent, GRBLRealtime.label(byte)) }
-        enqueue(Data([byte]), urgent: true)
+        enqueue(.realtime([byte]), urgent: true)
     }
 
-    private func enqueue(_ data: Data, urgent: Bool = false) {
-        if urgent { outbound.insert(Outbound(data: data), at: 0) } else { outbound.append(Outbound(data: data)) }
+    private func enqueue(_ item: Outbound, urgent: Bool = false) {
+        if urgent { outbound.insert(item, at: 0) } else { outbound.append(item) }
         pump()
     }
 
@@ -816,7 +905,11 @@ final class MachineController {
             while let self, !self.outbound.isEmpty {
                 let item = self.outbound.removeFirst()
                 do {
-                    try await transport.send(data: item.data)
+                    switch item {
+                    case .line(let line): try await transport.send(line: line)
+                    case .realtime(let bytes): try await transport.send(realtime: bytes)
+                    case .raw(let data): try await transport.send(data: data)
+                    }
                 } catch {
                     self.lastError = error.localizedDescription
                     self.log(.error, "Write failed: \(error.localizedDescription)")
@@ -882,7 +975,11 @@ final class MachineController {
                 let before = self.statusSerial
                 let inboundBefore = self.inboundSerial
                 let start = ContinuousClock.now
-                self.sendRealtime(GRBLRealtime.statusReport)
+                if self.isCarvera, self.isContinuousJogging {
+                    self.enqueue(.realtime(CarveraCommand.jogKeepAlive), urgent: true)   // "?1" keeps the jog alive
+                } else {
+                    self.sendRealtime(GRBLRealtime.statusReport)
+                }
                 let deadline = start + .milliseconds(max(2 * interval, 500))
                 while self.statusSerial == before, ContinuousClock.now < deadline, !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(20))
@@ -949,6 +1046,9 @@ final class MachineController {
         return false
     }
 
+    /// GRBL cancels a jog with 0x85; the Carvera with Ctrl-Y.
+    private var jogCancelByte: UInt8 { isCarvera ? CarveraCommand.jogStop : GRBLRealtime.jogCancel }
+
     func feedHold() { sendRealtime(GRBLRealtime.feedHold) }
     func resume() { sendRealtime(GRBLRealtime.cycleStart) }
     func door() { sendRealtime(GRBLRealtime.safetyDoor) }
@@ -982,7 +1082,7 @@ final class MachineController {
         }
         let wasJogging = isContinuousJogging || jogTask != nil
         stopContinuousJog()
-        sendRealtime(GRBLRealtime.jogCancel)
+        sendRealtime(jogCancelByte)
         var held = false
         switch status.state {
         case .run, .hold, .door: held = true
@@ -1016,7 +1116,7 @@ final class MachineController {
         jogTask = nil
         isContinuousJogging = false
         log(.error, "EMERGENCY STOP (0x85 ! 0x18)")
-        enqueue(Data([GRBLRealtime.jogCancel, GRBLRealtime.feedHold, GRBLRealtime.softReset]), urgent: true)
+        enqueue(.realtime([jogCancelByte, GRBLRealtime.feedHold, GRBLRealtime.softReset]), urgent: true)
         if wasMoving { positionTrusted = false }
         streamer.noteEmergencyStop()
         failPendingAcks(with: .cancelled)
@@ -1027,7 +1127,13 @@ final class MachineController {
 
     func unlock() async {
         do {
-            try await send(GRBLCommand.unlock)
+            if isCarvera {
+                // `$X` answers only when the firmware was halted; otherwise silence.
+                guard !jobBlocksCommands else { throw GRBLCommandError.refused("A program is being sent — stop it first.") }
+                do { try await sendInternal(GRBLCommand.unlock, timeout: .seconds(2)) } catch GRBLCommandError.timeout {}
+            } else {
+                try await send(GRBLCommand.unlock)
+            }
             alarmCode = nil
             lastError = nil
             // Unlock keeps the position as-is (FluidNC also marks the axes homed).
@@ -1082,14 +1188,21 @@ final class MachineController {
         do { try await send(line) } catch { lastError = error.localizedDescription }
     }
 
+    /// Flood on GRBL; on a Carvera the same button drives the compressed air (M7).
     func coolant(flood: Bool) async {
-        do { try await send(flood ? "M8" : GRBLCommand.coolantOff) } catch { lastError = error.localizedDescription }
+        let on = isCarvera ? CarveraCommand.airOn : "M8"
+        do { try await send(flood ? on : GRBLCommand.coolantOff) } catch { lastError = error.localizedDescription }
     }
 
     // MARK: Overrides (real-time; `Ov:` in the status report is the display)
 
     /// −10, −1, 0 (= reset to 100 %), +1, +10.
     func overrideFeed(_ delta: Int) {
+        if isCarvera {
+            carveraFeedPercent = delta == 0 ? 100 : max(10, min(300, carveraFeedPercent + delta))
+            Task { try? await sendInternal(CarveraCommand.feedOverride(percent: carveraFeedPercent)) }
+            return
+        }
         switch delta {
         case ..<(-5): sendRealtime(GRBLRealtime.feedMinus10)
         case -5..<0: sendRealtime(GRBLRealtime.feedMinus1)
@@ -1101,6 +1214,7 @@ final class MachineController {
 
     /// 25, 50 or 100 %.
     func overrideRapid(_ percent: Int) {
+        if isCarvera { log(.info, "The Carvera has no rapid override; its feed override (M220) applies to every move."); return }
         switch percent {
         case ...25: sendRealtime(GRBLRealtime.rapid25)
         case 26...50: sendRealtime(GRBLRealtime.rapid50)
@@ -1109,6 +1223,11 @@ final class MachineController {
     }
 
     func overrideSpindle(_ delta: Int) {
+        if isCarvera {
+            carveraSpindlePercent = delta == 0 ? 100 : max(10, min(200, carveraSpindlePercent + delta))
+            Task { try? await sendInternal(CarveraCommand.spindleOverride(percent: carveraSpindlePercent)) }
+            return
+        }
         switch delta {
         case ..<(-5): sendRealtime(GRBLRealtime.spindleMinus10)
         case -5..<0: sendRealtime(GRBLRealtime.spindleMinus1)
@@ -1269,6 +1388,11 @@ final class MachineController {
 
     func jog(vector: [Axis: Double], feed: Double) async {
         guard canJog, !vector.isEmpty, feed > 0 else { return }
+        if isCarvera {
+            // `$J X.. F..` prints nothing on success; an error comes as text.
+            enqueueUnacked(CarveraCommand.jog(vector: vector, feed: feed))
+            return
+        }
         do {
             try await send(GRBLCommand.jog(vector: vector, feed: feed))
         } catch let error as GRBLCommandError {
@@ -1294,7 +1418,9 @@ final class MachineController {
         let longVector = longJogVector(directions)
         jogTask = Task { [weak self] in
             guard let self else { return }
-            if let longVector {
+            if self.isCarvera {
+                await self.runCarveraJog(directions: directions, feed: feed)
+            } else if let longVector {
                 await self.runLongJog(vector: longVector, feed: feed)
             } else {
                 await self.runSegmentJog(directions: directions, feed: feed)
@@ -1308,7 +1434,7 @@ final class MachineController {
     func stopContinuousJog() {
         guard isContinuousJogging || jogTask != nil else { return }
         isContinuousJogging = false
-        sendRealtime(GRBLRealtime.jogCancel)
+        sendRealtime(jogCancelByte)
     }
 
     /// The long-jog distances (to each limit, minus a hair) when every axis
@@ -1350,9 +1476,23 @@ final class MachineController {
             }
         }
         isContinuousJogging = false
-        sendRealtime(GRBLRealtime.jogCancel)
+        sendRealtime(jogCancelByte)
         // A sync in Hold would wait for an ack that cannot come until the
         // hold is released, leaving `jogTask` set and jogging refused.
+        if !isHeld { try? await sync() }
+    }
+
+    /// Carvera: one `$J -c` starts the jog, the poll's `?1` keeps it alive,
+    /// Ctrl-Y (sent by `stopContinuousJog`) ends it and the firmware
+    /// answers `^Y` once the axis stands.
+    private func runCarveraJog(directions: [Axis: JogDirection], feed: Double) async {
+        jogStopAcknowledged = false
+        enqueueUnacked(CarveraCommand.continuousJog(directions: directions, feed: feed))
+        while isContinuousJogging { try? await Task.sleep(for: .milliseconds(20)) }
+        let deadline = ContinuousClock.now + .seconds(1)
+        while !jogStopAcknowledged, ContinuousClock.now < deadline, isConnected {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
         if !isHeld { try? await sync() }
     }
 
@@ -1417,7 +1557,7 @@ final class MachineController {
         }
         if let stalled = counters.stalled { log(.info, "Jog stopped: \(stalled).") }
         isContinuousJogging = false
-        sendRealtime(GRBLRealtime.jogCancel)
+        sendRealtime(jogCancelByte)
         // A sync in Hold would wait for an ack that cannot come until the
         // hold is released, leaving `jogTask` set and jogging refused.
         if !isHeld { try? await sync() }
@@ -1934,7 +2074,22 @@ final class MachineController {
     func prepareProgram(layer: ParsedLayer, name: String, options: ProgramOptions) async throws -> MachineProgram {
         guard !streamer.isActive else { throw GRBLCommandError.refused("A program is active — stop it first.") }
         let backlash = BacklashCompensation.Settings.current
-        let fileURL = layer.fileURL
+        var fileURL = layer.fileURL
+        var options = options
+        if isCarvera, !options.keepToolChanges {
+            if layer.id.isStage || MachinePost.isRenderedFile(url: layer.fileURL) {
+                // Already in the Carvera flavour (a sequence, or a stage file
+                // from Generate opened by hand): send its `T<n> M6` as they are.
+                options.keepToolChanges = true
+            } else if let app, let rendered = app.carveraProgramURL(for: layer) {
+                // The engines' M0 pauses mean nothing to this firmware; the
+                // program goes out in the Carvera flavour (MachinePost), its
+                // `T<n> M6` lines kept for the changer and the slots those of
+                // the project's rack.
+                fileURL = rendered
+                options.keepToolChanges = true
+            }
+        }
         let program = try await Task.detached(priority: .userInitiated) { () throws -> MachineProgram in
             let text = try String(contentsOf: fileURL, encoding: .utf8)
             return try ProgramPreparer.prepare(sourceText: text, layer: layer, name: name, options: options, backlash: backlash)
